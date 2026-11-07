@@ -112,7 +112,8 @@ quit-at-session-end.patch
     exists. Firefox then also quits cleanly when something else stops it: systemd at the end of a session which did
     not tell Firefox through the portal, or in which xdg-desktop-portal-gtk stopped waiting after 8 seconds, and
     systemctl or kill. The second patch quits Firefox with nsAppShell::ScheduleQuitEvent(), which the handler calls
-    too. Neither patch is proposed to Mozilla yet.
+    too. They are proposed as D340638 and D340640 on phabricator.services.mozilla.com, for Mozilla bugs 2086801 and
+    2090663.
 
     The session test in tests/session/ checks that logging out leaves sessionstore.jsonlz4 in the profile, which
     Firefox writes only when it quits cleanly, and that Firefox has quit before GNOME Shell shuts down. Drop the

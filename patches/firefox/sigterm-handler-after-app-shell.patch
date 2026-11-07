@@ -10,7 +10,7 @@ Description: Install the SIGTERM handler once the app shell exists, so that SIGT
  task mode.
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2086801
 Author: Mitar
-Forwarded: no
+Forwarded: https://phabricator.services.mozilla.com/D340638
 Last-Update: 2026-11-07
 ---
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
