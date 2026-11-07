@@ -22,7 +22,8 @@ inhibit-export-request-after-backend.patch
     patch also changes the test suite, which the build runs: the mock backend now returns from Inhibit when it expects
     a Close, as xdg-desktop-portal-gtk does, instead of returning only on Close, and a new test closes a request right
     after Inhibit returned, while the mock backend takes 200 ms to handle the call. The new test fails without the fix.
-    Not proposed upstream yet. Drop the patch once Ubuntu's xdg-desktop-portal contains the fix.
+    Proposed upstream as https://github.com/flatpak/xdg-desktop-portal/pull/2199. Drop the patch once Ubuntu's
+    xdg-desktop-portal contains the fix.
 
     The fix is in handle_inhibit in src/inhibit.c. The session test portal-inhibit in tests/session/ checks it in a
     GNOME session: 200 requests closed right after Inhibit have to leave no inhibitor behind. Without the patch, 116 of

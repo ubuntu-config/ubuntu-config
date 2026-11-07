@@ -13,7 +13,7 @@ Description: Export the request of an inhibition only once the backend has handl
  returned, while the mock backend takes 200 ms to handle the call.
 Author: Mitar
 Bug: https://github.com/flatpak/xdg-desktop-portal/issues/854
-Forwarded: no
+Forwarded: https://github.com/flatpak/xdg-desktop-portal/pull/2199
 Last-Update: 2026-11-07
 ---
 --- a/src/inhibit.c
