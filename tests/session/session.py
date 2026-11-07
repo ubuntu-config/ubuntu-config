@@ -152,15 +152,19 @@ class Session:
                                        stderr=subprocess.STDOUT)
 
         # GNOME Shell enables extensions only once it has started up, and Eval fails until the test extension is
-        # enabled.
+        # enabled. GLib.Error is a RuntimeError too.
+        last_error = None
+
         def ready():
+            nonlocal last_error
             try:
                 return self.call("ready")
-            except RuntimeError:
+            except RuntimeError as error:
+                last_error = error
                 return False
 
         if not wait_for(ready, timeout):
-            raise RuntimeError(f"GNOME Shell did not start within {timeout} seconds, see the journal")
+            raise RuntimeError(f"GNOME Shell did not start within {timeout} seconds, last error: {last_error}, see the journal")
         # The virtual keyboard is set up before a test types, which loses the first keys otherwise.
         self.press("Shift_L")
 
@@ -200,6 +204,15 @@ class Session:
             except (GLib.Error, RuntimeError):
                 pass
             time.sleep(0.2)
+
+        # gnome-session-restart-dbus.service stops the session bus a moment after the leader exits, and the socket of
+        # dbus.service starts a new one for the next client. The next login waits for that: a gnome-session started
+        # before would connect to the old bus, and the connection here would stay the closed one.
+        deadline = time.monotonic() + 10
+        while not self.bus.is_closed():
+            if time.monotonic() > deadline:
+                raise RuntimeError("the session bus was not restarted within 10 seconds after the session ended")
+            time.sleep(0.01)
         return shown
 
     def eval(self, code):
