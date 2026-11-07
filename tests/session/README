@@ -59,6 +59,9 @@ The tests:
                   workspace when switching to a workspace with windows or without, which needs
                   patches/gnome-shell-ubuntu-extensions/. The test sets the mark through GNOME Shell; mutter sets it
                   on a window whose activation it refuses.
+  portal-inhibit  portal_inhibit.py inhibits logging out through the Inhibit portal and closes the request right after,
+                  as GTK does when an application withdraws an inhibition right away, 200 times: every Close succeeds,
+                  and no inhibitor of gnome-session is left behind (patches/xdg-desktop-portal/).
 
 The tests text-editor, ptyxis and firefox also check that no restored window demands attention. The test chromium
 only records such windows in its result.json: Chromium asks mutter to activate every window it restores, without an
@@ -85,7 +88,7 @@ the packages of the local repository:
       cp /repo/sources.list.d/xtradeb-ubuntu-apps-resolute.sources /etc/apt/sources.list.d/ &&
       /repo/tests/session/prepare-container.sh /debs &&
       /repo/tests/session/run-session-tests.sh /out/run spawn-scopes text-editor ptyxis firefox chromium \
-        chromium-quit shutdown lock-screen'
+        chromium-quit shutdown lock-screen workspace-attention portal-inhibit'
 
 A later DEBS_DIR replaces packages of the same name of an earlier one, so a build to test can follow the local
 repository. prepare-container.sh can run again on a prepared container, for example without DEBS_DIR to install a

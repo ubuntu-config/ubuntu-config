@@ -1,0 +1,33 @@
+Source package: xdg-desktop-portal
+
+inhibit-export-request-after-backend.patch
+    Keeps an application which withdraws an inhibition right after asking for it from leaving the inhibition behind.
+    Applications inhibit a logout, a suspend or idling through the Inhibit portal, and withdraw the inhibition by
+    closing the request the portal returned, as GTK does in gtk_application_uninhibit(). xdg-desktop-portal answered
+    Inhibit at once, and called the backend, xdg-desktop-portal-gtk on GNOME, only afterwards, from a thread, once it
+    had looked up the application's permissions. A Close which arrived in between was forwarded to the backend before
+    the backend had created its request, and failed with "Object does not exist at path". The backend then still asked
+    gnome-session for the inhibition, which stayed until the application disconnected from the bus. Text Editor
+    inhibits for each window with unsaved documents, and loading a file marks the document modified and unmodified
+    again, so opening a file inhibited and withdrew right away, and GNOME Shell's logout dialog listed Text Editor once
+    more as having unsaved work.
+
+    The handler of Inhibit runs in a thread of its own, and now calls the backend synchronously, and exports the
+    request and answers only once the backend has returned, which it does after it has exported its own request. A
+    Close then always finds the backend's request. The handler holds the request's lock meanwhile, so an application
+    which disconnects in between has its request closed in the backend once the handler is done.
+
+    Reported upstream as https://github.com/flatpak/xdg-desktop-portal/issues/854, where a maintainer suggested this
+    fix. https://gitlab.gnome.org/GNOME/gnome-session/-/work_items/174 reports the same symptom with Nautilus. The
+    patch also changes the test suite, which the build runs: the mock backend now returns from Inhibit when it expects
+    a Close, as xdg-desktop-portal-gtk does, instead of returning only on Close, and a new test closes a request right
+    after Inhibit returned, while the mock backend takes 200 ms to handle the call. The new test fails without the fix.
+    Not proposed upstream yet. Drop the patch once Ubuntu's xdg-desktop-portal contains the fix.
+
+    The fix is in handle_inhibit in src/inhibit.c. The session test portal-inhibit in tests/session/ checks it in a
+    GNOME session: 200 requests closed right after Inhibit have to leave no inhibitor behind. Without the patch, 116 of
+    200 were left behind.
+
+    Check by hand after a rebuild and a new login, after opening a few files in Text Editor without changing them:
+
+      gnome-session-inhibit --list    should list Text Editor only once for each window with unsaved documents

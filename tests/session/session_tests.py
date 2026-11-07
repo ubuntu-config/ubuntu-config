@@ -813,6 +813,20 @@ def lock_screen(session, checks, out_dir):
             "chrome_unlocked": chrome_unlocked, "chrome_locked": chrome_locked}
 
 
+@test
+def portal_inhibit(session, checks, out_dir):
+    """An application which inhibits logging out through the Inhibit portal and uninhibits right after, as GTK does, leaves
+    no inhibitor of gnome-session behind."""
+    session.login()
+    result_file = out_dir / "portal-inhibit.json"
+    session.run_in_session("python3", "-I", str(REPO_DIR / "tests/session/portal_inhibit.py"), "200", str(result_file))
+    result = json.loads(result_file.read_text())
+    checks.check("closing each request right after inhibiting succeeds", result["close_error_count"] == 0, str(result))
+    checks.check("no inhibitor is left after closing every request", result["left"] == 0, str(result))
+    session.logout()
+    return result
+
+
 def main():
     name, out_dir = sys.argv[1], pathlib.Path(sys.argv[2])
     if name not in TESTS:

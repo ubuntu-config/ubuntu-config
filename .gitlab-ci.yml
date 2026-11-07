@@ -102,6 +102,7 @@ build:
           - ptyxis
           - tinysparql
           - vte2.91
+          - xdg-desktop-portal
           - xdg-desktop-portal-gtk
 
 build_large:
@@ -211,6 +212,7 @@ test_session:
               - gtksourceview5
               - ptyxis
               - vte2.91
+              - xdg-desktop-portal
               - xdg-desktop-portal-gtk
     - job: build_large
       parallel:
@@ -233,6 +235,7 @@ test_session:
           - shutdown
           - lock-screen
           - workspace-attention
+          - portal-inhibit
 
   script:
     - apt-get update -q

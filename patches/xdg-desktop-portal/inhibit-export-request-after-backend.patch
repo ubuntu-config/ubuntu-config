@@ -1,0 +1,294 @@
+Description: Export the request of an inhibition only once the backend has handled the call.
+ xdg-desktop-portal answered Inhibit and exported its request at once, and called the backend afterwards, from a
+ thread, once it had looked up the application's permissions. A Close of the request which arrived in between was
+ forwarded to the backend before the backend had created its request, and failed. The backend then still asked
+ gnome-session for the inhibition, which stayed until the application disconnected from the bus. GTK closes the
+ request as soon as an application uninhibits, so an application which inhibits and uninhibits right away, as Text
+ Editor does while it loads a file, left an inhibitor behind, which GNOME Shell lists in its logout dialog.
+ .
+ The handler, which runs in a thread of its own, now calls the backend synchronously, and exports the request and
+ answers only once the backend has returned, which it does after it has exported its own request. In the tests, the
+ mock backend, when it expects a Close, now returns from Inhibit and keeps its request until the request is closed, as
+ xdg-desktop-portal-gtk does, instead of returning only on Close. A new test closes a request right after Inhibit
+ returned, while the mock backend takes 200 ms to handle the call.
+Author: Mitar
+Bug: https://github.com/flatpak/xdg-desktop-portal/issues/854
+Forwarded: no
+Last-Update: 2026-11-07
+---
+--- a/src/inhibit.c
++++ b/src/inhibit.c
+@@ -70,36 +70,6 @@ G_DEFINE_TYPE_WITH_CODE (Inhibit, inhibit, XDP_DBUS_TYPE_INHIBIT_SKELETON,
+ 
+ G_DEFINE_AUTOPTR_CLEANUP_FUNC (Inhibit, g_object_unref)
+ 
+-static void
+-inhibit_done (GObject *source,
+-              GAsyncResult *result,
+-              gpointer data)
+-{
+-  XdpDbusImplInhibit *impl = (XdpDbusImplInhibit *) source;
+-  g_autoptr(GError) error = NULL;
+-  XdpRequest *request = data;
+-  int response = 0;
+-
+-  REQUEST_AUTOLOCK (request);
+-
+-  if (!xdp_dbus_impl_inhibit_call_inhibit_finish (impl, result, &error))
+-    {
+-      g_dbus_error_strip_remote_error (error);
+-      g_warning ("A backend call failed: %s", error->message);
+-      response = 2;
+-    }
+-
+-  if (request->exported)
+-    {
+-      g_auto(GVariantBuilder) new_results =
+-        G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE_VARDICT);
+-
+-      xdp_dbus_request_emit_response (XDP_DBUS_REQUEST (request),
+-                                      response,
+-                                      g_variant_builder_end (&new_results));
+-    }
+-}
+-
+ static guint32
+ get_allowed_inhibit (XdpAppInfo *app_info)
+ {
+@@ -137,43 +107,6 @@ get_allowed_inhibit (XdpAppInfo *app_info)
+   return ret;
+ }
+ 
+-static void
+-handle_inhibit_in_thread_func (GTask *task,
+-                               gpointer source_object,
+-                               gpointer task_data,
+-                               GCancellable *cancellable)
+-{
+-  Inhibit *inhibit = (Inhibit *) source_object;
+-  XdpRequest *request = XDP_REQUEST (task_data);
+-  const char *window;
+-  guint32 flags;
+-  GVariant *options;
+-  const char *app_id;
+-
+-  REQUEST_AUTOLOCK (request);
+-
+-  window = (const char *)g_object_get_data (G_OBJECT (request), "window");
+-  flags = GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (request), "flags"));
+-  options = (GVariant *)g_object_get_data (G_OBJECT (request), "options");
+-
+-  app_id = xdp_app_info_get_id (request->app_info);
+-  flags = flags & get_allowed_inhibit (request->app_info);
+-
+-  if (flags == 0)
+-    return;
+-
+-  g_debug ("Calling inhibit backend for %s: %d", app_id, flags);
+-  xdp_dbus_impl_inhibit_call_inhibit (inhibit->impl,
+-                                      request->id,
+-                                      app_id,
+-                                      window,
+-                                      flags,
+-                                      options,
+-                                      NULL,
+-                                      inhibit_done,
+-                                      g_object_ref (request));
+-}
+-
+ static gboolean
+ validate_reason (const char  *key,
+                  GVariant    *value,
+@@ -208,10 +141,12 @@ handle_inhibit (XdpDbusInhibit *object,
+   XdpRequest *request = xdp_request_from_invocation (invocation);
+   g_autoptr(GError) error = NULL;
+   g_autoptr(XdpDbusImplRequest) impl_request = NULL;
+-  g_autoptr(GTask) task = NULL;
+   g_auto(GVariantBuilder) opt_builder =
+     G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE_VARDICT);
+   g_autoptr(GVariant) options = NULL;
++  const char *app_id;
++  guint32 flags;
++  XdgDesktopPortalResponseEnum response = XDG_DESKTOP_PORTAL_RESPONSE_SUCCESS;
+ 
+   REQUEST_AUTOLOCK (request);
+ 
+@@ -230,10 +165,6 @@ handle_inhibit (XdpDbusInhibit *object,
+ 
+   options = g_variant_ref_sink (g_variant_builder_end (&opt_builder));
+ 
+-  g_object_set_data_full (G_OBJECT (request), "window", g_strdup (arg_window), g_free);
+-  g_object_set_data (G_OBJECT (request), "flags", GUINT_TO_POINTER (arg_flags));
+-  g_object_set_data_full (G_OBJECT (request), "options", g_variant_ref (options), (GDestroyNotify)g_variant_unref);
+-
+   impl_request = xdp_dbus_impl_request_proxy_new_sync (g_dbus_proxy_get_connection (G_DBUS_PROXY (inhibit->impl)),
+                                                        G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES,
+                                                        g_dbus_proxy_get_name (G_DBUS_PROXY (inhibit->impl)),
+@@ -246,14 +177,47 @@ handle_inhibit (XdpDbusInhibit *object,
+     }
+ 
+   xdp_request_set_impl_request (request, impl_request);
+-  xdp_request_export (request, g_dbus_method_invocation_get_connection (invocation));
+ 
+-  task = g_task_new (inhibit, NULL, NULL, NULL);
+-  g_task_set_task_data (task, g_object_ref (request), g_object_unref);
+-  g_task_run_in_thread (task, handle_inhibit_in_thread_func);
++  app_id = xdp_app_info_get_id (request->app_info);
++  flags = arg_flags & get_allowed_inhibit (request->app_info);
++
++  /* The backend exports its request object while it handles the call, so the
++   * request is exported only once the call returned. Otherwise the caller
++   * could close the request before the backend has it, closing it in the
++   * backend would fail, and the inhibition would stay until the caller
++   * disconnects. */
++  if (flags != 0)
++    {
++      g_debug ("Calling inhibit backend for %s: %d", app_id, flags);
++      if (!xdp_dbus_impl_inhibit_call_inhibit_sync (inhibit->impl,
++                                                    request->id,
++                                                    app_id,
++                                                    arg_window,
++                                                    flags,
++                                                    options,
++                                                    NULL,
++                                                    &error))
++        {
++          g_dbus_error_strip_remote_error (error);
++          g_warning ("A backend call failed: %s", error->message);
++          response = XDG_DESKTOP_PORTAL_RESPONSE_OTHER;
++        }
++    }
++
++  xdp_request_export (request, g_dbus_method_invocation_get_connection (invocation));
+ 
+   xdp_dbus_inhibit_complete_inhibit (object, invocation, request->id);
+ 
++  if (flags != 0)
++    {
++      g_auto(GVariantBuilder) results =
++        G_VARIANT_BUILDER_INIT (G_VARIANT_TYPE_VARDICT);
++
++      xdp_dbus_request_emit_response (XDP_DBUS_REQUEST (request),
++                                      response,
++                                      g_variant_builder_end (&results));
++    }
++
+   return G_DBUS_METHOD_INVOCATION_HANDLED;
+ }
+ 
+--- a/tests/templates/inhibit.py
++++ b/tests/templates/inhibit.py
+@@ -77,7 +77,11 @@ def Inhibit(self, handle, app_id, window, flags, options, cb_success, cb_error):
+     )
+ 
+     if params.expect_close:
+-        request.wait_for_close()
++        # The request is exported as a side effect of the call, and the
++        # inhibition lasts until x-d-p closes it.
++        request.respond_and_wait_for_close(
++            Response(params.response, {}), delay=params.delay
++        )
+     else:
+         request.respond(Response(params.response, {}), delay=params.delay)
+ 
+diff --git a/tests/templates/xdp_utils.py b/tests/templates/xdp_utils.py
+index 57a0786..1072193 100644
+--- a/tests/templates/xdp_utils.py
++++ b/tests/templates/xdp_utils.py
+@@ -142,6 +142,38 @@ class ImplRequest:
+         logger.debug(f"Request {self.handle}: waiting for x-d-p to call close")
+         self.mock_interface.connect_to_signal("MethodCalled", cb_methodcall)
+ 
++    def respond_and_wait_for_close(self, response: Response, delay: int = 0) -> None:
++        """
++        Exports the request and responds after ``delay`` milliseconds, and keeps
++        the request exported until x-d-p closes it, as a backend does whose
++        request stands for something which lasts after the method call
++        returned, like an inhibition.
++        """
++
++        def cb_methodcall(name, args):
++            if name == "Close":
++                logger.debug(f"Request {self.handle}: closed")
++                self.mock.EmitSignal(
++                    "org.freedesktop.impl.portal.Mock",
++                    "RequestClosed",
++                    "s",
++                    (self.handle,),
++                )
++                self._unexport()
++
++        def reply():
++            self._export()
++
++            logger.debug(f"Request {self.handle}: replying {response}")
++            self.mock_interface.connect_to_signal("MethodCalled", cb_methodcall)
++            self.cb_success(response.response, response.results)
++
++        if delay > 0:
++            logger.debug(f"Request {self.handle}: scheduling delay of {delay}ms")
++            GLib.timeout_add(delay, reply)
++        else:
++            reply()
++
+     def _export(self):
+         # In the future we can pass a class extending
+         # dbusmock.mockobject.DBusMockObject as mock_class to avoid going
+diff --git a/tests/test_inhibit.py b/tests/test_inhibit.py
+index 20266a2..7ebeabb 100644
+--- a/tests/test_inhibit.py
++++ b/tests/test_inhibit.py
+@@ -132,19 +132,22 @@ class TestInhibit:
+         flags = InhibitFlags.ALL
+ 
+         request = xdp.Request(dbus_con, inhibit_intf)
+-        request.schedule_close(1000)
+         options = {
+             "reason": reason,
+         }
+-        request.call(
++        response = request.call(
+             "Inhibit",
+             window="",
+             flags=flags.value,
+             options=options,
+         )
+ 
++        assert response
++        assert response.response == 0
++
++        request.close()
+         # Only true if the impl.Request was closed too
+-        assert request.closed
++        xdp.wait_for(lambda: request.closed)
+ 
+         # Check the impl portal was called with the right args
+         method_calls = mock_intf.GetMethodCalls("Inhibit")
+@@ -155,6 +158,27 @@ class TestInhibit:
+         assert args[3] == flags.value
+         assert args[4]["reason"] == reason
+ 
++    @pytest.mark.parametrize("template_params", ({"inhibit": {"expect-close": True}},))
++    def test_close_right_after_inhibit(self, portals, dbus_con):
++        """
++        A Close() right after Inhibit() returned closes the request of the
++        backend too, also when the backend takes a while to handle the call, as
++        GTK does when it uninhibits at once. The inhibition would stay
++        otherwise.
++        """
++        inhibit_intf = xdp.get_portal_iface(dbus_con, "Inhibit")
++
++        request = xdp.Request(dbus_con, inhibit_intf)
++        handle = inhibit_intf.Inhibit(
++            "",
++            InhibitFlags.LOGOUT.value,
++            {"handle_token": request.handle_token},
++        )
++        assert handle == request.handle
++
++        request.close()
++        xdp.wait_for(lambda: request.closed)
++
+     def test_permission(self, portals, dbus_con, xdp_app_info):
+         app_id = xdp_app_info.app_id
+         inhibit_intf = xdp.get_portal_iface(dbus_con, "Inhibit")

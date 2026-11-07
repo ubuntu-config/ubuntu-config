@@ -534,6 +534,18 @@ loses the changes since it last saved its session. Firefox is patched to install
 session through the portal and quit cleanly when it ends (`patches/firefox/sigterm-handler-after-app-shell.patch` and
 `quit-at-session-end.patch`).
 
+### Applications which withdraw an inhibition leave none behind
+
+Applications ask GNOME through the Inhibit portal to hold a logout or a suspend, as Text Editor does for each window
+with unsaved documents, and withdraw the inhibition once it is no longer needed. The portal answered the application at
+once and asked GNOME for the inhibition only afterwards, so a withdrawal which arrived in between failed, and the
+inhibition stayed until the application quit. Text Editor inhibits and withdraws right away while it loads a file, and
+GNOME Shell's logout dialog then listed it once more as having unsaved work. [gnome-session issue
+174](https://gitlab.gnome.org/GNOME/gnome-session/-/work_items/174) reports the same symptom with Nautilus, whose
+inhibitions while it moves files then keep the computer from suspending. xdg-desktop-portal is patched to answer the
+application only once GNOME's side has the inhibition (`patches/xdg-desktop-portal/`, [xdg-desktop-portal issue
+854](https://github.com/flatpak/xdg-desktop-portal/issues/854)).
+
 ### Applications start inside their own scope
 
 GNOME Shell, gnome-session and gnome-settings-daemon ask systemd to put each application they launch into a scope of its
