@@ -55,19 +55,18 @@ wayland-session-restore-on-gnome.patch
     Firefox's tests do not run in the package build. tests/run-session.sh checks the patches by hand, with a
     headless mutter and Firefox driven through Marionette (see tests/README): with them, restoring from the menu
     no longer crashes, a profile without IDs shows all its windows, and the next start restores each window under
-    the ID it was added under. All three are under review for bug 2064100 on phabricator.services.mozilla.com, as
-    D339348, D339349 and D340272. The third undoes bug 2070815, which disabled the protocol on GNOME until bug
-    2064100 is fixed. Drop them once the PPA's Firefox contains the fix for bug 2064100 and no longer disables the
-    protocol on GNOME, in widget/gtk/nsWindowWayland.cpp (MoveToWorkspace), widget/gtk/nsWindow.cpp
-    (SessionRestoreFinished) and widget/gtk/nsAppShell.cpp (IsSessionRestoreSupported).
+    the ID it was added under. All three are in Firefox 162, merged for bug 2064100 from D339348, D339349 and
+    D340272 on phabricator.services.mozilla.com. The third undoes bug 2070815, which disabled the protocol on GNOME
+    in Firefox 160 and 161. Drop them once the PPA's Firefox is 162 or newer.
 
 wayland-session-restore-uuid-ids.patch
     Restores every window under its saved ID. Before restoring a window, Firefox replaces an ID saved on X11, the
     workspace number, by a new one (Mozilla bug 2059617), and recognized such an ID by ToInteger() succeeding.
     ToInteger() also succeeds on a UUID whose first group consists of decimal digits, as about one in 43 do, so
     such a window was added to the session anew at every start and opened on the current workspace. The patch keeps
-    an ID which parses as a UUID. The same code is in Firefox's main branch. Reported as Mozilla bug 2090009, under
-    review as D340286 on phabricator.services.mozilla.com. Drop the patch once the PPA's Firefox contains the fix.
+    an ID which parses as a UUID. The same code is in Firefox's main branch. Reported as Mozilla bug 2090009, and in
+    Firefox 162, merged from D340286 on phabricator.services.mozilla.com. Drop the patch once the PPA's Firefox is
+    162 or newer.
 
 wayland-launch-activation-token.patch
 session-restore-launch-window.patch
@@ -125,16 +124,17 @@ wayland-session-restore-no-activation.patch
     Keeps the windows restored from the session from demanding attention. On Wayland, Firefox asks the compositor
     to activate every window it shows, and session restore also focuses each window it restores, to stack the
     windows as they were. While session restore runs at startup, no event of the user is behind these requests, so
-    mutter cannot activate the window and marks it as demanding attention instead. GNOME Shell then lists these
-    windows first when switching windows, and Desktop Icons NG moved to the workspace of one of them at the next
-    workspace switch (see patches/gnome-shell-ubuntu-extensions/). A window restored from the session now asks for
-    no activation while session restore runs at startup. The window opened for the launch still receives the
-    activation token of the launch.
+    mutter cannot activate the window and marks it as demanding attention instead. GNOME Shell then shows a
+    notification for each of these windows, also in Do Not Disturb, keeps it in its notification list until the
+    window is focused, and lists these windows first when switching windows. Desktop Icons NG moved to the
+    workspace of one of them at the next workspace switch (see patches/gnome-shell-ubuntu-extensions/). A window
+    restored from the session now asks for no activation while session restore runs at startup. The window opened
+    for the launch still receives the activation token of the launch.
 
-    The requests are in nsWindowWayland::NativeShow in widget/gtk/nsWindowWayland.cpp and nsWindow::SetFocus in
-    widget/gtk/nsWindow.cpp, and the patch builds on wayland-launch-activation-token.patch, which records which
-    windows are restored from the session. The session test in tests/session/ checks that no restored window
-    demands attention. Not proposed to Mozilla yet.
+    The requests are in nsWindowWaylandToplevel::NativeShow in widget/gtk/nsWindowWayland.cpp and nsWindow::SetFocus
+    in widget/gtk/nsWindow.cpp, and the patch builds on wayland-launch-activation-token.patch, which records which
+    windows are restored from the session. The session test in tests/session/ checks that no restored window demands
+    attention. Not proposed to Mozilla yet.
 
 wasm-sandboxed-libraries.patch (debian-series)
     Builds graphite, ogg, hunspell, expat, woff2 and soundtouch as wasm sandboxed libraries, as Mozilla's own

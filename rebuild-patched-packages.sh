@@ -110,8 +110,8 @@
 # A patch that applies is not a patch that works, and the build itself shows whether it works. Two things catch a patch
 # that has gone stale, and neither needs any machinery here:
 #
-#   the build fails   dpkg-source refuses a patch needing fuzz, and a hunk that landed somewhere plausible but
-#                     wrong will not compile.
+#   the build fails   a patch needing fuzz is refused, and a hunk that landed somewhere plausible but wrong will not
+#                     compile.
 #   the tests fail    a patch should add tests for its own behaviour to the package's test suite, which then run
 #                     during the build like any other. The tests catch a patch that still applies, still compiles,
 #                     and has been made inert by a change elsewhere.
@@ -520,11 +520,11 @@ patch_paths() {
 
 # Add our patches to the package's own series and let dpkg-source apply them, exactly as the build does.
 # Running it here, before the build dependencies are installed, means a broken patch is reported in seconds
-# instead of after a long dependency install, and the message is dpkg's own rather than a reinterpretation.
+# instead of after a long dependency install.
 #
-# dpkg-source applies with patch -t -F 0, so a patch needing any fuzz is refused outright. There is nothing to
-# configure about that and no point detecting it separately: a hunk that no longer matches its context stops the
-# build either way.
+# dpkg-source applies with patch -t -F 0, so a patch needing any fuzz is refused. dpkg-source --before-build reports
+# no refusal, though: it applies nothing when the first patch does not apply, so the patches listed as applied
+# afterwards are checked, and the first missing one is reported with the output of patch.
 #
 # The patches in debian-series are applied first, directly and also without fuzz, since they change the packaging,
 # which quilt cannot. Each patch is checked to stay on its side: a quilt patch may not touch debian/, and a packaging
@@ -578,6 +578,17 @@ stage_patches() {
     printf '%s\n' "$out" >&2
     fail "$src: patches do not apply, rebuild skipped and the installed version left alone"
   }
+
+  # dpkg-source --before-build first checks whether the next patch not yet applied applies, and when it does not, it
+  # applies no patch at all and still succeeds. So every patch of ours has to be listed as applied.
+  $native && return
+  while read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in \#*) continue ;; esac
+    grep -qxF "$p" "$tree/.pc/applied-patches" 2>/dev/null && continue
+    patch --dry-run --batch --forward -p1 -F 0 -d "$tree" -i "$PATCH_DIR/$src/$p" >&2 || true
+    fail "$src: $p does not apply, rebuild skipped and the installed version left alone"
+  done < "$PATCH_DIR/$src/series"
 }
 
 # Fetches the source of a version of a source package into an empty directory and applies its patches there, see

@@ -437,10 +437,11 @@ of other workspaces which demand attention. It is patched with Ubuntu's own fix,
 [Launchpad bug 2169475](https://bugs.launchpad.net/ubuntu/+source/gnome-shell-ubuntu-extensions/+bug/2169475)).
 
 Firefox also asked mutter to activate every window it restores at startup, without an event of the user behind the
-request, so mutter marked these windows as demanding attention, and they came first when switching windows. Firefox
-is patched to ask for no activation of a restored window while it restores its session
-(`patches/firefox/wayland-session-restore-no-activation.patch`). Chromium still asks to activate the windows it
-restores, so mutter marks them as demanding attention.
+request, so mutter marked these windows as demanding attention: GNOME Shell showed a notification for each, and listed
+them first when switching windows. Firefox is patched to ask for no activation of a restored window while it restores
+its session (`patches/firefox/wayland-session-restore-no-activation.patch`). Chromium still asks to activate the windows
+it restores, so mutter marks them as demanding attention
+([Chromium issue 582928432](https://issues.chromium.org/issues/582928432)).
 
 ### Chromium quits with Ctrl+Q
 

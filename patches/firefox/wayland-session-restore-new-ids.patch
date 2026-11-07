@@ -9,12 +9,13 @@ Description: Do not add a toplevel to the Wayland session under an ID from a pre
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2064100
 Forwarded: https://phabricator.services.mozilla.com/D339348
-Last-Update: 2026-11-04
+Applied-Upstream: 162, https://github.com/mozilla-firefox/firefox/commit/a9569aec61960a4d84bb044b065b759a12d65d78
+Last-Update: 2026-11-07
 diff --git a/widget/gtk/nsWindowWayland.cpp b/widget/gtk/nsWindowWayland.cpp
-index e45d513..37a3793 100644
+index 6fa8086..8aac443 100644
 --- a/widget/gtk/nsWindowWayland.cpp
 +++ b/widget/gtk/nsWindowWayland.cpp
-@@ -55,6 +55,11 @@ using namespace mozilla::widget;
+@@ -115,6 +115,11 @@ void nsWindowWayland::ForceToplevelCommit() {
  
    Likewise we use GetWorkspaceID() to create/save the xdg_toplevel session
    for later restore.
@@ -26,12 +27,12 @@ index e45d513..37a3793 100644
  */
  
  static nsCString GenerateWorkspaceID() {
-@@ -168,13 +173,19 @@ void nsWindowWayland::MoveToWorkspace(const nsAString& aWorkspaceIDStr) {
+@@ -230,13 +235,19 @@ void nsWindowWaylandToplevel::MoveToWorkspace(
    if (!nsAppShell::IsSessionRestoreSupported()) {
      return;
    }
 -  mWorkspaceID = NS_ConvertUTF16toUTF8(aWorkspaceIDStr);
-   LOG("nsWindowWayland::MoveToWorkspace() session ID %s "
+   LOG("nsWindowWaylandToplevel::MoveToWorkspace() session ID %s "
        "mWaitingToSessionRestore %d mNeedsShow %d",
 -      mWorkspaceID.get(), mWaitingToSessionRestore, mNeedsShow);
 +      NS_ConvertUTF16toUTF8(aWorkspaceIDStr).get(), mWaitingToSessionRestore,

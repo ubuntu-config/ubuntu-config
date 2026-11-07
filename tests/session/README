@@ -62,8 +62,8 @@ The tests:
 
 The tests text-editor, ptyxis and firefox also check that no restored window demands attention. The test chromium
 only records such windows in its result.json: Chromium asks mutter to activate every window it restores, without an
-event of the user behind the request, so mutter marks each of them as demanding attention, and no patch here changes
-that.
+event of the user behind the request, so mutter marks each of them as demanding attention (Chromium issue 582928432),
+and no patch here changes that.
 
 After every test, the script checks that no unit of the user's service manager failed, as at-spi-dbus-bus.service
 does at a logout without systemd/user/at-spi-dbus-bus.service.d/.

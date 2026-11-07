@@ -8,7 +8,8 @@ Description: Restore a Wayland window whose saved ID begins with eight decimal d
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090009
 Forwarded: https://phabricator.services.mozilla.com/D340286
-Last-Update: 2026-11-06
+Applied-Upstream: 162, https://github.com/mozilla-firefox/firefox/commit/d7eb772ff65953be7b6a2556255e86e2d8307248
+Last-Update: 2026-11-07
 diff --git a/widget/gtk/nsWindowWayland.cpp b/widget/gtk/nsWindowWayland.cpp
 index db3e183..9d5b722 100644
 --- a/widget/gtk/nsWindowWayland.cpp

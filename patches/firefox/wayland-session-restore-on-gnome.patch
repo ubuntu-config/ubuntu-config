@@ -5,7 +5,8 @@ Description: Enable Wayland session restore on GNOME again.
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2064100
 Forwarded: https://phabricator.services.mozilla.com/D340272
-Last-Update: 2026-11-06
+Applied-Upstream: 162, https://github.com/mozilla-firefox/firefox/commit/fcd09a257c7a2778aded5758c8fe645c30964835
+Last-Update: 2026-11-07
 diff --git a/widget/gtk/nsAppShell.cpp b/widget/gtk/nsAppShell.cpp
 index 84f3b84..5c4cfc2 100644
 --- a/widget/gtk/nsAppShell.cpp

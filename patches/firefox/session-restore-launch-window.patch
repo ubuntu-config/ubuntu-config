@@ -22,12 +22,12 @@ Description: Keep the window opened for a launch as it was opened and restore th
  saved session rather than in the last used one.
 Author: Mitar
 Forwarded: no
-Last-Update: 2026-11-06
+Last-Update: 2026-11-07
 diff --git a/browser/components/sessionstore/SessionStore.sys.mjs b/browser/components/sessionstore/SessionStore.sys.mjs
-index 9fa4c8e..437a28c 100644
+index da2abe1..f527249 100644
 --- a/browser/components/sessionstore/SessionStore.sys.mjs
 +++ b/browser/components/sessionstore/SessionStore.sys.mjs
-@@ -141,6 +141,9 @@
+@@ -144,6 +144,9 @@
   * @property {string} [restoreSource]
   *   What started the restore, recorded as the `entry_point` of the
   *   `windowFeaturesMismatchIgnored` telemetry event.
@@ -37,7 +37,7 @@ index 9fa4c8e..437a28c 100644
   * @property {string} [trigger]
   *   The reason recorded when the restore opens a Smart Window.
   */
-@@ -1857,6 +1860,17 @@ class _SessionStore {
+@@ -1877,6 +1880,17 @@ class _SessionStore {
              firstWindow: true,
              overwriteTabs: overwrite,
              restoreSource: "automatic_startup",
@@ -55,11 +55,11 @@ index 9fa4c8e..437a28c 100644
            };
            this.#restoreWindows(aWindow, aInitialState, options);
          }
-@@ -6489,15 +6503,18 @@ class _SessionStore {
+@@ -6531,15 +6545,18 @@ class _SessionStore {
     *
-    * @param {ChromeWindow[]} windows
+    * @param {BrowserWindow[]} windows
     *        unordered array of windows to restore
-+   * @param {ChromeWindow} [windowToFocus]
++   * @param {BrowserWindow} [windowToFocus]
 +   *        the window to focus once they are restored, by default the most
 +   *        recently used one of them
     */
@@ -76,7 +76,7 @@ index 9fa4c8e..437a28c 100644
      this.#restoreWindowsFeaturesAndTabs(windows);
    }
  
-@@ -6559,6 +6576,21 @@ class _SessionStore {
+@@ -6601,6 +6618,21 @@ class _SessionStore {
        return;
      }
  
@@ -98,7 +98,7 @@ index 9fa4c8e..437a28c 100644
      let firstWindowData = root.windows.splice(0, 1);
      let firstWindowState = firstWindowData[0];
      if (!this.#canRestoreIntoExistingWindow(aWindow, firstWindowState)) {
-@@ -7586,6 +7618,39 @@ class _SessionStore {
+@@ -7627,6 +7659,39 @@ class _SessionStore {
      return !hasFirstArgument;
    }
  

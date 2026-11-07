@@ -579,6 +579,7 @@ def chromium(session, checks, out_dir):
         #       Chromium asks mutter to activate every window it restores, without an event of the user behind the
         #       request, so mutter marks each of them as demanding attention. Until a fix in Chromium, the test only
         #       records these windows in result.json.
+        #       See: https://issues.chromium.org/issues/582928432
         attention = [window_summary(w) for w in session.windows(CHROMIUM) if w["demandsAttention"]]
         session.logout()
         return {"before": before, "after": after, "units": units, "dialogs": dialogs, "demanding_attention": attention}
