@@ -1,8 +1,9 @@
 Description: Show restored windows without activating them and open a new window for every launch and file.
  Text Editor restores its session by presenting each restored window, and GTK gives the activation token of the
- launch to the first window it shows, so with a valid token, as from the dock, GNOME switches to that window's
- workspace. A launch opens no new window, files opened from outside become tabs of the most recently used window,
- wherever it is, and while Text Editor runs, activating it presents an existing window.
+ launch to the first window it shows. With the token of a launch from the dock, mutter moves that restored window to
+ the workspace of the launch and focuses it, or, when a window received input or was activated after the launch,
+ marks it as demanding attention. A launch opens no new window, files opened from outside become tabs of the most
+ recently used window, wherever it is, and while Text Editor runs, activating it presents an existing window.
  .
  Restored windows are now shown with GTK's automatic startup notification off, and a restored window whose files and
  drafts were all removed is discarded instead of showing a new draft. The request which restored the session then

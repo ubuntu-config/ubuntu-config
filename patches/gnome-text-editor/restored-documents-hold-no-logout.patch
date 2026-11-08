@@ -1,0 +1,154 @@
+Description: Hold no logout for unsaved documents which return with the session, and save the session when it ends.
+ Every window with an unsaved document asked GNOME to hold a logout, so GNOME Shell's logout dialog listed Text Editor
+ as having unsaved work, although Text Editor saves unsaved documents as drafts and restores them at its next start.
+ When the session of the desktop ends, GTK quits Text Editor, which then saved nothing: the next start restored the
+ state of the last auto-save, which is not marked as shut down, as after a crash, without the text typed since.
+ .
+ While Text Editor restores its session, unsaved documents now hold no logout, and the session is saved at shutdown
+ when nothing requested a save for shutdown before, as closing the last window and quitting do. Shutdown waits for
+ that save and for the saves still running, for at most 5 seconds. A session which does not restore its pages, with
+ restore-session off or with --ignore-session, still holds the logout for unsaved documents, and saves nothing at
+ shutdown, so that the next start still restores its unsaved documents as after a crash.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-08
+diff --git a/src/editor-application.c b/src/editor-application.c
+--- a/src/editor-application.c
++++ b/src/editor-application.c
+@@ -658,6 +658,9 @@
+ {
+   EditorApplication *self = (EditorApplication *)application;
+ 
++  if (self->session != NULL)
++    _editor_session_save_at_shutdown (self->session);
++
+   g_clear_object (&self->session);
+   g_clear_object (&self->recoloring);
+   g_clear_object (&self->portal);
+diff --git a/src/editor-session.c b/src/editor-session.c
+--- a/src/editor-session.c
++++ b/src/editor-session.c
+@@ -32,6 +32,7 @@
+ #include "editor-window-private.h"
+ 
+ #define DEFAULT_AUTO_SAVE_TIMEOUT_SECONDS 3
++#define SHUTDOWN_SAVE_TIMEOUT_SECONDS 5
+ #define MAX_AUTO_SAVE_TIMEOUT_SECONDS (60*5)
+ #define MAX_BOOKMARKS 1000
+ #define HUGE_WINDOW 8000
+@@ -1709,6 +1710,9 @@
+   state->shutting_down = !!shutting_down;
+   state->auto_save = !!auto_save;
+ 
++  if (shutting_down)
++    self->shutdown_save_requested = TRUE;
++
+   g_application_hold (state->app);
+ 
+   task = g_task_new (self, cancellable, callback, user_data);
+@@ -1848,6 +1852,62 @@
+     editor_session_run_save (self, next);
+ }
+ 
++static gboolean
++editor_session_shutdown_timeout_cb (gpointer user_data)
++{
++  gboolean *timed_out = user_data;
++
++  *timed_out = TRUE;
++
++  return G_SOURCE_REMOVE;
++}
++
++/**
++ * _editor_session_save_at_shutdown:
++ * @self: a #EditorSession
++ *
++ * Saves the session for shutdown, unless such a save was requested already,
++ * and returns once every save of the session finished, or after
++ * SHUTDOWN_SAVE_TIMEOUT_SECONDS with a warning. Does nothing when the session
++ * does not restore its pages.
++ */
++void
++_editor_session_save_at_shutdown (EditorSession *self)
++{
++  gboolean timed_out = FALSE;
++  guint timeout_id;
++
++  g_return_if_fail (EDITOR_IS_SESSION (self));
++
++  /* A session which does not restore its pages restores them only when it
++   * was not shut down, so that unsaved documents return after a crash. Its
++   * unsaved documents hold the logout instead, see
++   * editor_window_update_inhibit().
++   */
++  if (!self->restore_pages)
++    return;
++
++  /* Closing the last window and quitting request a save for shutdown and quit
++   * once it finished. When the session of the desktop ends, GTK quits the
++   * application without either, with its windows still open.
++   */
++  if (!self->shutdown_save_requested)
++    editor_session_save_async (self, TRUE, NULL, NULL, NULL);
++
++  /* The application no longer runs its main loop, so the saves are run here. */
++  timeout_id = g_timeout_add_seconds (SHUTDOWN_SAVE_TIMEOUT_SECONDS,
++                                      editor_session_shutdown_timeout_cb,
++                                      &timed_out);
++  while (!timed_out && (self->saving || !g_queue_is_empty (&self->pending_saves)))
++    g_main_context_iteration (NULL, TRUE);
++
++  if (timed_out)
++    g_warning ("Saving the session did not finish within %u seconds",
++               SHUTDOWN_SAVE_TIMEOUT_SECONDS);
++  else
++    g_source_remove (timeout_id);
++}
++
+ gboolean
+ editor_session_save_finish (EditorSession  *self,
+                             GAsyncResult   *result,
+diff --git a/src/editor-session-private.h b/src/editor-session-private.h
+--- a/src/editor-session-private.h
++++ b/src/editor-session-private.h
+@@ -64,6 +64,7 @@
+   guint               restore_pages : 1;
+   guint               can_clear_history : 1;
+   guint               saving : 1;
++  guint               shutdown_save_requested : 1;
+   guint               restoring : 1;
+   guint               present_grace : 1;
+ };
+@@ -100,5 +101,6 @@
+ void           _editor_session_set_restore_pages      (EditorSession  *self,
+                                                        gboolean        restore_pages);
+ void           _editor_session_clear_history          (EditorSession  *self);
++void           _editor_session_save_at_shutdown       (EditorSession  *self);
+ 
+ G_END_DECLS
+diff --git a/src/editor-window.c b/src/editor-window.c
+--- a/src/editor-window.c
++++ b/src/editor-window.c
+@@ -1160,6 +1160,7 @@
+ static void
+ editor_window_update_inhibit (EditorWindow *self)
+ {
++  EditorSession *session = EDITOR_SESSION_DEFAULT;
+   gboolean inhibit = FALSE;
+   guint n_pages;
+ 
+@@ -1178,6 +1179,13 @@
+         }
+     }
+ 
++  /* A session which restores its pages returns unsaved documents at the next
++   * start, also after the session of the desktop ended, since it is saved at
++   * shutdown then. So they hold no logout.
++   */
++  if (session != NULL && session->restore_pages)
++    inhibit = FALSE;
++
+   if ((inhibit && self->inhibit_cookie != 0) ||
+       (!inhibit && self->inhibit_cookie == 0))
+     return;

@@ -335,13 +335,14 @@ with it. Mutter is therefore also patched to implement the request
 [mutter issue 5177](https://gitlab.gnome.org/GNOME/mutter/-/work_items/5177).
 
 Starting Firefox behaves like a launch while it runs: its windows return to their places, and the page the launch
-opens appears in a new window on the current workspace, which has the focus. That is the start page for a launch
-from the dock, and the link for a link opened from another application, like a terminal, when the profile opens
-external links in new windows (`browser.link.open_newwindow.override.external` set to 2 in `about:config`). Firefox
-itself restores the first window of the previous session into the window it opens for the launch, so a link would
-become a tab of that window, on its workspace, and GNOME would switch to the workspace of whichever restored window
-appeared first (`patches/firefox/session-restore-launch-window.patch` and `wayland-launch-activation-token.patch`). A
-restart by Firefox itself, such as after an update, restores the windows as they were, without a new one.
+opens appears in a new window on the current workspace, which has the focus. That is the start page for a launch from
+the dock, and the link for a link opened from another application, like a terminal, when the profile opens external
+links in new windows (`browser.link.open_newwindow.override.external` set to 2 in `about:config`). Firefox itself
+restores the first window of the previous session into the window it opens for the launch, so a link would become a
+tab of that window, on its workspace, and the restored window shown first would receive the activation token of the
+launch, which made mutter mark it as demanding attention in the session tests
+(`patches/firefox/session-restore-launch-window.patch` and `wayland-launch-activation-token.patch`). A restart by
+Firefox itself, such as after an update, restores the windows as they were, without a new one.
 
 ### Firefox's sandbox has its user namespaces
 
@@ -394,6 +395,16 @@ then saves only when it quits. It is patched to save in that case and after the 
 at a time, so that a save of a large document cannot replace newer saved state with older (`patches/gnome-text-editor/`).
 It is also patched to save when the cursor moves, a window is resized or maximized, a tab is selected or moved, or the
 language or encoding of a document changes, so that a crash restores all of them as they were a few seconds before.
+
+### Text Editor does not hold the logout for unsaved documents
+
+Text Editor keeps unsaved documents and returns them at its next start, also after logging out, but it still asked
+GNOME to hold the logout while a window had one, so GNOME Shell's logout dialog listed it as having unsaved work.
+When the session ends, GTK quits Text Editor without the save it runs when it quits otherwise, so without that dialog
+the next start would miss the text typed in the few seconds before logging out. Text Editor is patched to hold no
+logout while it restores its session, and to save its session when GTK quits it
+(`patches/gnome-text-editor/restored-documents-hold-no-logout.patch`). With restore-session off, it still holds the
+logout for unsaved documents.
 
 ### Text Editor reads standard input without errors
 
@@ -536,15 +547,15 @@ session through the portal and quit cleanly when it ends (`patches/firefox/sigte
 
 ### Applications which withdraw an inhibition leave none behind
 
-Applications ask GNOME through the Inhibit portal to hold a logout or a suspend, as Text Editor does for each window
-with unsaved documents, and withdraw the inhibition once it is no longer needed. The portal answered the application at
-once and asked GNOME for the inhibition only afterwards, so a withdrawal which arrived in between failed, and the
-inhibition stayed until the application quit. Text Editor inhibits and withdraws right away while it loads a file, and
-GNOME Shell's logout dialog then listed it once more as having unsaved work. [gnome-session issue
-174](https://gitlab.gnome.org/GNOME/gnome-session/-/work_items/174) reports the same symptom with Nautilus, whose
-inhibitions while it moves files then keep the computer from suspending. xdg-desktop-portal is patched to answer the
-application only once GNOME's side has the inhibition (`patches/xdg-desktop-portal/`, [xdg-desktop-portal issue
-854](https://github.com/flatpak/xdg-desktop-portal/issues/854)).
+Applications ask GNOME through the Inhibit portal to hold a logout or a suspend, and withdraw the inhibition once it is
+no longer needed. The portal answered the application at once and asked GNOME for the inhibition only afterwards, so a
+withdrawal which arrived in between failed, and the inhibition stayed until the application quit. Text Editor, when it
+does not restore its session, holds the logout for each window with unsaved documents, and inhibits and withdraws right
+away while it loads a file, so GNOME Shell's logout dialog then listed it once more as having unsaved work.
+[gnome-session issue 174](https://gitlab.gnome.org/GNOME/gnome-session/-/work_items/174) reports the same symptom with
+Nautilus, whose inhibitions while it moves files then keep the computer from suspending. xdg-desktop-portal is patched
+to answer the application only once GNOME's side has the inhibition (`patches/xdg-desktop-portal/`, [xdg-desktop-portal
+issue 854](https://github.com/flatpak/xdg-desktop-portal/issues/854)).
 
 ### Applications start inside their own scope
 

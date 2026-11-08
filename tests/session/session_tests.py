@@ -87,6 +87,7 @@ def spawn_scopes(session, checks, out_dir):
 
 TEXT_EDITOR = "org.gnome.TextEditor.desktop"
 DRAFT_TEXT = "unsaved draft text"
+LATE_TEXT = "typed right before logging out"
 
 
 def find(windows, predicate):
@@ -107,8 +108,9 @@ def window_summary(window):
 @test
 def text_editor(session, checks, out_dir):
     """Text Editor returns its windows to their workspaces after logging out and in again, with the text typed into a
-    document never saved, and without activating them, while every launch, from the dock or of a file opened from a
-    terminal, opens a new window on the current workspace and focuses it."""
+    document never saved, also right before logging out, and without activating them, while every launch, from the
+    dock or of a file opened from a terminal, opens a new window on the current workspace and focuses it. Its unsaved
+    documents do not hold the logout."""
     home = pathlib.Path.home()
     document = home / "one.txt"
     document.write_text("first line\n")
@@ -156,12 +158,17 @@ def text_editor(session, checks, out_dir):
 
     # The session is saved a few seconds after the last change, as auto-save-delay says.
     time.sleep(6)
+    # Text typed less than auto-save-delay before logging out is saved only when Text Editor quits at the end of the
+    # session.
+    if third:
+        session.type_text(LATE_TEXT)
+        time.sleep(0.5)
     first = session.windows(TEXT_EDITOR)
+    held = [i for i in session.inhibitors() if i["app"].startswith("org.gnome.TextEditor")]
+    checks.check("Text Editor holds no logout for its unsaved documents", not held, str(held))
     dialogs = session.logout()
-    # Text Editor holds the logout while it has unsaved documents, also when their drafts are saved, and GNOME Shell
-    # lists it by name.
     listed = [d["applications"] for shown in dialogs for d in shown["dialogs"] if d["type"] == "EndSessionDialog"]
-    checks.check("logging out lists Text Editor as having unsaved work", listed == [["Text Editor"]], str(dialogs))
+    checks.check("logging out shows no dialog listing Text Editor", not listed, str(dialogs))
 
     session.login()
     session.call("activateWorkspace", 10)
@@ -192,6 +199,17 @@ def text_editor(session, checks, out_dir):
         session.press("c", "Control_L")
         text = wait_for(lambda: session.call("clipboardText"), 10)
         checks.check("the draft has the text typed before logging out", text and DRAFT_TEXT in text, repr(text))
+    restored_late = find(second, lambda w: w["workspace"] == 7)
+    checks.check("the document typed into right before logging out returns to its workspace",
+                 restored_late, str([window_summary(w) for w in second]))
+    if restored_late:
+        session.call("activateWindow", restored_late["id"])
+        wait_for(lambda: find(session.windows(TEXT_EDITOR), lambda w: w["id"] == restored_late["id"] and w["focused"]), 10)
+        session.press("a", "Control_L")
+        session.press("c", "Control_L")
+        # The clipboard still has the text copied from the other draft until the copy here replaces it.
+        copied = wait_for(lambda: LATE_TEXT in (session.call("clipboardText") or ""), 10)
+        checks.check("it has the text typed right before logging out", copied, repr(session.call("clipboardText")))
     session.logout()
     return {"before": first, "after": second, "dialogs": dialogs}
 

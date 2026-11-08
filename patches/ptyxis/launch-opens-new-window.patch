@@ -1,7 +1,8 @@
 Description: Show restored windows without activating them and open a new window for every launch.
  Ptyxis restores its session by presenting every restored window. GTK spends the activation token of the launch on
- the first window it shows, so with a valid token, as from GNOME Shell's dock, mutter focuses that restored window
- and switches to its workspace. The launch itself opens no new window: activation and the new-window action only
+ the first window it shows. With the token of a launch from GNOME Shell's dock, mutter moves that restored window to
+ the workspace of the launch and focuses it, or, when a window received input or was activated after the launch,
+ marks it as demanding attention. The launch itself opens no new window: activation and the new-window action only
  restore the session at a cold start, and activation presents an existing window while Ptyxis runs.
  .
  Restored windows are now shown with GTK's automatic startup notification turned off, so they return to their places
@@ -525,21 +526,22 @@ diff --git a/src/ptyxis-session.c b/src/ptyxis-session.c
 index 2252dcd..2801f0b 100644
 --- a/src/ptyxis-session.c
 +++ b/src/ptyxis-session.c
-@@ -260,6 +260,13 @@ ptyxis_session_restore (PtyxisApplication *app,
+@@ -260,6 +260,14 @@ ptyxis_session_restore (PtyxisApplication *app,
    restore_session = ptyxis_settings_get_restore_session (settings);
    restore_window_size = ptyxis_settings_get_restore_window_size (settings);
  
 +  /* The restored windows return to their places without being activated. The
 +   * activation token of the launch belongs to the window opened for it, which
 +   * is presented after them, while GTK would spend it on the first window it
-+   * maps, focusing it and switching to its workspace.
++   * maps, which mutter then moves to the workspace of the launch and focuses,
++   * or marks as demanding attention.
 +   */
 +  gtk_window_set_auto_startup_notification (FALSE);
 +
    g_variant_iter_init (&iter, windows);
    while (g_variant_iter_loop (&iter, "@a{sv}", &window))
      {
-@@ -409,7 +416,7 @@ ptyxis_session_restore (PtyxisApplication *app,
+@@ -409,7 +417,7 @@ ptyxis_session_restore (PtyxisApplication *app,
            if (maximized)
              gtk_window_maximize (GTK_WINDOW (the_window));
  
@@ -548,7 +550,7 @@ index 2252dcd..2801f0b 100644
  
            if (active_tab)
              {
-@@ -421,5 +428,7 @@ ptyxis_session_restore (PtyxisApplication *app,
+@@ -421,5 +429,7 @@ ptyxis_session_restore (PtyxisApplication *app,
        added_window |= the_window != NULL;
      }
  

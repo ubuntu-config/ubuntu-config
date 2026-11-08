@@ -102,8 +102,10 @@ launch-opens-new-window.patch
     without being activated, and the launch, or files opened from outside, such as with xdg-open or from the
     terminal, open in a new window on the current workspace, which has the focus. Text Editor restored its session
     by presenting each restored window, and GTK gives the activation token of the launch to the first window it
-    shows, so with a valid token, as from the dock, GNOME switched to that window's workspace. Files opened from
-    outside became tabs of the most recently used window, wherever it was, and a launch opened no new window.
+    shows: with the token of a launch from the dock, mutter moved that restored window to the workspace of the
+    launch and focused it, or, when a window received input or was activated after the launch, marked it as
+    demanding attention. Files opened from outside became tabs of the most recently used window, wherever it was,
+    and a launch opened no new window.
 
     Restored windows are now shown with GTK's automatic startup notification off, and a restored window whose files
     and drafts were all removed is discarded rather than given a new draft. The request which restored the session
@@ -120,6 +122,25 @@ launch-opens-new-window.patch
     version bump, check that editor_session_restore_v1 still shows its windows in one place and that
     editor_application_restore_cb still runs after every restore.
 
+restored-documents-hold-no-logout.patch
+    Keeps Text Editor from holding a logout for unsaved documents while it restores its session, since they return at
+    its next start. Every window with an unsaved document inhibited the logout, so GNOME Shell's logout dialog listed
+    Text Editor as having unsaved work. When the session ends, GTK quits Text Editor without the save for shutdown
+    which closing the last window or Ctrl+Q runs first, so the next start restored the state of the last auto-save,
+    as after a crash, without the text typed since.
+
+    editor_window_update_inhibit now inhibits nothing while the session restores its pages, and the application's
+    shutdown saves the session when no save for shutdown was requested before, and runs the main context until the
+    saves finished, for at most 5 seconds. Without session restore, with restore-session off, --ignore-session or
+    --standalone, unsaved documents still hold the logout and nothing is saved at shutdown, since the next start then
+    restores the documents only from a state not marked as shut down, as after a crash.
+
+    The patch is local only and not proposed upstream. It is tested by the session test text-editor in
+    tests/session/, which types into a document right before logging out: Text Editor holds no inhibitor then, and
+    the text returns after logging in again. After a version bump, check that GTK still quits the application with
+    g_application_quit() when the session ends, in gtk/gtkapplication-dbus.c, and that editor_application_shutdown
+    still runs before the session is disposed.
+
 Check by hand after an upgrade, in a new login, so that the patched mutter runs, and with no Text Editor of the
 previous version still running in the background:
 
@@ -129,3 +150,5 @@ previous version still running in the background:
   windows are placed from the second start on.
   open a file from the terminal with gnome-text-editor or xdg-open while Text Editor runs: it should open in a new
   window on the current workspace.
+  type into a new document and log out right away: the logout dialog should not list Text Editor, and after logging
+  in again, Text Editor should return the document with all the text typed.

@@ -29,10 +29,11 @@ The tests:
                   none in GNOME Shell's unit, and logging out ends them all (patches/glib2.0/,
                   patches/gnome-shell/spawn-commands-in-scope.patch).
   text-editor     Text Editor started from the dock, a file opened from a terminal and a launch from the dock on a
-                  workspace without its window each open a new window on the current workspace, focused. Logging out
-                  lists Text Editor in GNOME Shell's dialog, as having unsaved work. After logging in again, the
-                  windows return to their workspaces without being focused and without switching the workspace, the
-                  launch opens a new window where the user is, and the document never saved has the text typed into it.
+                  workspace without its window each open a new window on the current workspace, focused. Text Editor
+                  holds no logout for its unsaved documents. After logging in again, the windows return to their
+                  workspaces without being focused and without switching the workspace, the launch opens a new window
+                  where the user is, and the documents never saved have the text typed into them, also the text typed
+                  right before logging out.
   ptyxis          The same for Ptyxis, whose windows return also to their positions and sizes, each with the screen it
                   showed and a new shell in the directory of the old one, with Ubuntu's .bashrc. Logging out while a
                   program runs in it lists it, as Terminal, in GNOME Shell's dialog.

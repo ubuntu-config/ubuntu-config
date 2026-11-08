@@ -7,10 +7,10 @@ inhibit-export-request-after-backend.patch
     Inhibit at once, and called the backend, xdg-desktop-portal-gtk on GNOME, only afterwards, from a thread, once it
     had looked up the application's permissions. A Close which arrived in between was forwarded to the backend before
     the backend had created its request, and failed with "Object does not exist at path". The backend then still asked
-    gnome-session for the inhibition, which stayed until the application disconnected from the bus. Text Editor
-    inhibits for each window with unsaved documents, and loading a file marks the document modified and unmodified
-    again, so opening a file inhibited and withdrew right away, and GNOME Shell's logout dialog listed Text Editor once
-    more as having unsaved work.
+    gnome-session for the inhibition, which stayed until the application disconnected from the bus. Text Editor, when it
+    does not restore its session, inhibits for each window with unsaved documents, and loading a file marks the document
+    modified and unmodified again, so opening a file inhibited and withdrew right away, and GNOME Shell's logout dialog
+    listed Text Editor once more as having unsaved work.
 
     The handler of Inhibit runs in a thread of its own, and now calls the backend synchronously, and exports the
     request and answers only once the backend has returned, which it does after it has exported its own request. A
@@ -29,6 +29,7 @@ inhibit-export-request-after-backend.patch
     GNOME session: 200 requests closed right after Inhibit have to leave no inhibitor behind. Without the patch, 116 of
     200 were left behind.
 
-    Check by hand after a rebuild and a new login, after opening a few files in Text Editor without changing them:
+    Check by hand after a rebuild and a new login, after opening a few files with gnome-text-editor --standalone, which
+    does not restore its session, without changing them:
 
       gnome-session-inhibit --list    should list Text Editor only once for each window with unsaved documents

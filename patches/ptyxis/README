@@ -86,9 +86,10 @@ launch-opens-new-window.patch
     restored windows return to their places without being activated, and the launch opens a new
     window on the current workspace, which has the focus. Ptyxis restored its session by
     presenting every restored window, and GTK gives the activation token of the launch to the
-    first window it shows, so with a valid token, as from the dock, GNOME switched to that
-    window's workspace, and the launch opened no new window. While Ptyxis ran, activating it
-    presented an existing window.
+    first window it shows: with the token of a launch from the dock, mutter moved that restored
+    window to the workspace of the launch and focused it, or, when a window received input or
+    was activated after the launch, marked it as demanding attention, and the launch opened no
+    new window. While Ptyxis ran, activating it presented an existing window.
 
     Restored windows are now shown with GTK's automatic startup notification off. Activation,
     the new-window action, --new-window and opening files always open a new window, presented
