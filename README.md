@@ -450,11 +450,10 @@ patches can be dropped once a GLib which does is in Ubuntu.
 
 #### Applications finish quitting before the session ends
 
-Before a session ends, GNOME tells applications through the Inhibit portal that it ends, and GTK 4 applications and
-Chromium quit then. The portal answered GNOME at once, though, so the session ended about 30 ms later, and systemd
-stopped the applications and GNOME Shell while they were still quitting. The portal is patched to let the session end
-only once every application which monitors the session through it has quit, or after 8 seconds
-(`patches/xdg-desktop-portal-gtk/`).
+Before a session ends, GNOME tells applications through the Inhibit portal that it ends, and GTK 4 applications quit
+then. The portal answered GNOME at once, though, so the session ended about 30 ms later, and systemd stopped the
+applications and GNOME Shell while they were still quitting. The portal is patched to let the session end only once
+every application which monitors the session through it has quit, or after 8 seconds (`patches/xdg-desktop-portal-gtk/`).
 
 Firefox did not monitor the session through the portal, and was killed by the SIGTERM systemd sends at the end of a
 session: Firefox 122 added a handler which quits cleanly on SIGTERM, but installs it too early for it to work
