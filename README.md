@@ -11,6 +11,91 @@ whatever helps and adapt it to your own liking.
 
 It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
 
+## Contents
+
+- [How it works](#how-it-works): scripts which show their changes before applying them, and Ubuntu packages patched,
+  tested and rebuilt daily.
+- [Preferences](#preferences): the desktop changed to my liking, where others may prefer GNOME's defaults.
+  - [Keyboard like on macOS](#keyboard-like-on-macos): Control under the thumb in every application, the terminal
+    included.
+  - [One key for Claude Quick Entry](#one-key-for-claude-quick-entry): a tap of the right Super opens Claude
+    Desktop's Quick Entry.
+  - [Terminal shortcuts and palettes](#terminal-shortcuts-and-palettes): Ctrl+G for the next search match, copying as
+    HTML, and selection colours in palettes.
+  - [Chromium quits with Ctrl+Q](#chromium-quits-with-ctrlq): a small extension binds the key, and Chromium keeps its
+    whole session.
+  - [A launch opens a new window](#a-launch-opens-a-new-window): Firefox, Text Editor and the terminal open pages,
+    files and shells in a new window on the current workspace.
+  - [Text Editor keeps unsaved documents without warnings](#text-editor-keeps-unsaved-documents-without-warnings): no
+    entry in the logout dialog and no banner for them.
+  - [No screenshots on the lock screen](#no-screenshots-on-the-lock-screen): the button and the keys do nothing while
+    the screen is locked.
+  - [Power and lid sounds follow the System Sounds switch](#power-and-lid-sounds-follow-the-system-sounds-switch): no
+    sound for the power cable, the lid and a low battery.
+  - [Hardware tweaks](#hardware-tweaks): the touchscreen and the power button light off, and keys repeating only after
+    a second.
+- [Additions](#additions): tools and features which Ubuntu does not have.
+  - [Third-party APT repositories pinned to their packages](#third-party-apt-repositories-pinned-to-their-packages): a
+    vendor repository can install and upgrade only the packages in use from it.
+  - [Packages without an APT repository kept up to date](#packages-without-an-apt-repository-kept-up-to-date):
+    vendors' `.deb` files downloaded daily, verified, and upgraded like any other package.
+  - [Daily mail of failures and errors](#daily-mail-of-failures-and-errors): failed units, errors and crash reports
+    from the journals of the system and of every user.
+  - [Battery charge thresholds on Framework laptops](#battery-charge-thresholds-on-framework-laptops): Preserve
+    Battery Health keeps the battery between 40% and 60%.
+  - [Processor throttling](#processor-throttling): a top bar indicator naming the limit which holds the processor
+    back, and a warning when the fan stops following the heat.
+  - [Cooling and performance tracked over time](#cooling-and-performance-tracked-over-time): a measurement at night,
+    to follow dust in the fan and slowdowns from updates over the years.
+- [Fixes](#fixes): bugs fixed here, most of them reported or proposed upstream too.
+  - [Applications quit cleanly and return as they were](#applications-quit-cleanly-and-return-as-they-were): every
+    application runs in its own scope and quits before the session ends, and windows, documents and terminal tabs
+    return also after a crash.
+    - [Applications start inside their own scope](#applications-start-inside-their-own-scope): every process of an
+      application starts in its scope, and none is stopped with the service which launched it.
+    - [Applications finish quitting before the session ends](#applications-finish-quitting-before-the-session-ends):
+      Firefox, Chromium and applications built on Electron do not crash at logout and shutdown.
+    - [Applications which withdraw an inhibition leave none behind](#applications-which-withdraw-an-inhibition-leave-none-behind):
+      the logout dialog lists only applications which still hold the logout.
+    - [Windows return to their places](#windows-return-to-their-places): Firefox, Chromium, Text Editor, the terminal,
+      Signal and Slack return to their workspaces, monitors, positions and sizes.
+    - [Switching workspaces stays on the chosen workspace](#switching-workspaces-stays-on-the-chosen-workspace):
+      the desktop icons extension does not move to a window which demands attention, and Firefox's restored windows
+      demand none.
+    - [Documents and terminal tabs return also after a crash](#documents-and-terminal-tabs-return-also-after-a-crash):
+      Text Editor and the terminal save their state a few seconds after every change.
+  - [Firefox runs with its whole sandbox](#firefox-runs-with-its-whole-sandbox): WebAssembly sandboxed libraries,
+    Ubuntu's AppArmor profile, and user namespaces for its content processes.
+  - [Windows keep their size when the screen locks](#windows-keep-their-size-when-the-screen-locks): snapped and
+    maximized windows keep the space the dock leaves them.
+  - [Claude Desktop and Slack show their tray icon after every login](#claude-desktop-and-slack-show-their-tray-icon-after-every-login):
+    they start at login only once the top bar can show their icons.
+  - [Terminal fixes](#terminal-fixes): the visual bell without animations, the terminal in the logout dialog, and the
+    directory of new tabs.
+  - [Text Editor reads standard input without errors](#text-editor-reads-standard-input-without-errors): no GLib
+    criticals when it loads text from a stream.
+  - [Magnet links open in a running Transmission](#magnet-links-open-in-a-running-transmission): AppArmor rules for
+    passing the link to the running Transmission.
+  - [The document portal's filesystem is mounted and unmounted](#the-document-portals-filesystem-is-mounted-and-unmounted):
+    AppArmor rules which fusermount3 needs with libfuse 3.17.
+  - [File indexing does not crash on vanished downloads](#file-indexing-does-not-crash-on-vanished-downloads):
+    localsearch's extractor handles a file deleted before it could read it.
+  - [Only the working internal microphone is offered](#only-the-working-internal-microphone-is-offered): the audio
+    coprocessor's microphone input, which has no microphones wired to it, is left out.
+  - [snapd's desktop helper starts with the desktop](#snapds-desktop-helper-starts-with-the-desktop): it starts and
+    stops with the graphical session.
+  - [Media players stay connected to Bluetooth devices after a logout](#media-players-stay-connected-to-bluetooth-devices-after-a-logout):
+    mpris-proxy starts again together with the user's D-Bus.
+  - [The accessibility bus does not fail when a session ends](#the-accessibility-bus-does-not-fail-when-a-session-ends):
+    systemd sends SIGTERM to the bus launcher alone.
+  - [GDM does not fail at shutdown](#gdm-does-not-fail-at-shutdown): GDM is stopped before accounts-daemon.
+  - [The encrypted disk is not closed while in use at shutdown](#the-encrypted-disk-is-not-closed-while-in-use-at-shutdown):
+    the root filesystem's encrypted device is closed in the final phase of the shutdown.
+- [Requirements](#requirements): the Ubuntu release, the hardware and the packages the scripts assume.
+- [Applying everything](#applying-everything): the order in which to run the scripts.
+- [GitHub mirror](#github-mirror): a read-only mirror, for forking the project on GitHub.
+- [License](#license): Apache 2.0.
+
 ## How it works
 
 Most of the configuration is done by scripts which write settings (mostly through gsettings and dconf, and a few
@@ -20,13 +105,21 @@ configuration or to see how it has drifted from it.
 
 Where a setting is not enough, Ubuntu's own packages are patched. `patches/<source-package>/` contains patches
 which are applied on top of Ubuntu's source package, or for Firefox the Mozilla Team PPA's, together with tests for
-the patched behavior which run during the build where the package has a test suite to add them to.
+the patched behavior which run during the build where the package has a test suite to add them to. The PPA publishes
+the source to rebuild Firefox with, unlike Mozilla's own repository (requested in
+[Mozilla bug 2087959](https://bugzilla.mozilla.org/show_bug.cgi?id=2087959)).
+
 `rebuild-patched-packages.sh` rebuilds a package whenever Ubuntu publishes a new version of it or its patches
-change, building it with sbuild as an unprivileged user in a throwaway chroot, and publishes the result to a local
-APT repository. That repository is pinned above the Ubuntu archive, so unattended-upgrades or the next ordinary
-`apt upgrade` installs the patched build. A daily cron job keeps patched packages current, running root-owned
-copies of the script and patches, installed with `install-rebuild-patched-packages.sh`. GitLab CI builds the patched
-packages too and runs the tests in `tests/<source-package>/` against them (`.gitlab-ci.yml`).
+change, and publishes the result to a local APT repository. That repository is pinned above the Ubuntu archive, so
+unattended-upgrades or the next ordinary `apt upgrade` installs the patched build. A daily cron job keeps patched
+packages current, running root-owned copies of the script and patches, installed with
+`install-rebuild-patched-packages.sh` (`cron.daily/`). Packages are built the way Ubuntu builds its own packages,
+with sbuild in a throwaway chroot without network access, with build dependencies installed only inside it. Its
+unshare mode needs no root even to set up the chroot, so everything runs as an unprivileged system user, and a
+package's build scripts and test suite cannot change the system. Builds run in `/tmp`, whose limit on the number
+of files is raised, since a Firefox build holds more files there than systemd's default allows
+(`systemd/tmp.mount.d/`). GitLab CI builds the patched packages too and runs the tests in `tests/<source-package>/`
+against them (`.gitlab-ci.yml`).
 
 Tests which require a whole desktop, such as windows returning to their workspaces after logging out and in, or the
 logout dialog, run in a GNOME session in a container (`tests/session/`): the real gnome-session and GNOME Shell,
@@ -35,9 +128,15 @@ driven through a test extension. GitLab CI runs these tests too.
 
 Packages whose vendors publish a `.deb` but no APT repository are published to the same local repository:
 `fetch-vendor-debs.py` downloads the newest version of each daily and verifies it, and unattended-upgrades or the next
-`apt upgrade` upgrades it where it is installed.
+`apt upgrade` upgrades it where it is installed (see
+[Packages without an APT repository kept up to date](#packages-without-an-apt-repository-kept-up-to-date)).
 
-## Main features
+GNOME Shell extensions are installed from extensions.gnome.org and configured by `configure-gnome-desktop.sh`, with
+their settings in `gnome-extensions/`. Custom extensions are installed from the repository.
+
+## Preferences
+
+These sections change the desktop's behavior to my liking. Others may well prefer GNOME's defaults.
 
 ### Keyboard like on macOS
 
@@ -81,20 +180,85 @@ Right Ctrl, the default. This configuration supersedes a Copilot key: the key st
 opens Claude's Quick Entry. As a Copilot key, it would send a fixed key combination instead and could not act as
 Super.
 
-### Terminal improvements
+### Terminal shortcuts and palettes
 
 Ptyxis, Ubuntu's terminal, is patched and configured (`patches/ptyxis/`, `configure-ptyxis.sh`):
 
 - Ctrl+G moves to the next search match, and Ctrl+Shift+G to the previous one.
 - A keyboard shortcut for copying as HTML.
 - Palettes can set the selection highlight colours.
-- The visual bell shows even with animations disabled.
-- The dialog shown before logging out or shutting down lists the terminal while a program runs in it.
-- A new tab or window opens in the directory of the current tab also after a terminal reset, which keeps the
-  directory the shell reported (`patches/vte2.91/`), and when the shell reports none, in the directory of the
-  program running in the tab.
-- After a crash, its windows return to their places, with their tabs and the last screen of each (see
-  [Terminal windows return after a crash](#terminal-windows-return-after-a-crash)).
+
+Its windows return with their tabs and the last screen of each, also after a crash (see
+[Documents and terminal tabs return also after a crash](#documents-and-terminal-tabs-return-also-after-a-crash)), and
+a launch opens a new window (see [A launch opens a new window](#a-launch-opens-a-new-window)).
+
+### Chromium quits with Ctrl+Q
+
+Chromium binds no key to Exit on Linux. A small extension binds Ctrl+Q, which the thumb key sends where macOS has
+Command+Q (`chromium-extensions/quit-shortcut/`), and starts a native messaging host
+(`chromium-native-messaging-hosts/`), a script which ends Chromium with SIGTERM (`chromium-quit.sh`). Chromium handles
+that like the end of the desktop session and keeps its whole session, so all its windows return at the next start.
+`configure-gnome-desktop.sh` installs all three, and the shortcut can be changed in `chrome://extensions/shortcuts`.
+
+### A launch opens a new window
+
+Firefox, Text Editor and the terminal return the windows of their previous session to their places when they start
+(see [Windows return to their places](#windows-return-to-their-places)). A launch then behaves as it does while the
+application runs: the restored windows stay where they are, without being activated, and the page, the files or the
+shell of the launch appear in a new window on the current workspace, which has the focus.
+
+For Firefox, that is the start page for a launch from the dock, and the link for a link opened from another
+application, like a terminal, when the profile opens external links in new windows
+(`browser.link.open_newwindow.override.external` set to 2 in `about:config`). Firefox itself restores the first
+window of the previous session into the window it opens for the launch, so a link would become a tab of that window,
+on its workspace (`patches/firefox/session-restore-launch-window.patch`). A restart by Firefox itself, such as after
+an update, restores the windows as they were, without a new one.
+
+For Text Editor, started from the dock or for a file opened from the terminal or the file manager, the new window
+holds an empty document or the files. A file opened while Text Editor runs opens in a new window as well, unless it is
+open already, when its window is shown (`patches/gnome-text-editor/launch-opens-new-window.patch`).
+
+For the terminal, started from the dock or with a directory from the file manager, the new window holds a new shell
+(`patches/ptyxis/launch-opens-new-window.patch`).
+
+### Text Editor keeps unsaved documents without warnings
+
+Text Editor keeps unsaved documents and returns them at its next start, also after logging out, but it still asked
+GNOME to hold the logout while a window had one, so GNOME Shell's logout dialog listed it as having unsaved work.
+When the session ends, GTK quits Text Editor without the save it runs when it quits otherwise, so without that dialog
+the next start would miss the text typed in the few seconds before logging out. Text Editor is patched to hold no
+logout while it restores its session, and to save its session when GTK quits it
+(`patches/gnome-text-editor/restored-documents-hold-no-logout.patch`). With restore-session off, it still holds the
+logout for unsaved documents.
+
+Text Editor also shows no banner above restored documents, since keeping a document unsaved is a normal way to use
+it, and a banner would mark every such window as needing attention. The window title still shows whether a document is
+unsaved or modified (`patches/gnome-text-editor/hide-restored-banners.patch`).
+
+### No screenshots on the lock screen
+
+GNOME Shell offers screenshots on the lock screen, from a button in quick settings and with Print and Shift+Print, so
+anyone at the locked machine could save screenshots into the Pictures folder and replace the clipboard's contents.
+GNOME Shell is patched so that the button is hidden and both keys do nothing while the screen is locked
+(`patches/gnome-shell/`).
+
+### Power and lid sounds follow the System Sounds switch
+
+System Sounds are switched off in Settings (`configure-gnome-desktop.sh`), and gnome-settings-daemon is patched so
+that the switch also silences the sounds of its power plugin, which plays them whatever the switch says otherwise:
+those for the power cable going in and out, for the lid opening and closing, and for a low battery
+(`patches/gnome-settings-daemon/`). Docking and undocking an external monitor which delivers power over USB-C counts
+as the cable going in and out. The low battery notification still appears, without its sound, and the warnings of a
+critically low battery still sound.
+
+### Hardware tweaks
+
+The touchscreen is disabled, the power button light is off, and a held key starts repeating only after a second, in
+the console as well as in GNOME (`udev/`, `systemd/`).
+
+## Additions
+
+Tools and features which Ubuntu does not have.
 
 ### Third-party APT repositories pinned to their packages
 
@@ -113,17 +277,6 @@ pocket.
 
 A vendor's new signing key does not arrive with its packages: `apt update` fails for that repository until the key
 in its file in `sources.list.d/` is replaced and the script is applied again.
-
-### Patched packages kept up to date
-
-Patched packages are rebuilt whenever Ubuntu ships a new version or their patches change, and published to a local
-APT repository which a daily cron job keeps current (`rebuild-patched-packages.sh`,
-`install-rebuild-patched-packages.sh`, `cron.daily/`). They are built the way Ubuntu builds its own packages,
-with sbuild in a throwaway chroot without network access, with build dependencies installed only inside it. Its
-unshare mode needs no root even to set up the chroot, so everything runs as an unprivileged system user, and a
-package's build scripts and test suite cannot change the system. Builds run in `/tmp`, whose limit on the number
-of files is raised, since a Firefox build holds more files there than systemd's default allows
-(`systemd/tmp.mount.d/`).
 
 ### Packages without an APT repository kept up to date
 
@@ -164,26 +317,6 @@ Requirements:
 - The estimated time until the battery is empty or full, shown under the battery percentage in quick settings
   (`gnome-extensions/quick-settings-battery-time@mitar.tnode.com/`).
 - The firmware's own charge limit at 99%[^charge-limit] and Battery Extender disabled, in the BIOS.
-
-### Hardware tweaks
-
-The touchscreen is disabled, the power button light is off, and a held key starts repeating only after a second, in
-the console as well as in GNOME (`udev/`, `systemd/`).
-
-The audio coprocessor of the APU exposes a digital microphone which has no microphones wired to it on this laptop,
-and which the sound server otherwise offers as a second internal microphone beside the working one. Its card is kept
-unregistered (`modprobe.d/snd-acp-legacy-mach.conf`). Without that card the Realtek codec is no longer configured
-through ALSA UCM, so Sound settings offer one configuration whose ports follow the jacks in place of four
-combinations of speakers, headphones and microphones which differ in which of them they leave out.
-
-### Power and lid sounds follow the System Sounds switch
-
-System Sounds are switched off in Settings (`configure-gnome-desktop.sh`), and gnome-settings-daemon is patched so
-that the switch also silences the sounds of its power plugin, which plays them whatever the switch says otherwise:
-those for the power cable going in and out, for the lid opening and closing, and for a low battery
-(`patches/gnome-settings-daemon/`). Docking and undocking an external monitor which delivers power over USB-C counts
-as the cable going in and out. The low battery notification still appears, without its sound, and the warnings of a
-critically low battery still sound.
 
 ### Processor throttling
 
@@ -271,229 +404,65 @@ in `/var/lib/health-benchmark/results.csv`, which everyone can read, and keeps t
 lists what changed since the measurement with the best performance. `sudo health-benchmark --run --note "..."`
 measures right away, which marks a reference point, for example before and after cleaning the fan.
 
-### Windows keep their size when the screen locks
+## Fixes
 
-GNOME Shell disables most extensions while the screen is locked, the dock among them, and enables them again after
-unlocking. The dock reserves its part of the screen only while it is enabled, so windows snapped to a side or
-maximized would grow while the screen is locked and shrink back a moment after unlocking. A terminal resizes its
-contents with the window, which garbles the screen of programs like Claude Code running in it. The Reserve Space
-extension stays enabled on the lock screen and keeps an invisible copy of every part of the screen reserved by the
-dock, the top bar or another panel, so the space left for windows does not change. The copies follow the reserved
-space a few seconds after it changes, for example when the dock is moved to another side of the screen. The extension
-does so only from the next login after it is enabled. At login, GNOME Shell enables the extensions which stay enabled
-on the lock screen before the others, so the extension comes before the dock. One enabled later comes after the dock,
-and when the screen locks, GNOME Shell disables it together with the dock and enables it again without the dock, so it
-then finds no reserved space to copy.
+Bugs fixed here, most of them reported or proposed upstream too, with the local fix kept until Ubuntu ships one.
 
-### No screenshots on the lock screen
+### Applications quit cleanly and return as they were
 
-GNOME Shell offers screenshots on the lock screen, from a button in quick settings and with Print and Shift+Print, so
-anyone at the locked machine could save screenshots into the Pictures folder and replace the clipboard's contents.
-GNOME Shell is patched so that the button is hidden and both keys do nothing while the screen is locked
-(`patches/gnome-shell/`).
+Applications run in a systemd scope of their own, quit cleanly when the session ends, and return as they were at
+their next start, after a logout as well as after a crash or a reset of the machine:
 
-### Signal and Slack open where they were placed
+- Every application which GNOME launches, or which another application launches through GLib, as GTK and GIO
+  applications do, starts with all its processes in a scope of its own.
+- The session ends only once the applications have quit. GTK 4 applications quit when the portal announces the end
+  of the session, and Firefox is patched to do the same. Chromium and applications built on Electron, like Signal,
+  Slack and Claude Desktop, are ended by a user service, so that they shut down their helper processes themselves.
+- Firefox, Chromium, Text Editor and the terminal return their windows to their workspaces, monitors, positions and
+  sizes, without switching the workspace, and extensions place the windows of Signal and Slack.
+- Text Editor and the terminal save their unsaved documents and the screens of their tabs a few seconds after every
+  change, and return them also after a crash.
 
-Signal and Slack start at login on their own workspace and in their own place on the screen. On Wayland a window
-cannot tell GNOME where it should be, and Electron does not use the session management protocol through which GNOME
-could remember that for it, so GNOME places their windows anew at every start. The Auto Move Windows extension moves
-them to their workspace, and the Smart Auto Move extension then restores their monitor, position and size, recorded
-in its settings (`gnome-extensions/smart-auto-move.dconf`). Positions are kept per monitor, by the name of its
-connector, and are recorded for the laptop's own screen, where the windows also open while an external monitor is
-connected.
+#### Applications start inside their own scope
 
-### Firefox windows return to their workspaces
+GNOME Shell, gnome-session and gnome-settings-daemon ask systemd to put each application they launch into a scope of its
+own, `app-gnome-<application>-<pid>.scope`. They asked only once GLib had started the application, and systemd moves
+only the process it is given, so the processes the application started in the meantime stayed in the cgroup of the
+service which launched it, and were stopped with that service, before the application. Signal's zygotes and GPU process
+stayed in gnome-session's cgroup, and Thunderbird's crash helper in GNOME Shell's. GLib is patched to ask systemd for
+the scope itself, and gio-launch-desktop, through which GLib starts every application, waits until it is in the scope
+before it executes the application, so that every process of the application starts there. GNOME Shell, gnome-session
+and gnome-settings-daemon are patched to leave the scope to GLib (`patches/glib2.0/`, `patches/gnome-shell/`,
+`patches/gnome-session/`, `patches/gnome-settings-daemon/`). Other processes which launch applications through GLib,
+such as xdg-desktop-portal for links opened in other applications, put them into a scope of their own too. An
+application starts about 25 ms later for it. GNOME Shell's commands, run with Alt+F2, and gnome-settings-daemon's
+fallback Orca are launched the same way.
 
-Firefox restores its windows to the workspace, monitor, position and size they had when it quit. It names its
-windows to GNOME through the Wayland session management protocol, and GNOME remembers their places under those
-names. Four things stand in the way on Ubuntu 26.04, each patched until the fix ships:
+Firefox runs an executable chosen as the handler of a link or a file type, for example with "Use other..." in its
+Applications settings, without GLib, so the handler stays in Firefox's cgroup and ends together with Firefox when
+systemd-oomd kills Firefox's scope or systemd stops it. Firefox is patched to launch such a handler through GLib,
+which starts it in a scope of its own and, on Wayland, passes it an activation token
+(`patches/firefox/local-handler-through-gio.patch`).
 
-- Mutter 50 offers the protocol only under its draft name, behind a debug switch (`patches/mutter/`, a backport
-  from mutter 51).
-- GTK 3 lacks the signal Firefox needs to name a window before it is shown (`patches/gtk+3.0/`, a backport from
-  GTK's 3.24 branch).
-- Firefox turns the protocol off on GNOME, because of a bug of its own which makes it crash when a session is
-  restored from the History menu, and a second one which leaves windows hidden on the first start
-  (`patches/firefox/`).
-- Firefox treats a saved name which begins with eight decimal digits, as about one in 43 do, as a workspace number
-  saved on X11 and gives that window a new name, so it opens on the current workspace
-  (`patches/firefox/wayland-session-restore-uuid-ids.patch`).
+GLib's developers are preparing GLib to create these scopes itself, in
+[merge request 5350](https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5350) and a follow-up announced there, and the
+patches can be dropped once a GLib which does is in Ubuntu.
 
-Firefox therefore comes from the Mozilla Team PPA, which publishes the source to rebuild it with, unlike Mozilla's
-own repository (requested in [Mozilla bug 2087959](https://bugzilla.mozilla.org/show_bug.cgi?id=2087959)). Its build
-is also brought closer to Mozilla's in two ways. The libraries Mozilla runs in a WebAssembly sandbox, for fonts,
-spell checking, XML and audio, are sandboxed here too, where the PPA's build leaves them out. Also, like Mozilla's
-package, it installs no AppArmor profile of its own, so that Firefox runs under the one Ubuntu's apparmor package has
-for it (see the next section). The PPA's package installs in its place an enforcing profile written for Ubuntu 14.10,
-under which Firefox crashes at startup
-([Launchpad bug 2172775](https://bugs.launchpad.net/ubuntu/+source/firefox/+bug/2172775)).
+#### Applications finish quitting before the session ends
 
-The backport offers the protocol to every application, while mutter does not implement its request to store a
-window's place under a new name, so an application which sent that request would end GNOME Shell and the session
-with it. Mutter is therefore also patched to implement the request
-(`patches/mutter/xdg-toplevel-session-rename.patch`), reported as
-[mutter issue 5177](https://gitlab.gnome.org/GNOME/mutter/-/work_items/5177).
+Before a session ends, GNOME tells applications through the Inhibit portal that it ends, and GTK 4 applications and
+Chromium quit then. The portal answered GNOME at once, though, so the session ended about 30 ms later, and systemd
+stopped the applications and GNOME Shell while they were still quitting. The portal is patched to let the session end
+only once every application which monitors the session through it has quit, or after 8 seconds
+(`patches/xdg-desktop-portal-gtk/`).
 
-Starting Firefox behaves like a launch while it runs: its windows return to their places, and the page the launch
-opens appears in a new window on the current workspace, which has the focus. That is the start page for a launch from
-the dock, and the link for a link opened from another application, like a terminal, when the profile opens external
-links in new windows (`browser.link.open_newwindow.override.external` set to 2 in `about:config`). Firefox itself
-restores the first window of the previous session into the window it opens for the launch, so a link would become a
-tab of that window, on its workspace, and the restored window shown first would receive the activation token of the
-launch, which made mutter mark it as demanding attention in the session tests
-(`patches/firefox/session-restore-launch-window.patch` and `wayland-launch-activation-token.patch`). A restart by
-Firefox itself, such as after an update, restores the windows as they were, without a new one.
-
-### Firefox's sandbox has its user namespaces
-
-Firefox isolates its content processes in user namespaces of their own. Ubuntu allows unprivileged user namespaces
-only to programs with an AppArmor profile which grants them, and the apparmor package has one for Firefox. Ubuntu's
-7.0 kernel never applies it: the parser compiles the profile's pattern for Firefox's path into a matcher with a
-differentially encoded state, which the kernel's matcher for attaching profiles mishandles, so Firefox runs
-unconfined, is denied the namespaces, and its content processes are isolated by seccomp alone. This happens with
-Mozilla's own package too. `configure-gnome-desktop.sh` adds `Optimize=no-diff-encode` to
-`/etc/apparmor/parser.conf`, so the parser does not use that encoding, and compiles the profile again. The kernel bug
-is [Ubuntu bug 2172229](https://bugs.launchpad.net/bugs/2172229), fixed in mainline by commit
-[e667fc72f7f4](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e667fc72f7f4a54674962c324048ca2cc58bc703).
-Once the running kernel has it, the line in `parser.conf` and its call in the script can go.
-
-### Chromium windows return to their workspaces
-
-When Chromium restores its last session, its windows return to the workspace, monitor, position and size they had.
-Chromium names its windows to GNOME through the same session management protocol as Firefox, but speaks only the
-protocol's draft, which mutter 51 and the backport no longer have, so mutter is also patched to offer the draft next
-to the final protocol (`patches/mutter/xx-session-management.patch`). Chromium uses it only with its
-WaylandSessionManagement feature, which `configure-gnome-desktop.sh` enables for every user (`chromium.d/`), the
-same as `chrome://flags/#wayland-session-management`.
-
-### Text Editor windows return to their workspaces
-
-When Text Editor restores its documents at start, their windows return to the workspace, monitor, position and size
-they had. GTK 4 can name an application's windows to GNOME through the draft of the same protocol, but GTK 4.22 hides
-the API an application turns that on with, and binds the protocol only behind a debug switch. GTK is patched to bring
-both back (`patches/gtk4/`), and Text Editor to use them (`patches/gnome-text-editor/`). The only other installed
-application turning the API on is the terminal (see the next section). Mutter is also patched to remember the places of the windows an application still has
-open when it quits (`patches/mutter/save-toplevels-on-session-destroy.patch`), which GTK applications do without
-closing their windows first, proposed upstream as
-[mutter merge request 5453](https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/5453). GTK keeps the names in its
-own state file and reads it whenever Text Editor starts. It does not register Text Editor with gnome-session, which
-would otherwise start Text Editor again at the next login and then skip that login's autostart applications. Upstream
-GTK hid the API again for 4.24, because the asynchronous API meant to replace it was not ready.
-
-When Text Editor starts, from the dock or for a file opened from the terminal or the file manager, it behaves as it
-does while it runs: the restored windows return to their places without being activated, and the launch opens a new
-window on the current workspace, which has the focus, with an empty document or the files. A file opened while Text
-Editor runs opens in a new window as well, unless it is open already, when its window is shown
-(`patches/gnome-text-editor/launch-opens-new-window.patch`).
-
-### Text Editor keeps unsaved documents also after a crash
-
-Text Editor saves its unsaved documents a few seconds after every change, so that a crash or a reset of the machine
-loses only the last seconds of typing. Text Editor 50 stops doing so when its session changes before it enables
-saving, which the restored windows above do at every start, as does an auto-save delay other than the default, and it
-then saves only when it quits. It is patched to save in that case and after the delay changes, and to run its saves one
-at a time, so that a save of a large document cannot replace newer saved state with older (`patches/gnome-text-editor/`).
-It is also patched to save when the cursor moves, a window is resized or maximized, a tab is selected or moved, or the
-language or encoding of a document changes, so that a crash restores all of them as they were a few seconds before.
-
-### Text Editor does not hold the logout for unsaved documents
-
-Text Editor keeps unsaved documents and returns them at its next start, also after logging out, but it still asked
-GNOME to hold the logout while a window had one, so GNOME Shell's logout dialog listed it as having unsaved work.
-When the session ends, GTK quits Text Editor without the save it runs when it quits otherwise, so without that dialog
-the next start would miss the text typed in the few seconds before logging out. Text Editor is patched to hold no
-logout while it restores its session, and to save its session when GTK quits it
-(`patches/gnome-text-editor/restored-documents-hold-no-logout.patch`). With restore-session off, it still holds the
-logout for unsaved documents.
-
-### Text Editor reads standard input without errors
-
-Text Editor opens the text it reads from standard input (`gnome-text-editor -`) as an unsaved document, which
-GtkSourceView loads from a stream. GtkSourceView 5.18 logs two GLib criticals for every load from a stream, from a
-profiler mark naming the file loaded, which Ubuntu's build with Sysprof support evaluates also when no profiler runs.
-GtkSourceView is patched with the upstream fix from 5.21.0 and a test for it (`patches/gtksourceview5/`), and the
-patches can be dropped once Ubuntu ships that version.
-
-### Terminal windows return after a crash
-
-When the terminal starts after a crash, a reset of the machine or a logout with terminal windows open, its windows
-return to their workspaces and places, each tab in the directory it had, with the last screen it showed dimmed above
-the prompt of a new shell, as Terminal on macOS does. Ptyxis saves its tabs only when its last window is closed, so
-it would bring back the tabs of the last time that happened
-([Ptyxis issue 603](https://gitlab.gnome.org/chergert/ptyxis/-/work_items/603)). It is patched to save its session a
-few seconds after every change, including the screens, which are kept in a file readable only by you, and to name its
-windows to GNOME through GTK's API, as Text Editor does (`patches/ptyxis/`). Closing the last window keeps its tabs
-for the next start, but not their screens.
-
-When the terminal starts, from the dock or with a directory from the file manager, it behaves as it does while it
-runs: the restored windows return to their places without being activated, and a new window opens on the current
-workspace, which has the focus (`patches/ptyxis/launch-opens-new-window.patch`).
-
-### Windows return to their places also after a crash
-
-Mutter stores the places of the windows named through the session management protocol, of Firefox, Chromium, Text
-Editor and the terminal, whenever a window moves, changes its size or state, or moves to another workspace, and writes
-them to disk a few seconds later. Unpatched, mutter stores a window's place only when the window closes, so after a
-crash or a reset of the machine windows would return to where they were when they last closed, or open unplaced
-(`patches/mutter/save-toplevels-on-change.patch`, reported as
-[mutter issue 5181](https://gitlab.gnome.org/GNOME/mutter/-/work_items/5181) and proposed upstream as
-[mutter merge request 5455](https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/5455)).
-
-### Switching workspaces stays on the chosen workspace
-
-Ubuntu's Desktop Icons extension moved to the workspace of a window which demands attention whenever the workspace
-changed: it activates the first window of mutter's list for the new workspace, and that list starts with the windows
-of other workspaces which demand attention. It is patched with Ubuntu's own fix, which Ubuntu has not released for
-26.04 yet (`patches/gnome-shell-ubuntu-extensions/`,
-[Launchpad bug 2169475](https://bugs.launchpad.net/ubuntu/+source/gnome-shell-ubuntu-extensions/+bug/2169475)).
-
-Firefox also asked mutter to activate every window it restores at startup, without an event of the user behind the
-request, so mutter marked these windows as demanding attention: GNOME Shell showed a notification for each, and listed
-them first when switching windows. Firefox is patched to ask for no activation of a restored window while it restores
-its session (`patches/firefox/wayland-session-restore-no-activation.patch`). Chromium still asks to activate the windows
-it restores, so mutter marks them as demanding attention
-([Chromium issue 582928432](https://issues.chromium.org/issues/582928432)).
-
-### Chromium quits with Ctrl+Q
-
-Chromium binds no key to Exit on Linux. A small extension binds Ctrl+Q, which the thumb key sends where macOS has
-Command+Q (`chromium-extensions/quit-shortcut/`), and starts a native messaging host
-(`chromium-native-messaging-hosts/`), a script which ends Chromium with SIGTERM (`chromium-quit.sh`). Chromium handles
-that like the end of the desktop session and keeps its whole session, so all its windows return at the next start.
-`configure-gnome-desktop.sh` installs all three, and the shortcut can be changed in `chrome://extensions/shortcuts`.
-
-### Magnet links open in a running Transmission
-
-Opening a magnet link or a torrent file while Transmission already runs starts a second Transmission, which passes
-the link over the session bus to the one already running and exits. Ubuntu confines Transmission with an AppArmor
-profile which allows it to own its name on the session bus, but not these calls between two of its instances, so
-without rules added to the profile (`apparmor.d/local/transmission-gtk`) the link is lost and nothing happens. The
-missing rules are reported in [Ubuntu bug 2169433](https://bugs.launchpad.net/ubuntu/+source/transmission/+bug/2169433).
-
-### The document portal's filesystem is mounted and unmounted
-
-The document portal, through which sandboxed applications open the files they are given, mounts a FUSE filesystem
-at `/run/user/<uid>/doc` with the setuid helper fusermount3, and keeps a fusermount3 running to unmount it when the
-portal exits. Ubuntu confines fusermount3 with an AppArmor profile which does not allow libfuse 3.17 and later to
-check that the filesystem is still mounted before unmounting it, so the filesystem stayed mounted after the
-portal exited, together with helpers which the user's service manager cannot end. The profile also denies two
-capabilities, without which the helper can hang at the start of a session without mounting the filesystem at all.
-Rules added to the profile allow both (`apparmor.d/local/fusermount3`). They are reported in
-[Ubuntu bug 2165030](https://bugs.launchpad.net/ubuntu/+source/apparmor/+bug/2165030) and in
-[AppArmor issue 652](https://gitlab.com/apparmor/apparmor/-/issues/652).
-
-### File indexing does not crash on vanished downloads
-
-GNOME's file indexer, localsearch, extracts metadata from new files in the background. Its extractor crashed on a
-temporary file of a download which was deleted before the extractor could read it: the file was handled as an
-extraction without metadata, recording it failed, and preparing the error report freed memory it did not own.
-Ubuntu's localsearch and tinysparql are patched to handle such a file as a failed extraction and to report the
-error without crashing (`patches/localsearch/`, `patches/tinysparql/`). The fixes are proposed upstream in
-[localsearch merge request 707](https://gitlab.gnome.org/GNOME/localsearch/-/merge_requests/707) and
-[tinysparql merge request 819](https://gitlab.gnome.org/GNOME/tinysparql/-/merge_requests/819), and the patches can be
-dropped once Ubuntu ships versions which include them.
-
-### Chromium and Electron applications do not crash at logout and shutdown
+Firefox did not monitor the session through the portal, and was killed by the SIGTERM systemd sends at the end of a
+session: Firefox 122 added a handler which quits cleanly on SIGTERM, but installs it too early for it to work
+([Mozilla bug 2086801](https://bugzilla.mozilla.org/show_bug.cgi?id=2086801)). Every logout and shutdown therefore
+counted as a crash, after which Firefox restores its windows as they were, without the new window for the launch, and
+loses the changes since it last saved its session. Firefox is patched to install the handler, and to monitor the
+session through the portal and quit cleanly when it ends (`patches/firefox/sigterm-handler-after-app-shell.patch` and
+`quit-at-session-end.patch`).
 
 Signal, Slack, Claude Desktop and other applications built on Electron crashed at every logout and shutdown with
 "GPU process isn't usable. Goodbye.", and Chromium itself does the same. Chromium moves its browser process into a
@@ -529,23 +498,7 @@ which GNOME announces it, and exits before anything is stopped
 applications in use are based on Chromium 159 or later, test whether the drop-ins and the services can go: stopping
 all processes of an application at once, as stopping its single scope does, still crashed Signal once.
 
-### Applications finish quitting before the session ends
-
-Before a session ends, GNOME tells applications through the Inhibit portal that it ends, and GTK 4 applications and
-Chromium quit then. The portal answered GNOME at once, though, so the session ended about 30 ms later, and systemd
-stopped the applications and GNOME Shell while they were still quitting. The portal is patched to let the session end
-only once every application which monitors the session through it has quit, or after 8 seconds
-(`patches/xdg-desktop-portal-gtk/`).
-
-Firefox did not monitor the session through the portal, and was killed by the SIGTERM systemd sends at the end of a
-session: Firefox 122 added a handler which quits cleanly on SIGTERM, but installs it too early for it to work
-([Mozilla bug 2086801](https://bugzilla.mozilla.org/show_bug.cgi?id=2086801)). Every logout and shutdown therefore
-counted as a crash, after which Firefox restores its windows as they were, without the new window for the launch, and
-loses the changes since it last saved its session. Firefox is patched to install the handler, and to monitor the
-session through the portal and quit cleanly when it ends (`patches/firefox/sigterm-handler-after-app-shell.patch` and
-`quit-at-session-end.patch`).
-
-### Applications which withdraw an inhibition leave none behind
+#### Applications which withdraw an inhibition leave none behind
 
 Applications ask GNOME through the Inhibit portal to hold a logout or a suspend, and withdraw the inhibition once it is
 no longer needed. The portal answered the application at once and asked GNOME for the inhibition only afterwards, so a
@@ -557,24 +510,132 @@ Nautilus, whose inhibitions while it moves files then keep the computer from sus
 to answer the application only once GNOME's side has the inhibition (`patches/xdg-desktop-portal/`, [xdg-desktop-portal
 issue 854](https://github.com/flatpak/xdg-desktop-portal/issues/854)).
 
-### Applications start inside their own scope
+#### Windows return to their places
 
-GNOME Shell, gnome-session and gnome-settings-daemon ask systemd to put each application they launch into a scope of its
-own, `app-gnome-<application>-<pid>.scope`. They asked only once GLib had started the application, and systemd moves
-only the process it is given, so the processes the application started in the meantime stayed in the cgroup of the
-service which launched it, and were stopped with that service, before the application. Signal's zygotes and GPU process
-stayed in gnome-session's cgroup, and Thunderbird's crash helper in GNOME Shell's. GLib is patched to ask systemd for
-the scope itself, and gio-launch-desktop, through which GLib starts every application, waits until it is in the scope
-before it executes the application, so that every process of the application starts there. GNOME Shell, gnome-session
-and gnome-settings-daemon are patched to leave the scope to GLib (`patches/glib2.0/`, `patches/gnome-shell/`,
-`patches/gnome-session/`, `patches/gnome-settings-daemon/`). Other processes which launch applications through GLib,
-such as xdg-desktop-portal for links opened in other applications, put them into a scope of their own too. An
-application starts about 25 ms later for it. GNOME Shell's commands, run with Alt+F2, and gnome-settings-daemon's
-fallback Orca are launched the same way.
+Firefox, Chromium, Text Editor and the terminal name their windows to GNOME through the Wayland session management
+protocol, and GNOME remembers the workspace, monitor, position and size of each window under its name, so that the
+windows return there when the application restores them. Mutter 50 offers the protocol only under its draft name,
+behind a debug switch, and is patched with a backport from mutter 51 (`patches/mutter/`).
 
-GLib's developers are preparing GLib to create these scopes itself, in
-[merge request 5350](https://gitlab.gnome.org/GNOME/glib/-/merge_requests/5350) and a follow-up announced there, and the
-patches can be dropped once a GLib which does is in Ubuntu.
+The backport offers the protocol to every application, while mutter does not implement its request to store a
+window's place under a new name, so an application which sent that request would end GNOME Shell and the session
+with it. Mutter is therefore also patched to implement the request
+(`patches/mutter/xdg-toplevel-session-rename.patch`), reported as
+[mutter issue 5177](https://gitlab.gnome.org/GNOME/mutter/-/work_items/5177).
+
+Mutter stores the places of the windows named through the session management protocol whenever a window moves,
+changes its size or state, or moves to another workspace, and writes them to disk a few seconds later. Unpatched,
+mutter stores a window's place only when the window closes, so after a crash or a reset of the machine windows would
+return to where they were when they last closed, or open unplaced (`patches/mutter/save-toplevels-on-change.patch`,
+reported as [mutter issue 5181](https://gitlab.gnome.org/GNOME/mutter/-/work_items/5181) and proposed upstream as
+[mutter merge request 5455](https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/5455)).
+
+Firefox restores its windows to the workspace, monitor, position and size they had when it quit. Besides mutter,
+three things stand in the way on Ubuntu 26.04, each patched until the fix ships:
+
+- GTK 3 lacks the signal Firefox needs to name a window before it is shown (`patches/gtk+3.0/`, a backport from
+  GTK's 3.24 branch).
+- Firefox turns the protocol off on GNOME, because of a bug of its own which makes it crash when a session is
+  restored from the History menu, and a second one which leaves windows hidden on the first start
+  (`patches/firefox/`).
+- Firefox treats a saved name which begins with eight decimal digits, as about one in 43 do, as a workspace number
+  saved on X11 and gives that window a new name, so it opens on the current workspace
+  (`patches/firefox/wayland-session-restore-uuid-ids.patch`).
+
+When Chromium restores its last session, its windows return to the workspace, monitor, position and size they had.
+Chromium speaks only the protocol's draft, which mutter 51 and the backport no longer have, so mutter is also patched
+to offer the draft next to the final protocol (`patches/mutter/xx-session-management.patch`). Chromium uses it only
+with its WaylandSessionManagement feature, which `configure-gnome-desktop.sh` enables for every user (`chromium.d/`),
+the same as `chrome://flags/#wayland-session-management`.
+
+When Text Editor or the terminal restores its windows at start, they return to the workspace, monitor, position and
+size they had. GTK 4 can name an application's windows to GNOME through the draft of the same protocol, but GTK 4.22
+hides the API an application turns that on with, and binds the protocol only behind a debug switch. GTK is patched to
+bring both back (`patches/gtk4/`), and Text Editor and the terminal to use them (`patches/gnome-text-editor/`,
+`patches/ptyxis/`). Mutter is also patched to remember the places of the windows an application still has open when
+it quits (`patches/mutter/save-toplevels-on-session-destroy.patch`), which GTK applications do without closing their
+windows first, proposed upstream as
+[mutter merge request 5453](https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/5453). GTK keeps the names in its
+own state file and reads it whenever the application starts. It does not register the application with gnome-session,
+which would otherwise start the application again at the next login and then skip that login's autostart
+applications. Upstream GTK hid the API again for 4.24, because the asynchronous API meant to replace it was not ready.
+
+Signal and Slack start at login on their own workspace and in their own place on the screen. On Wayland a window
+cannot tell GNOME where it should be, and Electron does not use the session management protocol through which GNOME
+could remember that for it, so GNOME places their windows anew at every start. The Auto Move Windows extension moves
+them to their workspace, and the Smart Auto Move extension then restores their monitor, position and size, recorded
+in its settings (`gnome-extensions/smart-auto-move.dconf`). Positions are kept per monitor, by the name of its
+connector, and are recorded for the laptop's own screen, where the windows also open while an external monitor is
+connected.
+
+#### Switching workspaces stays on the chosen workspace
+
+Ubuntu's Desktop Icons extension moved to the workspace of a window which demands attention whenever the workspace
+changed: it activates the first window of mutter's list for the new workspace, and that list starts with the windows
+of other workspaces which demand attention. It is patched with Ubuntu's own fix, which Ubuntu has not released for
+26.04 yet (`patches/gnome-shell-ubuntu-extensions/`,
+[Launchpad bug 2169475](https://bugs.launchpad.net/ubuntu/+source/gnome-shell-ubuntu-extensions/+bug/2169475)).
+
+Firefox also asked mutter to activate every window it restores at startup, without an event of the user behind the
+request, so mutter marked these windows as demanding attention: GNOME Shell showed a notification for each, and listed
+them first when switching windows. Firefox is patched to ask for no activation of a restored window while it restores
+its session (`patches/firefox/wayland-session-restore-no-activation.patch`). The restored window which Firefox shows
+first also received the activation token of the launch, which made mutter mark it as demanding attention in the
+session tests, and Firefox is patched to give the token to the window it opens for the launch
+(`patches/firefox/wayland-launch-activation-token.patch`). Chromium still asks to activate the windows it restores, so
+mutter marks them as demanding attention ([Chromium issue 582928432](https://issues.chromium.org/issues/582928432)).
+
+#### Documents and terminal tabs return also after a crash
+
+Text Editor saves its unsaved documents a few seconds after every change, so that a crash or a reset of the machine
+loses only the last seconds of typing. Text Editor 50 stops doing so when its session changes before it enables
+saving, which the restored windows do at every start, as does an auto-save delay other than the default, and it then
+saves only when it quits. It is patched to save in that case and after the delay changes, and to run its saves one at a
+time, so that a save of a large document cannot replace newer saved state with older (`patches/gnome-text-editor/`).
+It is also patched to save when the cursor moves, a window is resized or maximized, a tab is selected or moved, or the
+language or encoding of a document changes, so that a crash restores all of them as they were a few seconds before.
+
+When the terminal starts after a crash, a reset of the machine or a logout with terminal windows open, its windows
+return to their workspaces and places, each tab in the directory it had, with the last screen it showed dimmed above
+the prompt of a new shell, as Terminal on macOS does. Ptyxis saves its tabs only when its last window is closed, so
+it would bring back the tabs of the last time that happened
+([Ptyxis issue 603](https://gitlab.gnome.org/chergert/ptyxis/-/work_items/603)). It is patched to save its session a
+few seconds after every change, including the screens, which are kept in a file readable only by you
+(`patches/ptyxis/`). Closing the last window keeps its tabs for the next start, but not their screens.
+
+### Firefox runs with its whole sandbox
+
+Firefox's build from the Mozilla Team PPA is brought closer to Mozilla's in two ways. The libraries Mozilla runs in a
+WebAssembly sandbox, for fonts, spell checking, XML and audio, are sandboxed here too, where the PPA's build leaves
+them out. Also, like Mozilla's package, it installs no AppArmor profile of its own, so that Firefox runs under the one
+Ubuntu's apparmor package has for it. The PPA's package installs in its place an enforcing profile written for Ubuntu
+14.10, under which Firefox crashes at startup
+([Launchpad bug 2172775](https://bugs.launchpad.net/ubuntu/+source/firefox/+bug/2172775)).
+
+Firefox isolates its content processes in user namespaces of their own. Ubuntu allows unprivileged user namespaces
+only to programs with an AppArmor profile which grants them, and the apparmor package has one for Firefox. Ubuntu's
+7.0 kernel never applies it: the parser compiles the profile's pattern for Firefox's path into a matcher with a
+differentially encoded state, which the kernel's matcher for attaching profiles mishandles, so Firefox runs
+unconfined, is denied the namespaces, and its content processes are isolated by seccomp alone. This happens with
+Mozilla's own package too. `configure-gnome-desktop.sh` adds `Optimize=no-diff-encode` to
+`/etc/apparmor/parser.conf`, so the parser does not use that encoding, and compiles the profile again. The kernel bug
+is [Ubuntu bug 2172229](https://bugs.launchpad.net/bugs/2172229), fixed in mainline by commit
+[e667fc72f7f4](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e667fc72f7f4a54674962c324048ca2cc58bc703).
+Once the running kernel has it, the line in `parser.conf` and its call in the script can go.
+
+### Windows keep their size when the screen locks
+
+GNOME Shell disables most extensions while the screen is locked, the dock among them, and enables them again after
+unlocking. The dock reserves its part of the screen only while it is enabled, so windows snapped to a side or
+maximized would grow while the screen is locked and shrink back a moment after unlocking. A terminal resizes its
+contents with the window, which garbles the screen of programs like Claude Code running in it. The Reserve Space
+extension stays enabled on the lock screen and keeps an invisible copy of every part of the screen reserved by the
+dock, the top bar or another panel, so the space left for windows does not change. The copies follow the reserved
+space a few seconds after it changes, for example when the dock is moved to another side of the screen. The extension
+does so only from the next login after it is enabled. At login, GNOME Shell enables the extensions which stay enabled
+on the lock screen before the others, so the extension comes before the dock. One enabled later comes after the dock,
+and when the screen locks, GNOME Shell disables it together with the dock and enables it again without the dock, so it
+then finds no reserved space to copy.
 
 ### Claude Desktop and Slack show their tray icon after every login
 
@@ -598,6 +659,64 @@ started up, they also cannot change its startup animation any more
 ([GNOME Shell issue 8917](https://gitlab.gnome.org/GNOME/gnome-shell/-/issues/8917)). Claude Desktop is asked to wait
 for the name itself in [claude-code issue 106844](https://github.com/anthropics/claude-code/issues/106844), and its
 entry can go once it does.
+
+### Terminal fixes
+
+Ptyxis, Ubuntu's terminal, is patched for a few bugs (`patches/ptyxis/`):
+
+- The visual bell shows even with animations disabled.
+- The dialog shown before logging out or shutting down lists the terminal while a program runs in it
+  ([Ptyxis issue 573](https://gitlab.gnome.org/chergert/ptyxis/-/work_items/573)).
+- A new tab or window opens in the directory of the current tab also after a terminal reset, which keeps the
+  directory the shell reported (`patches/vte2.91/`), and when the shell reports none, in the directory of the
+  program running in the tab.
+
+### Text Editor reads standard input without errors
+
+Text Editor opens the text it reads from standard input (`gnome-text-editor -`) as an unsaved document, which
+GtkSourceView loads from a stream. GtkSourceView 5.18 logs two GLib criticals for every load from a stream, from a
+profiler mark naming the file loaded, which Ubuntu's build with Sysprof support evaluates also when no profiler runs.
+GtkSourceView is patched with the upstream fix from 5.21.0 and a test for it (`patches/gtksourceview5/`), and the
+patches can be dropped once Ubuntu ships that version.
+
+### Magnet links open in a running Transmission
+
+Opening a magnet link or a torrent file while Transmission already runs starts a second Transmission, which passes
+the link over the session bus to the one already running and exits. Ubuntu confines Transmission with an AppArmor
+profile which allows it to own its name on the session bus, but not these calls between two of its instances, so
+without rules added to the profile (`apparmor.d/local/transmission-gtk`) the link is lost and nothing happens. The
+missing rules are reported in [Ubuntu bug 2169433](https://bugs.launchpad.net/ubuntu/+source/transmission/+bug/2169433).
+
+### The document portal's filesystem is mounted and unmounted
+
+The document portal, through which sandboxed applications open the files they are given, mounts a FUSE filesystem
+at `/run/user/<uid>/doc` with the setuid helper fusermount3, and keeps a fusermount3 running to unmount it when the
+portal exits. Ubuntu confines fusermount3 with an AppArmor profile which does not allow libfuse 3.17 and later to
+check that the filesystem is still mounted before unmounting it, so the filesystem stayed mounted after the
+portal exited, together with helpers which the user's service manager cannot end. The profile also denies two
+capabilities, without which the helper can hang at the start of a session without mounting the filesystem at all.
+Rules added to the profile allow both (`apparmor.d/local/fusermount3`). They are reported in
+[Ubuntu bug 2165030](https://bugs.launchpad.net/ubuntu/+source/apparmor/+bug/2165030) and in
+[AppArmor issue 652](https://gitlab.com/apparmor/apparmor/-/issues/652).
+
+### File indexing does not crash on vanished downloads
+
+GNOME's file indexer, localsearch, extracts metadata from new files in the background. Its extractor crashed on a
+temporary file of a download which was deleted before the extractor could read it: the file was handled as an
+extraction without metadata, recording it failed, and preparing the error report freed memory it did not own.
+Ubuntu's localsearch and tinysparql are patched to handle such a file as a failed extraction and to report the
+error without crashing (`patches/localsearch/`, `patches/tinysparql/`). The fixes are proposed upstream in
+[localsearch merge request 707](https://gitlab.gnome.org/GNOME/localsearch/-/merge_requests/707) and
+[tinysparql merge request 819](https://gitlab.gnome.org/GNOME/tinysparql/-/merge_requests/819), and the patches can be
+dropped once Ubuntu ships versions which include them.
+
+### Only the working internal microphone is offered
+
+The audio coprocessor of the APU exposes a digital microphone which has no microphones wired to it on this laptop,
+and which the sound server otherwise offers as a second internal microphone beside the working one. Its card is kept
+unregistered (`modprobe.d/snd-acp-legacy-mach.conf`). Without that card the Realtek codec is no longer configured
+through ALSA UCM, so Sound settings offer one configuration whose ports follow the jacks in place of four
+combinations of speakers, headphones and microphones which differ in which of them they leave out.
 
 ### snapd's desktop helper starts with the desktop
 
@@ -661,11 +780,6 @@ each encrypted device below `/`, keeps the previous file as `/etc/crypttab.bak`,
 keeps a copy of crypttab. The problem is reported as
 [Launchpad bug 2152224](https://bugs.launchpad.net/ubuntu/+source/systemd/+bug/2152224). Fedora fixed it in its
 installer with [anaconda pull request 6785](https://github.com/rhinstaller/anaconda/pull/6785).
-
-### GNOME extensions
-
-Extensions are installed from extensions.gnome.org and configured by `configure-gnome-desktop.sh`, with their
-settings in `gnome-extensions/`. Custom extensions are installed from the repository.
 
 ## Requirements
 
