@@ -14,3 +14,18 @@ test-file-loader-stream.patch
     Adds /file-loader/stream to testsuite/test-file-loader.c, which loads a memory stream and checks the text. The
     test suite runs during the build, and g_test_init makes criticals fatal there, so the test fails without the patch
     above in a build with Sysprof support. Upstream has no such test. Drop it together with the patch above.
+
+xvfb-noreset.patch (debian-series)
+    Keeps the test suite from failing at random with "Failed to open display". debian/rules runs the tests with
+    xvfb-run, which starts Xvfb without -noreset, so Xvfb resets whenever its last client disconnects, and drops a
+    client which is still setting up its connection then. The suite runs two tests at a time, each connecting to the
+    display, and a test which starts as the last other one exits fails at once. This failed 2 of 30 builds in GitLab
+    CI, both in test-file-saver. Running the test target as the build does, on 2 CPUs, 1 of 200 runs failed, and in
+    Xvfb's log (-audit 4) the failing test never connected, right after every other client had disconnected. Of 160
+    runs in 4 loops side by side on one CPU each, 8 failed this way with Xvfb's default and none of 160 with
+    -noreset.
+
+    The patch passes -noreset, with xvfb-run's default screen, as many Debian packages do for Debian bug 981201
+    (https://bugs.debian.org/981201), which asks for -noreset to be xvfb-run's default. Debian's packaging, which
+    Ubuntu syncs, still runs the tests without it in 5.22.0-2. Drop the patch once Ubuntu's gtksourceview5 or
+    xvfb-run passes -noreset.

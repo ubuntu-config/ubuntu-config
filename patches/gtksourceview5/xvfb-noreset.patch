@@ -1,0 +1,23 @@
+Description: Run the tests with an Xvfb which does not reset when its last client disconnects.
+ xvfb-run starts Xvfb without -noreset, so Xvfb resets whenever its last client disconnects, and then drops a client
+ which is still setting up its connection. The test suite runs two tests at a time, each of which connects to the
+ display, and a test which starts as the last other one exits fails at once with "Failed to open display". This
+ failed 2 of 30 builds of the package in GitLab CI. Of 160 runs of the test target, in 4 loops side by side on one
+ CPU each, 8 failed this way with Xvfb's default, and none of 160 with -noreset.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-08
+--- a/debian/rules
++++ b/debian/rules
+@@ -21,8 +21,10 @@
+ 		-Dinstall-tests=true \
+ 		$(SYSPROF)
+ 
++# Xvfb resets whenever its last client disconnects, and drops a client which is still connecting then, so a test
++# which starts as the last other one exits fails with "Failed to open display". -noreset keeps the server as it is.
+ override_dh_auto_test:
+-	GTK_A11Y=none xvfb-run -a dh_auto_test -- --timeout-multiplier 3
++	GTK_A11Y=none xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" dh_auto_test -- --timeout-multiplier 3
+ 
+ # debhelper >= 13.4 makes all of /usr/libexec executable, which is not
+ # quite right for installed-tests
