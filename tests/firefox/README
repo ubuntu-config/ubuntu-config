@@ -87,3 +87,36 @@ Wasm sandboxed libraries: test_wasm.py
 
     The test shows that the libraries work, not that they run sandboxed. The check in patches/firefox/README, which lists the
     rlbox_wasm2c_ symbols in libxul.so and liblgpllibs.so, shows that they are built sandboxed.
+
+Handlers chosen as executables: test_local_handler.py
+    Runs Firefox headless and launches a shell script as a handler three ways: with a URI as the application of a
+    URI scheme ("uri"), with a file as the application chosen for a MIME type ("chosen"), and with a file as the
+    default application a mailcap file names ("mailcap"). The URI and the file names contain characters which
+    shells, URIs and desktop entries treat specially. Each launch has to pass the URI or the path unchanged and has
+    to run the script through gio-launch-desktop, as local-handler-through-gio.patch does.
+
+      python3 -I test_local_handler.py /usr/lib/firefox/firefox /tmp/local-handler-test
+
+    With --scope, each launch also has to run the script in a systemd scope of its own, app-gnome-handler-PID.scope,
+    which needs the GLib of patches/glib2.0/ and Firefox running in a unit of the systemd user instance, as from a
+    terminal on this desktop. GLib names the scope after the Exec key up to its first space, so the output directory
+    has to be a path which needs no quoting. Instead of installing the GLib, extract it and point Firefox to it:
+
+      mkdir /tmp/glib-root
+      dpkg-deb -x /usr/local/lib/debs/libglib2.0-0t64_*.deb /tmp/glib-root
+      LD_LIBRARY_PATH=/tmp/glib-root/usr/lib/x86_64-linux-gnu \
+        GIO_LAUNCH_DESKTOP=/tmp/glib-root/usr/lib/x86_64-linux-gnu/glib-2.0/gio-launch-desktop \
+        python3 -I test_local_handler.py /usr/lib/firefox/firefox /tmp/local-handler-test --scope
+
+    Each launch is reported with the cgroup it ran in:
+
+      script: launched
+      uri      argument passed unchanged, through gio-launch-desktop: True, cgroup .../app-gnome-handler-PID.scope
+      chosen   argument passed unchanged, through gio-launch-desktop: True, cgroup .../app-gnome-handler-PID.scope
+      mailcap  argument passed unchanged, through gio-launch-desktop: True, cgroup .../app-gnome-handler-PID.scope
+      exit status 0
+    RESULT: OK
+
+    The script exits with 0 then, and with 1 when a launch is missing, changed its argument or did not run through
+    gio-launch-desktop, with --scope when it ran outside a scope of its own, or when Firefox did not exit with
+    status 0. Without the patch each launch runs directly, in the cgroup of Firefox.

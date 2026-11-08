@@ -140,6 +140,28 @@ wayland-session-restore-no-activation.patch
     windows are restored from the session. The session test in tests/session/ checks that no restored window demands
     attention. Proposed as D340740 on phabricator.services.mozilla.com, for Mozilla bug 2090734, on top of D340739.
 
+local-handler-through-gio.patch
+    Launches an executable chosen as a handler through GIO, as Firefox launches applications from desktop entries,
+    so that patches/glib2.0/scope-before-exec.patch starts it in a systemd scope of its own. Firefox runs such an
+    executable with nsIProcess, which leaves it in Firefox's own cgroup, so it ends together with Firefox when
+    systemd-oomd kills Firefox's scope or systemd stops it. Such executables come from "Use other..." in the
+    Applications settings, the "Choose" button of the dialog asking which application opens a link, handlers which
+    handlers.json stores as a path, enterprise policies, and the default application a mailcap file names for a
+    MIME type. The download dialog's "Other..." button lists applications from desktop entries, which Firefox
+    already launches through GIO.
+
+    nsIGIOService::CreateAppFromExecutable(), which the patch adds, describes the executable as a desktop entry,
+    nsLocalHandlerApp::LaunchWithURI() launches it with a URI and the new nsMIMEInfoBase::LaunchAppWithFile() with
+    a file, and both fall back to nsIProcess when GLib refuses the executable: a file which is not executable, so
+    that nsIProcess reports the error, and a path with %, as GLib checks the Exec key before it turns %% back into
+    %. The handler receives the URI or the path of the file unchanged, and on Wayland also an activation token, as
+    applications from desktop entries do. Without the GLib patch, the handler still runs in Firefox's cgroup.
+
+    tests/firefox/test_local_handler.py launches a handler each of these ways and checks that it runs through
+    gio-launch-desktop with its argument unchanged, and with --scope, on this desktop with the GLib patch installed,
+    that it runs in a scope of its own. The version for Mozilla also has an xpcshell test for the arguments,
+    uriloader/exthandler/tests/unit/test_launch_local_handler.js. Not yet proposed to Mozilla.
+
 wasm-sandboxed-libraries.patch (debian-series)
     Builds graphite, ogg, hunspell, expat, woff2 and soundtouch as wasm sandboxed libraries, as Mozilla's own
     builds do, where the packaging disables them. Ubuntu 26.04's wasm32 toolchain has two bugs which block that,

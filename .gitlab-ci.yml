@@ -369,6 +369,27 @@ test_firefox_wasm:
   script:
     - su tester -c "python3 -I tests/firefox/test_wasm.py /usr/lib/firefox/firefox out/firefox-wasm"
 
+# Firefox runs headless, without mutter. No systemd runs in the container, so GLib creates no scope and the test
+# checks only that Firefox launches the handler through GIO.
+test_firefox_local_handler:
+  extends: .test
+
+  needs:
+    - job: build_large
+      parallel:
+        matrix:
+          - PACKAGE: firefox
+
+  before_script:
+    - apt-get update -q
+    - apt-get install -y -q --no-install-recommends ca-certificates python3 ./build/firefox/firefox_*.deb
+    - useradd --create-home --shell /bin/bash tester
+    - mkdir out
+    - chown tester:tester out
+
+  script:
+    - su tester -c "python3 -I tests/firefox/test_local_handler.py /usr/lib/firefox/firefox out/firefox-local-handler"
+
 # Firefox runs with the GTK 3 from the build, extracted into /tmp/gtk-root, and with XDG_CURRENT_DESKTOP as on this
 # desktop, ubuntu:GNOME, for which an unpatched Firefox disables session restore.
 test_firefox_session:

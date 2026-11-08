@@ -1,0 +1,270 @@
+Description: Launch an executable chosen as a handler through GIO, so that it can run in a scope of its own.
+ Firefox launches applications from desktop entries through GIO, but runs an executable chosen as the handler of a
+ MIME type or URI scheme, or named by a mailcap file, with nsIProcess. Such a handler runs in Firefox's own cgroup,
+ so it ends together with Firefox when systemd-oomd kills Firefox's scope or systemd stops it, and GLib cannot start
+ it in a systemd scope of its own. It also receives no activation token on Wayland, and inherits MOZ_APP_LAUNCHER,
+ which GIO launches unset (Mozilla bug 1494436).
+ .
+ nsIGIOService::CreateAppFromExecutable() describes the executable as a desktop entry whose Exec key passes the URI
+ unchanged (%u with X-GIO-NoFuse) or the path of the local file (%f). nsLocalHandlerApp::LaunchWithURI() launches it
+ with a URI and the new nsMIMEInfoBase::LaunchAppWithFile() with a file, through nsGIOMimeApp::LaunchWithURI(),
+ which requests the activation token on Wayland. Both fall back to nsIProcess when GLib refuses the executable: when
+ it is no executable file, so that nsIProcess reports the error, and when its path contains %, as GLib checks the
+ Exec key before it turns %% back into %.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-08
+---
+diff --git a/toolkit/system/gnome/nsGIOService.cpp b/toolkit/system/gnome/nsGIOService.cpp
+index 5a684f0554e7..ac2441643bb0 100644
+--- a/toolkit/system/gnome/nsGIOService.cpp
++++ b/toolkit/system/gnome/nsGIOService.cpp
+@@ -17,6 +17,7 @@
+ #include "mozilla/WidgetUtilsGtk.h"
+ #include "mozilla/ScopeExit.h"
+ #include "mozilla/StaticPrefs_widget.h"
++#include "mozilla/TextUtils.h"
+ #include "mozilla/net/DNS.h"
+ #include "prenv.h"
+ 
+@@ -1308,3 +1309,82 @@ nsGIOService::CreateAppFromCommand(nsACString const& cmd,
+   mozApp.forget(appInfo);
+   return NS_OK;
+ }
++
++/**
++ * Create application info which runs an executable with one argument, the URI
++ * the application is launched with, or the path of the local file it names.
++ * @param aExecutable executable to run
++ * @param aAppName application name
++ * @param aPassURI true to pass the URI unchanged, false to pass the path
++ * @param aAppInfo location where created GAppInfo is stored
++ * @return NS_OK when object is created, NS_ERROR_FILE_NOT_FOUND when
++ * aExecutable is not an executable file or its path contains %, which GLib
++ * does not accept, or NS_ERROR_FAILURE otherwise.
++ */
++NS_IMETHODIMP
++nsGIOService::CreateAppFromExecutable(nsIFile* aExecutable,
++                                      nsACString const& aAppName, bool aPassURI,
++                                      nsIGIOMimeApp** aAppInfo) {
++  NS_ENSURE_ARG(aExecutable);
++  *aAppInfo = nullptr;
++
++  nsAutoCString path;
++  nsresult rv = aExecutable->GetNativePath(path);
++  NS_ENSURE_SUCCESS(rv, rv);
++
++  LOG("nsGIOService::CreateAppFromExecutable() %s : %s",
++      PromiseFlatCString(aAppName).get(), path.get());
++
++  // GLib treats the Exec key up to its first space, quotes included, as the
++  // executable of the application, so the path is quoted only when needed.
++  bool needsQuoting = path.IsEmpty();
++  for (char c : path.View()) {
++    if (!IsAsciiAlphanumeric(c) && !strchr("/._-+=:,@", c)) {
++      needsQuoting = true;
++      break;
++    }
++  }
++  nsAutoCString exec;
++  if (needsQuoting) {
++    GUniquePtr<gchar> quoted(g_shell_quote(path.get()));
++    exec.Assign(quoted.get());
++  } else {
++    exec.Assign(path);
++  }
++  // In the Exec key, % starts a field code. GLib checks that the Exec key names
++  // an executable file before it expands field codes, so it refuses a path
++  // with %.
++  exec.ReplaceSubstring("%"_ns, "%%"_ns);
++  // %u passes the URI as it is, as X-GIO-NoFuse below keeps GLib from passing
++  // the path of a file URI instead, and %f passes the path of the local file.
++  exec.Append(aPassURI ? " %u" : " %f");
++
++  RefPtr<GKeyFile> keyFile = dont_AddRef(g_key_file_new());
++  g_key_file_set_string(keyFile, G_KEY_FILE_DESKTOP_GROUP,
++                        G_KEY_FILE_DESKTOP_KEY_TYPE,
++                        G_KEY_FILE_DESKTOP_TYPE_APPLICATION);
++  g_key_file_set_string(keyFile, G_KEY_FILE_DESKTOP_GROUP,
++                        G_KEY_FILE_DESKTOP_KEY_NAME,
++                        PromiseFlatCString(aAppName).get());
++  g_key_file_set_string(keyFile, G_KEY_FILE_DESKTOP_GROUP,
++                        G_KEY_FILE_DESKTOP_KEY_EXEC, exec.get());
++  g_key_file_set_boolean(keyFile, G_KEY_FILE_DESKTOP_GROUP,
++                         G_KEY_FILE_DESKTOP_KEY_NO_DISPLAY, TRUE);
++  // The activation token, which nsGIOMimeApp::LaunchWithURI() requests on
++  // Wayland, is passed only to an application with startup notification.
++  g_key_file_set_boolean(keyFile, G_KEY_FILE_DESKTOP_GROUP,
++                         G_KEY_FILE_DESKTOP_KEY_STARTUP_NOTIFY, TRUE);
++  g_key_file_set_boolean(keyFile, G_KEY_FILE_DESKTOP_GROUP, "X-GIO-NoFuse",
++                         TRUE);
++
++  // GLib refuses an Exec key which does not name an executable file.
++  RefPtr<GAppInfo> app_info =
++      dont_AddRef(G_APP_INFO(g_desktop_app_info_new_from_keyfile(keyFile)));
++  if (!app_info) {
++    LOG("  quit, not an executable file");
++    return NS_ERROR_FILE_NOT_FOUND;
++  }
++  RefPtr<nsGIOMimeApp> mozApp = new nsGIOMimeApp(app_info.forget());
++  mozApp.forget(aAppInfo);
++  return NS_OK;
++}
+diff --git a/uriloader/exthandler/nsLocalHandlerApp.cpp b/uriloader/exthandler/nsLocalHandlerApp.cpp
+index 5d0ab093e081..90ca1280f208 100644
+--- a/uriloader/exthandler/nsLocalHandlerApp.cpp
++++ b/uriloader/exthandler/nsLocalHandlerApp.cpp
+@@ -8,6 +8,10 @@
+ #include "nsComponentManagerUtils.h"
+ #include "mozilla/dom/Promise.h"
+ #include "nsProxyRelease.h"
++#ifdef MOZ_WIDGET_GTK
++#  include "nsIGIOService.h"
++#  include "nsServiceManagerUtils.h"
++#endif
+ 
+ // XXX why does nsMIMEInfoImpl have a threadsafe nsISupports?  do we need one
+ // here too?
+@@ -188,6 +192,23 @@ nsLocalHandlerApp::Equals(nsIHandlerApp* aHandlerApp, bool* _retval) {
+ NS_IMETHODIMP
+ nsLocalHandlerApp::LaunchWithURI(
+     nsIURI* aURI, mozilla::dom::BrowsingContext* aBrowsingContext) {
++#ifdef MOZ_WIDGET_GTK
++  // Launch through GIO, as handler applications from desktop entries are, so
++  // that the handler receives an activation token on Wayland. When GIO cannot
++  // run the executable, nsIProcess reports the error.
++  nsCOMPtr<nsIGIOService> gio = do_GetService(NS_GIOSERVICE_CONTRACTID);
++  if (gio && mExecutable) {
++    nsAutoString name;
++    GetName(name);
++    nsCOMPtr<nsIGIOMimeApp> app;
++    if (NS_SUCCEEDED(gio->CreateAppFromExecutable(mExecutable,
++                                                  NS_ConvertUTF16toUTF8(name),
++                                                  true, getter_AddRefs(app)))) {
++      return app->LaunchWithURI(aURI, aBrowsingContext);
++    }
++  }
++#endif
++
+   // pass the entire URI to the handler.
+   nsAutoCString spec;
+   aURI->GetAsciiSpec(spec);
+diff --git a/uriloader/exthandler/nsMIMEInfoImpl.cpp b/uriloader/exthandler/nsMIMEInfoImpl.cpp
+index e7de7823f455..825f81d86677 100644
+--- a/uriloader/exthandler/nsMIMEInfoImpl.cpp
++++ b/uriloader/exthandler/nsMIMEInfoImpl.cpp
+@@ -21,6 +21,10 @@
+ #include "mozilla/StaticPrefs_browser.h"
+ #include "xpcpublic.h"
+ #include "nsIGIOService.h"
++#ifdef MOZ_WIDGET_GTK
++#  include "nsNetUtil.h"
++#  include "nsServiceManagerUtils.h"
++#endif
+ 
+ static bool sInitializedOurData = false;
+ mozilla::StaticRefPtr<nsIFile> sOurAppFile;
+@@ -341,7 +345,7 @@ nsMIMEInfoBase::LaunchWithFile(nsIFile* aFile) {
+     rv = localHandler->GetExecutable(getter_AddRefs(executable));
+     NS_ENSURE_SUCCESS(rv, rv);
+ 
+-    return LaunchWithIProcess(executable, aFile->NativePath());
++    return LaunchAppWithFile(executable, aFile);
+   }
+ 
+   return NS_ERROR_INVALID_ARG;
+@@ -477,6 +481,27 @@ nsresult nsMIMEInfoBase::LaunchWithIProcess(nsIFile* aApp, const int aArgc,
+   return process->Runw(false, aArgv, aArgc);
+ }
+ 
++/* static */
++nsresult nsMIMEInfoBase::LaunchAppWithFile(nsIFile* aApp, nsIFile* aFile) {
++#ifdef MOZ_WIDGET_GTK
++  // GIO passes the path of the file which the file URI names. When GIO cannot
++  // run the executable, nsIProcess reports the error.
++  nsCOMPtr<nsIGIOService> gio = do_GetService(NS_GIOSERVICE_CONTRACTID);
++  nsCOMPtr<nsIURI> uri;
++  if (gio && NS_SUCCEEDED(NS_NewFileURI(getter_AddRefs(uri), aFile))) {
++    nsAutoString name;
++    aApp->GetLeafName(name);
++    nsCOMPtr<nsIGIOMimeApp> app;
++    if (NS_SUCCEEDED(gio->CreateAppFromExecutable(
++            aApp, NS_ConvertUTF16toUTF8(name), false, getter_AddRefs(app)))) {
++      return app->LaunchWithURI(uri, nullptr);
++    }
++  }
++#endif
++
++  return LaunchWithIProcess(aApp, aFile->NativePath());
++}
++
+ // nsMIMEInfoImpl implementation
+ NS_IMETHODIMP
+ nsMIMEInfoImpl::GetDefaultDescription(nsAString& aDefaultDescription) {
+@@ -538,7 +563,7 @@ nsresult nsMIMEInfoImpl::LaunchDefaultWithFile(nsIFile* aFile) {
+     return NS_ERROR_FILE_NOT_FOUND;
+   }
+ 
+-  return LaunchWithIProcess(defaultApp, aFile->NativePath());
++  return LaunchAppWithFile(defaultApp, aFile);
+ }
+ 
+ NS_IMETHODIMP
+diff --git a/uriloader/exthandler/nsMIMEInfoImpl.h b/uriloader/exthandler/nsMIMEInfoImpl.h
+index b67f18ab58ec..ccace1d00b7a 100644
+--- a/uriloader/exthandler/nsMIMEInfoImpl.h
++++ b/uriloader/exthandler/nsMIMEInfoImpl.h
+@@ -135,6 +135,16 @@ class nsMIMEInfoBase : public nsIMIMEInfo {
+   static nsresult LaunchWithIProcess(nsIFile* aApp, const int aArgc,
+                                      const char16_t** aArgv);
+ 
++  /**
++   * Launch an application with the path of a file as its only argument.
++   * With GTK, the application is launched through GIO, as applications from
++   * desktop entries are, and otherwise with LaunchWithIProcess.
++   *
++   * @param aApp The application to launch (may not be null)
++   * @param aFile The file whose path to pass on the command line
++   */
++  static nsresult LaunchAppWithFile(nsIFile* aApp, nsIFile* aFile);
++
+   /**
+    * Given a file: nsIURI, return the associated nsIFile
+    *
+diff --git a/widget/gtk/GRefPtr.h b/widget/gtk/GRefPtr.h
+index a7a3d0bd0fc8..f054a0cc7a0d 100644
+--- a/widget/gtk/GRefPtr.h
++++ b/widget/gtk/GRefPtr.h
+@@ -78,6 +78,12 @@ struct RefPtrTraits<GDBusNodeInfo> {
+   }
+ };
+ 
++template <>
++struct RefPtrTraits<GKeyFile> {
++  static void AddRef(GKeyFile* aObject) { g_key_file_ref(aObject); }
++  static void Release(GKeyFile* aObject) { g_key_file_unref(aObject); }
++};
++
+ }  // namespace mozilla
+ 
+ #endif
+diff --git a/xpcom/system/nsIGIOService.idl b/xpcom/system/nsIGIOService.idl
+index 1cbf2a3a9fc7..192ec2dd65b6 100644
+--- a/xpcom/system/nsIGIOService.idl
++++ b/xpcom/system/nsIGIOService.idl
+@@ -82,6 +82,15 @@ interface nsIGIOService : nsISupports
+   /* Find the application info by given command */
+   nsIGIOMimeApp      findAppFromCommand(in AUTF8String cmd);
+ 
++  /* Create application info which runs the given executable with one
++     argument: the URI the application is launched with, unchanged, when
++     passURI is true, or else the path of the local file which the URI names.
++     Throws NS_ERROR_FILE_NOT_FOUND when the executable is not an executable
++     file, and when its path contains %, which GLib does not accept. */
++  nsIGIOMimeApp      createAppFromExecutable(in nsIFile executable,
++                                             in AUTF8String appName,
++                                             in boolean passURI);
++
+   /* Obtain a description for the given MIME type */
+   AUTF8String        getDescriptionForMimeType(in AUTF8String mimeType);
+ 
