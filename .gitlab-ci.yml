@@ -1,5 +1,5 @@
 # Builds the patched packages, which runs their test suites with the tests the patches add to them, and then runs the
-# tests in patches/*/tests against those builds, each test in a job of its own.
+# tests in tests/<source-package>/ against those builds, each test in a job of its own.
 
 stages:
   - build
@@ -159,7 +159,7 @@ test_mutter_rename:
           - PACKAGE: mutter
 
   script:
-    - su tester -c "patches/mutter/tests/run-rename-check.sh /tmp/mutter-root out/rename-check"
+    - su tester -c "tests/mutter/run-rename-check.sh /tmp/mutter-root out/rename-check"
 
 # The test starts a systemd user instance of its own, for which it creates cgroups, which needs the writable cgroup
 # hierarchy a privileged container has, as on GitLab's hosted runners. It needs nothing from mutter, so it does not
@@ -181,7 +181,7 @@ test_glib_scope:
     - useradd --create-home tester
     - mkdir /tmp/glib-root
     - dpkg-deb -x build/glib2.0/libglib2.0-0t64_*.deb /tmp/glib-root
-    - patches/glib2.0/tests/run-scope-test.sh /tmp/glib-root out/glib-scope tester
+    - tests/glib2.0/run-scope-test.sh /tmp/glib-root out/glib-scope tester
 
   artifacts:
     when: always
@@ -266,7 +266,7 @@ test_mutter_chromium:
     TEST_PACKAGES: chromium chromium-driver chromium-sandbox
 
   script:
-    - su tester -c "patches/mutter/tests/run-chromium-session.sh /tmp/mutter-root out/chromium-session"
+    - su tester -c "tests/mutter/run-chromium-session.sh /tmp/mutter-root out/chromium-session"
 
 test_text_editor_session:
   extends: .test
@@ -296,7 +296,7 @@ test_text_editor_session:
   script:
     - mkdir /tmp/text-editor-root
     - for p in gnome-text-editor libgtk-4-1; do dpkg-deb -x build/*/${p}_*.deb /tmp/text-editor-root; done
-    - su tester -c "patches/gnome-text-editor/tests/run-text-editor-session.sh /tmp/mutter-root /tmp/text-editor-root out/text-editor-session-$SCENARIO $SCENARIO"
+    - su tester -c "tests/gnome-text-editor/run-text-editor-session.sh /tmp/mutter-root /tmp/text-editor-root out/text-editor-session-$SCENARIO $SCENARIO"
 
 test_text_editor_autosave:
   extends: .test
@@ -319,7 +319,7 @@ test_text_editor_autosave:
   script:
     - mkdir /tmp/text-editor-root
     - for p in gnome-text-editor libgtk-4-1; do dpkg-deb -x build/*/${p}_*.deb /tmp/text-editor-root; done
-    - su tester -c "patches/gnome-text-editor/tests/run-text-editor-autosave.sh /tmp/mutter-root /tmp/text-editor-root out/text-editor-autosave"
+    - su tester -c "tests/gnome-text-editor/run-text-editor-autosave.sh /tmp/mutter-root /tmp/text-editor-root out/text-editor-autosave"
 
 # Ptyxis runs with the installed GTK and ptyxis-agent, so both are installed from the build over Ubuntu's.
 test_ptyxis_session:
@@ -347,7 +347,7 @@ test_ptyxis_session:
     - mv /usr/bin/systemd-run /usr/bin/systemd-run.disabled
     - mkdir /tmp/ptyxis-root
     - dpkg-deb -x build/ptyxis/ptyxis_*.deb /tmp/ptyxis-root
-    - su tester -c "patches/ptyxis/tests/run-ptyxis-session.sh /tmp/mutter-root /tmp/ptyxis-root out/ptyxis-session"
+    - su tester -c "tests/ptyxis/run-ptyxis-session.sh /tmp/mutter-root /tmp/ptyxis-root out/ptyxis-session"
 
 # Firefox runs headless, without mutter.
 test_firefox_wasm:
@@ -367,7 +367,7 @@ test_firefox_wasm:
     - chown tester:tester out
 
   script:
-    - su tester -c "python3 -I patches/firefox/tests/test_wasm.py /usr/lib/firefox/firefox out/firefox-wasm"
+    - su tester -c "python3 -I tests/firefox/test_wasm.py /usr/lib/firefox/firefox out/firefox-wasm"
 
 # Firefox runs with the GTK 3 from the build, extracted into /tmp/gtk-root, and with XDG_CURRENT_DESKTOP as on this
 # desktop, ubuntu:GNOME, for which an unpatched Firefox disables session restore.
@@ -398,4 +398,4 @@ test_firefox_session:
   script:
     - mkdir /tmp/gtk-root
     - dpkg-deb -x build/gtk+3.0/libgtk-3-0t64_*.deb /tmp/gtk-root
-    - su tester -c "patches/firefox/tests/run-session.sh /tmp/mutter-root /tmp/gtk-root /usr/lib/firefox/firefox ubuntu:GNOME out/firefox-session-$SCENARIO $SCENARIO"
+    - su tester -c "tests/firefox/run-session.sh /tmp/mutter-root /tmp/gtk-root /usr/lib/firefox/firefox ubuntu:GNOME out/firefox-session-$SCENARIO $SCENARIO"

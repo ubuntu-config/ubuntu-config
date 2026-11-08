@@ -28,8 +28,9 @@ restore-window-placement.patch
     patches/mutter/save-toplevels-on-session-destroy.patch. Without it, only the first window Text Editor opened
     returns to its place.
 
-    The patch adds no test to Text Editor's test suite, which has no tests of the session. It is tested together
-    with patches/gtk4/ and patches/mutter/ by tests/run-text-editor-session.sh, see tests/README.
+    The patch adds no test to Text Editor's test suite, which has no tests of the session. It is tested together with
+    patches/gtk4/ and patches/mutter/ by tests/gnome-text-editor/run-text-editor-session.sh, see
+    tests/gnome-text-editor/README.
 
     Drop the patch once Text Editor uses a save/restore API which a GTK in Ubuntu has. After a version bump of
     Text Editor, check that editor_session_restore_v1 in src/editor-session.c still creates the windows it restores
@@ -69,9 +70,10 @@ schedule-auto-save-after-early-changes.patch, reschedule-auto-save-on-delay-chan
     without running them, since Text Editor quits then.
 
     The patches add no test to Text Editor's test suite, which has no tests of the session. They are tested by
-    tests/run-text-editor-autosave.sh, see tests/README, whose scenario windows-restored-by-gtk covers the start with
-    restore-window-placement.patch. Drop each patch once Text Editor has the change. After a version bump, check
-    that _editor_session_mark_dirty in src/editor-session.c is still the only place an auto-save is scheduled.
+    tests/gnome-text-editor/run-text-editor-autosave.sh, see tests/gnome-text-editor/README, whose scenario
+    windows-restored-by-gtk covers the start with restore-window-placement.patch. Drop each patch once Text Editor has
+    the change. After a version bump, check that _editor_session_mark_dirty in src/editor-session.c is still the only
+    place an auto-save is scheduled.
 
 auto-save-on-state-changes.patch
     Text Editor's session state has more than the drafts and which windows and pages there are: the selection of
@@ -90,10 +92,10 @@ auto-save-on-state-changes.patch
     change of focus schedules no auto-save.
 
     The patch is local only and not proposed upstream. It is tested by the scenarios cursor-moved, tab-selected,
-    tab-moved, window-maximized and window-resized of tests/run-text-editor-autosave.sh. The language and the encoding
-    are set in dialogs, which the test does not drive. After a version bump, check that editor_session_add_page and
-    editor_session_add_window in src/editor-session.c still exist and that the session state has no new parts which
-    are changed without marking the session dirty.
+    tab-moved, window-maximized and window-resized of tests/gnome-text-editor/run-text-editor-autosave.sh. The language
+    and the encoding are set in dialogs, which the test does not drive. After a version bump, check that
+    editor_session_add_page and editor_session_add_window in src/editor-session.c still exist and that the session
+    state has no new parts which are changed without marking the session dirty.
 
 launch-opens-new-window.patch
     Makes a start of Text Editor behave like a launch while it runs: the restored windows return to their places
@@ -113,9 +115,10 @@ launch-opens-new-window.patch
     and at most a second. A window with only an unmodified draft is saved without pages and not restored, so a
     launch adds no window to the next start, but GTK saves its window state, which the next start discards.
 
-    The patch is local only and not proposed upstream. It is tested by tests/run-text-editor-session.sh, whose
-    second run is launched with an activation token. After a version bump, check that editor_session_restore_v1
-    still shows its windows in one place and that editor_application_restore_cb still runs after every restore.
+    The patch is local only and not proposed upstream. It is tested by
+    tests/gnome-text-editor/run-text-editor-session.sh, whose second run is launched with an activation token. After a
+    version bump, check that editor_session_restore_v1 still shows its windows in one place and that
+    editor_application_restore_cb still runs after every restore.
 
 Check by hand after an upgrade, in a new login, so that the patched mutter runs, and with no Text Editor of the
 previous version still running in the background:

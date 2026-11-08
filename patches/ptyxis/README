@@ -112,11 +112,11 @@ Some bindings skip the schema entirely and are registered in code with
 gtk_widget_class_add_binding_action, which is the case for Ctrl+G. Those are invisible to
 gsettings, to the preferences window, and to the conflict check in configure-ptyxis.sh.
 
-Ptyxis ships no test suite, so there is nothing to add tests to. The session patches are
-tested together with patches/gtk4/ and patches/mutter/ by tests/run-ptyxis-session.sh, see
-tests/README. For the others a build failure is the only automated check, and for changes like
-these it is a weak one: every patch here could apply, compile, and still behave wrongly. Check by
-hand after a rebuild.
+Ptyxis ships no test suite, so there is nothing to add tests to. The session patches are tested
+together with patches/gtk4/ and patches/mutter/ by tests/ptyxis/run-ptyxis-session.sh, see
+tests/ptyxis/README. For the others a build failure is the only automated check, and for changes
+like these it is a weak one: every patch here could apply, compile, and still behave wrongly. Check
+by hand after a rebuild.
 
   Ctrl+F then Ctrl+G           should move down the scrollback, towards newer output
   select text, Ctrl+Shift+C    should copy as HTML, and the context menu should show that accel

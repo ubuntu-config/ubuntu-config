@@ -50,7 +50,7 @@ spawn-commands-in-scope.patch
     request into shell_global_app_launched_cb, which handles the request now when GLib did not
     create a scope. Drop the patch together with patches/glib2.0/scope-before-exec.patch.
 
-    The patch adds no test to GNOME Shell's, which do not run commands, but patches/glib2.0/tests/
+    The patch adds no test to GNOME Shell's, which do not run commands, but tests/glib2.0/
     launches a command line the way shell_util_spawn_command_async() does, in its scenario
     command-line.
 

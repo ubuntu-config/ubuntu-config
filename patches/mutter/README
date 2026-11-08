@@ -87,7 +87,7 @@ xx-session-management.patch
 
     The session management tests in wayland-unit-tests.c run during the build against the final
     protocol, which the patch leaves as it is. The draft is tested with Chromium itself by
-    tests/run-chromium-session.sh, see tests/README.
+    tests/mutter/run-chromium-session.sh, see tests/mutter/README.
 
     Mutter 51 drops the draft, so when Ubuntu ships it, this patch has to be ported to mutter 51's
     own code. Drop it once Chromium speaks xdg_session_manager_v1.
@@ -100,9 +100,9 @@ xdg-toplevel-session-rename.patch
     already known to the session raises name_in_use, as add_toplevel does, and otherwise the state
     stored under the old name moves to the new one.
 
-    Neither Firefox nor Chromium sends rename. tests/run-rename-check.sh checks it with a minimal
-    client, see tests/README. The crash is reported as mutter issue 5177. Drop the patch once mutter
-    implements rename.
+    Neither Firefox nor Chromium sends rename. tests/mutter/run-rename-check.sh checks it with a
+    minimal client, see tests/mutter/README. The crash is reported as mutter issue 5177. Drop the
+    patch once mutter implements rename.
 
 save-toplevels-on-session-destroy.patch
     Mutter saves where a window of a session was only when the window is unmanaged, and only while
@@ -139,7 +139,7 @@ save-toplevels-on-change.patch
     The test restore-changed of src/tests/wayland-unit-tests.c has a second client restore the
     session while the first one still has its moved window mapped, and fails without the change,
     with the window placed anew. The tests run during the build. With Ptyxis it is also tested by
-    patches/ptyxis/tests/run-ptyxis-session.sh, which ends mutter with SIGKILL and starts it
+    tests/ptyxis/run-ptyxis-session.sh, which ends mutter with SIGKILL and starts it
     again, and whose second run restores no window without this patch. Reported upstream as
     mutter issue 5181 and proposed as mutter merge request 5455. Drop the patch once mutter stores
     a toplevel's state when it changes.

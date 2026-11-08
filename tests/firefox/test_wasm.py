@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 
-# No __pycache__ is left in the repository, from where it would also be installed with the patches.
+# No __pycache__ is left in the repository.
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import driver  # noqa: E402

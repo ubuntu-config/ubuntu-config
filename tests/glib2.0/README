@@ -53,7 +53,7 @@ Scope before exec: run-scope-test.sh, scope_test.py, fake_systemd.py and fake_jo
         registry.gitlab.com/tozd/docker/base:ubuntu-resolute bash -c '
           apt-get update -q && apt-get install -y -q --no-install-recommends dbus dbus-user-session python3 \
             python3-gi gir1.2-glib-2.0 systemd util-linux && useradd --create-home tester &&
-          /repo/patches/glib2.0/tests/run-scope-test.sh /glib-root /tmp/scope-test tester'
+          /repo/tests/glib2.0/run-scope-test.sh /glib-root /tmp/scope-test tester'
 
     Each check prints a line starting with PASS or FAIL, and the script exits with 0 only when all passed. Without the
     patch, every scenario but no-systemd, no-systemd-exit and outside fails: no scope is named, and every process

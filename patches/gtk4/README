@@ -53,7 +53,7 @@ application forgets a window it never showed, which Text Editor does with a rest
 for.
 
 None of the patches adds a test to GTK's test suite, which runs during the build and shows that they break nothing
-existing. patches/gnome-text-editor/tests/run-text-editor-session.sh tests with Text Editor that windows are named
+existing. tests/gnome-text-editor/run-text-editor-session.sh tests with Text Editor that windows are named
 and restored, see the README there.
 
 Drop the patches once Ubuntu ships a GTK whose GtkApplication has a public save/restore API again, which will not

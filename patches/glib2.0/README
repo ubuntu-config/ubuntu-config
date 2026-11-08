@@ -74,8 +74,8 @@ scope-before-exec.patch
 
     The patch adds two tests to gio/tests/desktop-app-info.c, launch-desktop/scope-refused and
     launch-desktop/scope-pending, for the wait of gio-launch-desktop. The build runs outside of a
-    systemd user instance, so the scope itself is checked by tests/run-scope-test.sh, in a
-    container with a user instance of its own, see tests/README.
+    systemd user instance, so the scope itself is checked by tests/glib2.0/run-scope-test.sh, in a
+    container with a user instance of its own, see tests/glib2.0/README.
 
     Check by hand after a rebuild and a new login:
 

@@ -26,7 +26,7 @@ change, building it with sbuild as an unprivileged user in a throwaway chroot, a
 APT repository. That repository is pinned above the Ubuntu archive, so unattended-upgrades or the next ordinary
 `apt upgrade` installs the patched build. A daily cron job keeps patched packages current, running root-owned
 copies of the script and patches, installed with `install-rebuild-patched-packages.sh`. GitLab CI builds the patched
-packages too and runs the tests in `patches/*/tests` against them (`.gitlab-ci.yml`).
+packages too and runs the tests in `tests/<source-package>/` against them (`.gitlab-ci.yml`).
 
 Tests which require a whole desktop, such as windows returning to their workspaces after logging out and in, or the
 logout dialog, run in a GNOME session in a container (`tests/session/`): the real gnome-session and GNOME Shell,

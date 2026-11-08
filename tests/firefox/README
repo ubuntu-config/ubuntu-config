@@ -85,5 +85,5 @@ Wasm sandboxed libraries: test_wasm.py
     The script exits with 0 then, and with 1 when a library reported an error or Firefox did not keep running or
     did not exit with status 0.
 
-    The test shows that the libraries work, not that they run sandboxed. The check in ../README, which lists the
+    The test shows that the libraries work, not that they run sandboxed. The check in patches/firefox/README, which lists the
     rlbox_wasm2c_ symbols in libxul.so and liblgpllibs.so, shows that they are built sandboxed.
