@@ -154,13 +154,15 @@ local-handler-through-gio.patch
     nsLocalHandlerApp::LaunchWithURI() launches it with a URI and the new nsMIMEInfoBase::LaunchAppWithFile() with
     a file, and both fall back to nsIProcess when GLib refuses the executable: a file which is not executable, so
     that nsIProcess reports the error, and a path with %, as GLib checks the Exec key before it turns %% back into
-    %. The handler receives the URI or the path of the file unchanged, and on Wayland also an activation token, as
-    applications from desktop entries do. Without the GLib patch, the handler still runs in Firefox's cgroup.
+    % (reported as GLib issue 4111). The handler receives the URI or the path of the file unchanged, and on Wayland
+    also an activation token, as applications from desktop entries do. Without the GLib patch, the handler still
+    runs in Firefox's cgroup.
 
     tests/firefox/test_local_handler.py launches a handler each of these ways and checks that it runs through
     gio-launch-desktop with its argument unchanged, and with --scope, on this desktop with the GLib patch installed,
     that it runs in a scope of its own. The version for Mozilla also has an xpcshell test for the arguments,
-    uriloader/exthandler/tests/unit/test_launch_local_handler.js. Not yet proposed to Mozilla.
+    uriloader/exthandler/tests/unit/test_launch_local_handler.js. Proposed as D340772 on
+    phabricator.services.mozilla.com, for Mozilla bug 2090791.
 
 wasm-sandboxed-libraries.patch (debian-series)
     Builds graphite, ogg, hunspell, expat, woff2 and soundtouch as wasm sandboxed libraries, as Mozilla's own

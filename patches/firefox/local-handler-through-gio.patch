@@ -10,13 +10,14 @@ Description: Launch an executable chosen as a handler through GIO, so that it ca
  with a URI and the new nsMIMEInfoBase::LaunchAppWithFile() with a file, through nsGIOMimeApp::LaunchWithURI(),
  which requests the activation token on Wayland. Both fall back to nsIProcess when GLib refuses the executable: when
  it is no executable file, so that nsIProcess reports the error, and when its path contains %, as GLib checks the
- Exec key before it turns %% back into %.
+ Exec key before it turns %% back into % (https://gitlab.gnome.org/GNOME/glib/-/work_items/4111).
+Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090791
 Author: Mitar
-Forwarded: no
+Forwarded: https://phabricator.services.mozilla.com/D340772
 Last-Update: 2026-11-08
 ---
 diff --git a/toolkit/system/gnome/nsGIOService.cpp b/toolkit/system/gnome/nsGIOService.cpp
-index 5a684f0554e7..ac2441643bb0 100644
+index 5a684f0554e7..c09cff1da8ef 100644
 --- a/toolkit/system/gnome/nsGIOService.cpp
 +++ b/toolkit/system/gnome/nsGIOService.cpp
 @@ -17,6 +17,7 @@
@@ -75,7 +76,7 @@ index 5a684f0554e7..ac2441643bb0 100644
 +  }
 +  // In the Exec key, % starts a field code. GLib checks that the Exec key names
 +  // an executable file before it expands field codes, so it refuses a path
-+  // with %.
++  // with % (https://gitlab.gnome.org/GNOME/glib/-/work_items/4111).
 +  exec.ReplaceSubstring("%"_ns, "%%"_ns);
 +  // %u passes the URI as it is, as X-GIO-NoFuse below keeps GLib from passing
 +  // the path of a file URI instead, and %f passes the path of the local file.
