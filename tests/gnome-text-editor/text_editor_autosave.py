@@ -49,6 +49,7 @@ XK_SHIFT_L = 0xffe1
 XK_CONTROL_L = 0xffe3
 XK_ALT_L = 0xffe9
 XK_2 = 0x0032
+XK_W = 0x0077
 
 # The size of the text slow-draft-save reads from standard input. Text Editor writes a draft at a few megabytes a
 # second, and at more than ten on a fast machine, so writing this one lasts several seconds. Text Editor then uses
@@ -504,6 +505,134 @@ def run_restored_windows_scenario(text_editor, out):
     check(proc.returncode == 0, "%s: run 2: Text Editor exited with status %s" % (name, proc.returncode))
 
 
+def window_count():
+    """The number of windows of Text Editor, which GtkApplication exports on the session bus each under a path of its
+    own below /org/gnome/TextEditor/window.
+    """
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    try:
+        reply = bus.call_sync(APP_ID, "/org/gnome/TextEditor/window", "org.freedesktop.DBus.Introspectable", "Introspect",
+                              None, GLib.VariantType("(s)"), Gio.DBusCallFlags.NONE, -1, None)
+    except GLib.Error:
+        return 0
+    return len(Gio.DBusNodeInfo.new_for_xml(reply.unpack()[0]).nodes)
+
+
+def saved_windows(path):
+    """The windows of Text Editor's session state at path, each as the URIs of its pages, None for a draft, or None
+    when there is no state.
+    """
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        state = GLib.Variant.new_from_bytes(GLib.VariantType("a{sv}"), GLib.Bytes.new(data), False).unpack()
+    except (FileNotFoundError, GLib.Error):
+        return None
+    return [[p.get("uri") for p in w.get("pages", [])] for w in state.get("windows", [])]
+
+
+def saved_after(path, after_ns, windows):
+    """Whether Text Editor's session state at path was written later than after_ns, with the given windows."""
+    try:
+        return os.stat(path).st_mtime_ns > after_ns and saved_windows(path) == windows
+    except FileNotFoundError:
+        return False
+
+
+def run_last_tab_scenario(text_editor, out):
+    """Checks that closing the last tab of a window closes the window, and that Text Editor quits with its last one.
+
+    Text Editor opens one file at its start, and a second one from its command line while it runs, which opens in a
+    window of its own, with the focus. Ctrl+W closes the tab of the second file, and with last-tab-closes-window.patch
+    its window as well, after which mutter gives the focus to the window of the first file. Ctrl+W there closes the last
+    window, and Text Editor quits. The windows are counted on the session bus, and the session saved after each close
+    has to have the windows left.
+    """
+    name = "last-tab-closes-window"
+    base = os.path.join(out, name)
+    env = scenario_env(base)
+    delay = DEFAULT_DELAY
+    first, first_uri = make_file(base, "first.txt")
+    second, second_uri = make_file(base, "second.txt")
+    path = state_path(env)
+
+    with open(os.path.join(base, "text-editor.log"), "w") as log:
+        started_ns = time.time_ns()
+        proc = subprocess.Popen([text_editor, first], stdout=log, stderr=subprocess.STDOUT, env=env)
+        if not wait_for_name():
+            check(False, "%s: Text Editor registered on the session bus" % name)
+            proc.kill()
+            proc.wait()
+            return
+        check(wait_for(lambda: saved_after(path, started_ns, [[first_uri]]), delay + SLACK),
+              "%s: the session was autosaved with the first file" % name)
+
+        opened_ns = time.time_ns()
+        subprocess.run([text_editor, second], stdout=log, stderr=subprocess.STDOUT, env=env, check=True)
+        opened = wait_for(lambda: saved_after(path, opened_ns, [[first_uri], [second_uri]]), delay + SLACK)
+        check(opened and window_count() == 2, "%s: the second file opened in a window of its own (%d windows, saved %s)" % (
+            name, window_count(), saved_windows(path)))
+        if opened:
+            # The new window is presented once mutter showed the other one, which can last up to a second.
+            time.sleep(1)
+            closed_ns = time.time_ns()
+            press_keys([(XK_CONTROL_L, XK_W)])
+            check(wait_for(lambda: window_count() == 1, 10) and proc.poll() is None,
+                  "%s: closing the tab of the second file closed its window and Text Editor kept running (%d windows)" % (
+                      name, window_count()))
+            check(wait_for(lambda: saved_after(path, closed_ns, [[first_uri]]), delay + SLACK),
+                  "%s: the session was autosaved with the window of the first file only (saved %s)" % (
+                      name, saved_windows(path)))
+
+            time.sleep(1)
+            press_keys([(XK_CONTROL_L, XK_W)])
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            check(proc.returncode == 0, "%s: closing the tab of the first file closed the last window, and Text Editor "
+                  "exited with status %s" % (name, proc.returncode))
+            check(saved_windows(path) == [[]], "%s: quitting saved the session without pages (saved %s)" % (
+                name, saved_windows(path)))
+        if proc.poll() is None:
+            quit_text_editor(proc)
+
+
+def run_standard_input_scenario(text_editor, out):
+    """Checks that text read from standard input, which replaces the empty draft of a window, keeps the window open.
+
+    Text Editor starts with gnome-text-editor -, opens a window with an empty draft, and half a second later reads
+    standard input into a page which replaces the draft. It removes the draft before it adds that page, so the window
+    has no pages for a moment, after which last-tab-closes-window.patch must not close it.
+    """
+    name = "standard-input-keeps-window"
+    base = os.path.join(out, name)
+    env = scenario_env(base)
+    delay = DEFAULT_DELAY
+    path = state_path(env)
+    text = os.path.join(base, "standard-input.txt")
+    with open(text, "w") as f:
+        f.write("Text from standard input.\n")
+
+    with open(os.path.join(base, "text-editor.log"), "w") as log, open(text) as stdin:
+        started_ns = time.time_ns()
+        proc = subprocess.Popen([text_editor, "-"], stdin=stdin, stdout=log, stderr=subprocess.STDOUT, env=env)
+        if not wait_for_name():
+            check(False, "%s: Text Editor registered on the session bus" % name)
+            proc.kill()
+            proc.wait()
+            return
+        check(wait_for(lambda: saved_after(path, started_ns, [[None]]), delay + SLACK),
+              "%s: the session was autosaved with the draft of standard input in one window (saved %s)" % (
+                  name, saved_windows(path)))
+        time.sleep(1)
+        check(proc.poll() is None and window_count() == 1, "%s: the window stayed open (%d windows)" % (name, window_count()))
+
+        # Quitting would ask what to do with the unsaved draft, which nobody answers here.
+        proc.terminate()
+        proc.wait()
+
+
 def main():
     text_editor, out = sys.argv[1:3]
     for scenario in SCENARIOS:
@@ -513,6 +642,8 @@ def main():
     for name, chords, description, changed in WINDOW_SCENARIOS:
         run_window_scenario(text_editor, out, name, chords, description, changed)
     run_restored_windows_scenario(text_editor, out)
+    run_last_tab_scenario(text_editor, out)
+    run_standard_input_scenario(text_editor, out)
     print("RESULT: %s" % ("OK" if not failures else "%d check(s) failed" % len(failures)))
     return 0 if not failures else 1
 

@@ -141,6 +141,28 @@ restored-documents-hold-no-logout.patch
     g_application_quit() when the session ends, in gtk/gtkapplication-dbus.c, and that editor_application_shutdown
     still runs before the session is disposed.
 
+last-tab-closes-window.patch
+    Closes a window once its last tab was closed, with Ctrl+W or with :q in Vim mode, instead of showing the empty
+    state of the window, "Start or Open a Document", which a second Ctrl+W closed. A window whose last tab moved to
+    another window, with Move to New Window (Ctrl+Shift+N), closes as well. The last window closing quits Text
+    Editor, which saves the session as it does when the window is closed otherwise, and since its tab was closed
+    before, the next start restores no window for it.
+
+    editor_window_items_changed_cb closes a window when a page was removed and none is left. It closes it from an idle
+    callback, which runs before the window is redrawn without pages, because the tab view is still removing the page,
+    and because text read from standard input replaces an empty draft by removing the draft and adding its own page
+    right after, which keeps the window open. Ctrl+Shift+T reopens closed tabs only in the window they were closed in,
+    so the files of a window which closed are reopened from the recent documents of the open menu.
+
+    Upstream keeps the empty state by design: https://gitlab.gnome.org/GNOME/gnome-text-editor/-/issues/404 was moved
+    to https://gitlab.gnome.org/Teams/Design/whiteboards/-/issues/58, which is still open, and
+    https://gitlab.gnome.org/GNOME/gnome-text-editor/-/issues/681 was closed as working as designed. The patch is local
+    only and not proposed upstream. It is tested by the scenarios last-tab-closes-window and standard-input-keeps-window
+    of tests/gnome-text-editor/run-text-editor-autosave.sh. After a version bump, check that
+    editor_window_items_changed_cb in src/editor-window.c is still connected to the items-changed signal of the pages
+    of the tab view, and that editor_session_open_stream in src/editor-session.c still adds the page of standard input
+    in the same main loop iteration in which it removes the draft.
+
 Check by hand after an upgrade, in a new login, so that the patched mutter runs, and with no Text Editor of the
 previous version still running in the background:
 
@@ -152,3 +174,7 @@ previous version still running in the background:
   window on the current workspace.
   type into a new document and log out right away: the logout dialog should not list Text Editor, and after logging
   in again, Text Editor should return the document with all the text typed.
+  with two windows open, press Ctrl+W on the last tab of one of them: that window should close and the other stay.
+  Ctrl+W on the last tab of the other one should quit Text Editor, and its next start should open only a new window
+  with an empty document. Type into a new document in a second window, close that window with its close button and
+  choose Discard: the window should close, and journalctl --user -b should show no editor-window criticals.

@@ -28,6 +28,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     files and shells in a new window on the current workspace.
   - [Text Editor keeps unsaved documents without warnings](#text-editor-keeps-unsaved-documents-without-warnings): no
     entry in the logout dialog and no banner for them.
+  - [Text Editor closes a window with its last tab](#text-editor-closes-a-window-with-its-last-tab): Ctrl+W on the
+    last tab closes the window, and in the last window quits Text Editor.
   - [No screenshots on the lock screen](#no-screenshots-on-the-lock-screen): the button and the keys do nothing while
     the screen is locked.
   - [Power and lid sounds follow the System Sounds switch](#power-and-lid-sounds-follow-the-system-sounds-switch): no
@@ -234,6 +236,13 @@ logout for unsaved documents.
 Text Editor also shows no banner above restored documents, since keeping a document unsaved is a normal way to use
 it, and a banner would mark every such window as needing attention. The window title still shows whether a document is
 unsaved or modified (`patches/gnome-text-editor/hide-restored-banners.patch`).
+
+### Text Editor closes a window with its last tab
+
+Closing the last tab of a Text Editor window, with Ctrl+W, closes the window as well, and so does moving its last tab
+to a new window with Ctrl+Shift+N. In the last window, Text Editor quits, and since the document was closed, the next
+start restores no window for it and opens a new window with an empty document
+(`patches/gnome-text-editor/last-tab-closes-window.patch`).
 
 ### No screenshots on the lock screen
 

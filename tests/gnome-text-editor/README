@@ -97,6 +97,16 @@ Text Editor auto-save: run-text-editor-autosave.sh and text_editor_autosave.py
     autosave after the start and after opening a second file. When GTK saved no window state, as with Ubuntu's GTK or
     a Text Editor without the patch, the scenario prints a line starting with "skip:" and checks nothing.
 
+    last-tab-closes-window and standard-input-keeps-window test patches/gnome-text-editor/last-tab-closes-window.patch.
+    last-tab-closes-window starts Text Editor with a file and opens a second one from the command line, which opens in
+    a window of its own, with the focus. Ctrl+W, pressed the same way, closes the tab of the second file and has to
+    close its window, which the scenario sees on the session bus, where GtkApplication exports each window below
+    /org/gnome/TextEditor/window, and in the session autosaved after it. Ctrl+W then closes the tab of the first file,
+    in the window mutter gives the focus to, and Text Editor has to quit with the session saved without pages. Without
+    the patch, both windows stay open. standard-input-keeps-window starts Text Editor with gnome-text-editor -, whose
+    window has an empty draft for half a second, until Text Editor reads standard input into a page which replaces it.
+    The window has no pages between removing the draft and adding that page, and has to stay open with the page.
+
     ROOT is a directory Text Editor was installed into, for example with meson install --destdir, or its package was
     extracted into, with libgtk-4-1 extracted there too when it is to run with that GTK:
 

@@ -1,0 +1,109 @@
+Description: Close a window when its last tab is closed.
+ Closing the last tab of a window, with Ctrl+W or with :q in Vim mode, leaves the window open with its empty state,
+ "Start or Open a Document", and a second Ctrl+W closes the window. The window now closes once its last page was
+ removed, and so does a window whose last page moved to another window, with Move to New Window (Ctrl+Shift+N). When
+ it is the last window, Text Editor quits, as when the window is closed otherwise, and since the page was closed
+ before, the next start restores no window for it.
+ .
+ The window closes from an idle callback, which runs before the window is redrawn without pages, because the tab view
+ is still removing the page when it reports the change, and because text read from standard input replaces an empty
+ draft by removing the draft and adding its own page right after, which keeps the window open.
+ .
+ Upstream keeps the empty state by design: https://gitlab.gnome.org/GNOME/gnome-text-editor/-/issues/404 was moved to
+ the design whiteboard below, which is still open, and https://gitlab.gnome.org/GNOME/gnome-text-editor/-/issues/681
+ was closed as working as designed.
+Author: Mitar
+Bug: https://gitlab.gnome.org/Teams/Design/whiteboards/-/issues/58
+Forwarded: not-needed
+Last-Update: 2026-11-08
+diff --git a/src/editor-window-private.h b/src/editor-window-private.h
+index e3ef989..d55b67a 100644
+--- a/src/editor-window-private.h
++++ b/src/editor-window-private.h
+@@ -72,6 +72,9 @@ struct _EditorWindow
+ 
+   guint                 inhibit_cookie;
+ 
++  /* Closes the window after its last page was removed */
++  guint                 close_empty_source;
++
+   /* Names the window in the session state and in the window state GTK saves,
+    * which links the two across runs.
+    */
+diff --git a/src/editor-window.c b/src/editor-window.c
+index a03c86d..b5fb5fc 100644
+--- a/src/editor-window.c
++++ b/src/editor-window.c
+@@ -263,6 +263,21 @@ editor_window_notify_selected_page_cb (EditorWindow *self,
+   editor_fullscreen_box_reveal (self->fullscreen_box);
+ }
+ 
++static gboolean
++editor_window_close_empty_cb (gpointer data)
++{
++  EditorWindow *self = data;
++
++  g_assert (EDITOR_IS_WINDOW (self));
++
++  self->close_empty_source = 0;
++
++  if (editor_window_get_n_pages (self) == 0)
++    gtk_window_close (GTK_WINDOW (self));
++
++  return G_SOURCE_REMOVE;
++}
++
+ static void
+ editor_window_items_changed_cb (EditorWindow      *self,
+                                 guint              position,
+@@ -274,9 +289,29 @@ editor_window_items_changed_cb (EditorWindow      *self,
+   g_assert (GTK_IS_SELECTION_MODEL (model));
+ 
+   if (editor_window_get_n_pages (self) > 0)
+-    gtk_stack_set_visible_child_name (self->stack, "tabs");
+-  else
+-    gtk_stack_set_visible_child_name (self->stack, "empty");
++    {
++      gtk_stack_set_visible_child_name (self->stack, "tabs");
++      return;
++    }
++
++  /* A window whose last page was closed or moved to another window closes
++   * as well, instead of showing its empty state. It closes from an idle
++   * callback, because the tab view is still removing the page, and because a
++   * page can be added right after the last one was removed, as when text read
++   * from standard input replaces an empty draft, which keeps the window open.
++   * The idle callback runs before the window is redrawn without pages.
++   */
++  if (removed > 0)
++    {
++      if (self->close_empty_source == 0)
++        self->close_empty_source = g_idle_add_full (G_PRIORITY_HIGH_IDLE,
++                                                    editor_window_close_empty_cb,
++                                                    self,
++                                                    NULL);
++      return;
++    }
++
++  gtk_stack_set_visible_child_name (self->stack, "empty");
+ }
+ 
+ static void
+@@ -286,6 +321,8 @@ editor_window_do_close (EditorWindow *self)
+ 
+   g_cancellable_cancel (self->cancellable);
+ 
++  g_clear_handle_id (&self->close_empty_source, g_source_remove);
++
+   g_signal_handlers_disconnect_by_func (adw_tab_view_get_pages (self->tab_view),
+                                         G_CALLBACK (editor_window_items_changed_cb),
+                                         self);
+@@ -805,6 +842,8 @@ editor_window_dispose (GObject *object)
+ 
+   g_assert (EDITOR_IS_WINDOW (self));
+ 
++  g_clear_handle_id (&self->close_empty_source, g_source_remove);
++
+   _editor_session_remove_window (EDITOR_SESSION_DEFAULT, self);
+ 
+   g_clear_object (&self->settings);
