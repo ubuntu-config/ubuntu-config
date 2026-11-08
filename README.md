@@ -32,6 +32,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     the screen is locked.
   - [Power and lid sounds follow the System Sounds switch](#power-and-lid-sounds-follow-the-system-sounds-switch): no
     sound for the power cable, the lid and a low battery.
+  - [Battery charge thresholds on Framework laptops](#battery-charge-thresholds-on-framework-laptops): Preserve
+    Battery Health keeps the battery between 40% and 60%.
   - [Hardware tweaks](#hardware-tweaks): the touchscreen and the power button light off, and keys repeating only after
     a second.
 - [Additions](#additions): tools and features which Ubuntu does not have.
@@ -41,8 +43,6 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     vendors' `.deb` files downloaded daily, verified, and upgraded like any other package.
   - [Daily mail of failures and errors](#daily-mail-of-failures-and-errors): failed units, errors and crash reports
     from the journals of the system and of every user.
-  - [Battery charge thresholds on Framework laptops](#battery-charge-thresholds-on-framework-laptops): Preserve
-    Battery Health keeps the battery between 40% and 60%.
   - [Processor throttling](#processor-throttling): a top bar indicator naming the limit which holds the processor
     back, and a warning when the fan stops following the heat.
   - [Cooling and performance tracked over time](#cooling-and-performance-tracked-over-time): a measurement at night,
@@ -251,6 +251,21 @@ those for the power cable going in and out, for the lid opening and closing, and
 as the cable going in and out. The low battery notification still appears, without its sound, and the warnings of a
 critically low battery still sound.
 
+### Battery charge thresholds on Framework laptops
+
+GNOME's Preserve Battery Health keeps the battery between 40% and 60% while the laptop is docked most of the time,
+and a quick settings toggle switches back to charging to 100% before traveling.
+
+Requirements:
+
+- The kernel's charge control enabled, which it keeps disabled on Framework laptops by default
+  (`modprobe.d/cros-charge-control.conf`).
+- The thresholds for UPower, which applies them for Preserve Battery Health (`udev/90-battery-charge-limit.rules`).
+- The Preserve Battery Health extension for the quick settings toggle (`configure-gnome-desktop.sh`).
+- The estimated time until the battery is empty or full, shown under the battery percentage in quick settings
+  (`gnome-extensions/quick-settings-battery-time@mitar.tnode.com/`).
+- The firmware's own charge limit at 99%[^charge-limit] and Battery Extender disabled, in the BIOS.
+
 ### Hardware tweaks
 
 The touchscreen is disabled, the power button light is off, and a held key starts repeating only after a second, in
@@ -302,21 +317,6 @@ apport writes them without logging the crash as an error. Known noise can be lef
 `journal-digest.ignore`. `journal-digest --since -7d` can be used to gather a week's load of messages to determine
 patterns from. With `--ignore journal-digest.ignore`, patterns are tried out from the repository before they are
 installed.
-
-### Battery charge thresholds on Framework laptops
-
-GNOME's Preserve Battery Health keeps the battery between 40% and 60% while the laptop is docked most of the time,
-and a quick settings toggle switches back to charging to 100% before traveling.
-
-Requirements:
-
-- The kernel's charge control enabled, which it keeps disabled on Framework laptops by default
-  (`modprobe.d/cros-charge-control.conf`).
-- The thresholds for UPower, which applies them for Preserve Battery Health (`udev/90-battery-charge-limit.rules`).
-- The Preserve Battery Health extension for the quick settings toggle (`configure-gnome-desktop.sh`).
-- The estimated time until the battery is empty or full, shown under the battery percentage in quick settings
-  (`gnome-extensions/quick-settings-battery-time@mitar.tnode.com/`).
-- The firmware's own charge limit at 99%[^charge-limit] and Battery Extender disabled, in the BIOS.
 
 ### Processor throttling
 
