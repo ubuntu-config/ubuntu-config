@@ -438,14 +438,14 @@ GNOME Shell, gnome-session and gnome-settings-daemon ask systemd to put each app
 own, `app-gnome-<application>-<pid>.scope`. They asked only once GLib had started the application, and systemd moves
 only the process it is given, so the processes the application started in the meantime stayed in the cgroup of the
 service which launched it, and were stopped with that service, before the application. Signal's zygotes and GPU process
-stayed in gnome-session's cgroup, and Thunderbird's crash helper in GNOME Shell's. GLib is patched to ask systemd for
-the scope itself, and gio-launch-desktop, through which GLib starts every application, waits until it is in the scope
-before it executes the application, so that every process of the application starts there. GNOME Shell, gnome-session
-and gnome-settings-daemon are patched to leave the scope to GLib (`patches/glib2.0/`, `patches/gnome-shell/`,
-`patches/gnome-session/`, `patches/gnome-settings-daemon/`). Other processes which launch applications through GLib,
-such as xdg-desktop-portal for links opened in other applications, put them into a scope of their own too. An
-application starts about 25 ms later for it. GNOME Shell's commands, run with Alt+F2, and gnome-settings-daemon's
-fallback Orca are launched the same way.
+stayed in gnome-session's cgroup, and Thunderbird's crash helper in GNOME Shell's. GLib is patched so that
+gio-launch-desktop, through which GLib starts every application, asks systemd for the scope itself and waits until it is
+in the scope before it executes the application, so that every process of the application starts there. GNOME Shell,
+gnome-session and gnome-settings-daemon are patched to leave the scope to GLib (`patches/glib2.0/`,
+`patches/gnome-shell/`, `patches/gnome-session/`, `patches/gnome-settings-daemon/`). Other processes which launch
+applications through GLib, such as xdg-desktop-portal for links opened in other applications, or xdg-open in a terminal,
+which exits right after launching, put them into a scope of their own too. An application starts about 25 ms later for
+it. GNOME Shell's commands, run with Alt+F2, and gnome-settings-daemon's fallback Orca are launched the same way.
 
 Firefox runs an executable chosen as the handler of a link or a file type, for example with "Use other..." in its
 Applications settings, without GLib, so the handler stays in Firefox's cgroup and ends together with Firefox when

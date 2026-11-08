@@ -30,9 +30,10 @@ no-screenshots-while-locked.patch
 leave-scope-to-glib.patch
     Lets GNOME Shell leave the scope of an application launched from the dash, the overview or a
     search to GLib, when the platform data of GLib's "launched" signal names one as "systemd-unit".
-    The GLib of patches/glib2.0/ puts the application into that scope before it starts, and a
-    request for the scope afterwards would only fail, with a warning in the journal. Drop the patch
-    together with patches/glib2.0/scope-before-exec.patch.
+    The GLib of patches/glib2.0/ puts the application into that scope before it starts, so a
+    request of GNOME Shell for the scope is redundant: systemd creates the scope for whichever
+    request it receives first and refuses the other, which logs a warning in the journal when it is
+    GNOME Shell's. Drop the patch together with patches/glib2.0/scope-before-exec.patch.
 
     The request is made in shell_global_app_launched_cb in src/shell-global.c. The patch adds no
     test.

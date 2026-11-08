@@ -95,6 +95,8 @@ run refused-exit "${AS_USER[@]}" "${IN_SERVICE[@]}" dbus-run-session -- "${FAKE[
 run check-refused-exit "${AS_USER[@]}" "${TEST[@]}" check-refused-exit "$OUT"
 run job-failed "${AS_USER[@]}" "${IN_SERVICE[@]}" dbus-run-session -- "${FAKE[@]}" fail "${TEST[@]}" job-failed "$OUT"
 run slow "${AS_USER[@]}" "${IN_SERVICE[@]}" dbus-run-session -- "${FAKE[@]}" slow "${TEST[@]}" slow "$OUT"
+run exit-checked "${AS_USER[@]}" "${IN_SERVICE[@]}" dbus-run-session -- "${FAKE[@]}" check "${TEST[@]}" exit-checked "$OUT"
+run check-exit-checked "${AS_USER[@]}" "${TEST[@]}" check-exit-checked "$OUT"
 # A launching process with a PID namespace of its own, which still uses the session bus and the cgroups of the user
 # instance, as in a sandbox like Firejail's. It is put into a cgroup of the user instance first, as a process the user
 # instance started would be.

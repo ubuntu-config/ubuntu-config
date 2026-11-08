@@ -10,22 +10,28 @@ Scope before exec: run-scope-test.sh, scope_test.py, fake_systemd.py and fake_jo
       loop              launched from a service of the user instance, as GNOME Shell's, which keeps running: every
                         process is in app-gnome-glib\x2dscope\x2dtest-<pid>.scope, which the "launched" signal names
       pid-namespace     the same, from a PID namespace of its own, which still uses the session bus and the cgroups
-                        of the user instance, as in a sandbox like Firejail's: the same, as GLib gives systemd a pidfd
+                        of the user instance, as in a sandbox like Firejail's: the same, as gio-launch-desktop gives
+                        systemd a pidfd
       command-line      the same as loop, but the application is a command line, launched the way GNOME Shell runs a
                         command with Alt+F2 in patches/gnome-shell/spawn-commands-in-scope.patch: every process is in
                         app-gnome-sh-<pid>.scope, and the % in its command arrives intact
       exit              the same as loop, but the launching process exits right after launching: the same
-      late-request      the launching process asks for the same scope after GLib, as gnome_start_systemd_scope()
-                        does: its request fails with UnitExists, and every process is in the scope
+      exit-checked      the same as exit, on a session bus of its own, on which fake_systemd.py owns systemd's name and
+                        checks the caller of a request on the bus half a second after receiving it, as systemd does
+                        before it acts on a request, and refuses the request when the caller is gone, which nothing
+                        then learns: gio-launch-desktop asks for the scope itself and is still connected, so every
+                        process is in a cgroup named after the scope, which fake_systemd.py moves the process into
+      late-request      the launching process asks for the same scope right after launching, as
+                        gnome_start_systemd_scope() does: systemd creates the scope for whichever request it receives
+                        first, refuses the other with UnitExists, and every process is in the scope
       no-systemd        launched on a session bus of its own, without systemd: no scope is asked for, and the
                         application starts at once, in the launching process's cgroup
       no-systemd-exit   the same, but the launching process exits right after launching: the same
       refused           launched on a session bus of its own, on which fake_systemd.py owns systemd's name and refuses
                         every scope: the scope is asked for, refused, and the application starts at once, in the
                         launching process's cgroup, and gio-launch-desktop logs the refusal at error priority
-      refused-exit      the same, but the launching process exits right after launching, so that nothing tells
-                        gio-launch-desktop about the refusal: the application starts after the 60 seconds
-                        gio-launch-desktop waits at most, and it logs at error priority that the scope did not exist
+      refused-exit      the same, but the launching process exits right after launching: the same, as
+                        gio-launch-desktop receives the refusal itself
       job-failed        the same as refused, but fake_systemd.py accepts the request and then fails its job: the
                         application starts at once, and gio-launch-desktop logs the job's result at error priority
       slow              the same as refused, but fake_systemd.py moves the process into a cgroup named after the scope

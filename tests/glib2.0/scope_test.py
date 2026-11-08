@@ -11,12 +11,14 @@
 #   command-line      the same, but the application is a command line, launched as GNOME Shell runs a command with
 #                     Alt+F2, see patches/gnome-shell/spawn-commands-in-scope.patch
 #   exit              the launching process exits right after launching, as gio open does
-#   late-request      the launching process asks for the scope after GLib, as gnome_start_systemd_scope() does
+#   exit-checked      the same, on a session bus where fake_systemd.py checks the caller of a request on the bus a moment
+#                     after receiving it, as systemd does, and refuses the request when the caller is gone
+#   late-request      the launching process asks for the scope too, right after launching, as gnome_start_systemd_scope()
+#                     does
 #   no-systemd        run on a session bus without systemd, where no scope is asked for
 #   no-systemd-exit   the same, and the launching process exits right after launching
 #   refused           run on a session bus where fake_systemd.py refuses to create the scope
-#   refused-exit      the same, and the launching process exits right after launching, so that nothing tells
-#                     gio-launch-desktop about the refusal and it waits until its time limit
+#   refused-exit      the same, and the launching process exits right after launching
 #   job-failed        run on a session bus where fake_systemd.py accepts the request and then fails its job
 #   slow              run on a session bus where fake_systemd.py moves the process into the scope only after SLOW_S
 #   outside           run outside of the systemd user instance, where no scope is asked for
@@ -35,9 +37,9 @@ import socket
 import sys
 import time
 
-SCENARIOS = ("loop", "pid-namespace", "command-line", "exit", "late-request", "no-systemd", "no-systemd-exit", "refused", "refused-exit",
-             "job-failed", "slow", "outside")
-EXITING = ("exit", "no-systemd-exit", "refused-exit")
+SCENARIOS = ("loop", "pid-namespace", "command-line", "exit", "exit-checked", "late-request", "no-systemd", "no-systemd-exit", "refused",
+             "refused-exit", "job-failed", "slow", "outside")
+EXITING = ("exit", "exit-checked", "no-systemd-exit", "refused-exit")
 APP_ID = "glib-scope-test"
 # The application ID escaped as systemd and gnome-desktop escape it for a unit name.
 ESCAPED_APP_ID = "glib\\x2dscope\\x2dtest"
@@ -197,7 +199,7 @@ def main():
 
     if checking:
         launched = json.loads((out_dir / "launched.json").read_text())
-        if scenario == "check-exit":
+        if scenario in ("check-exit", "check-exit-checked"):
             extra = check_app(checks, launched, None, True)
         elif scenario == "check-no-systemd-exit":
             checks.check("no scope asked for", "systemd-unit" not in launched["platform_data"], json.dumps(launched["platform_data"]))
@@ -205,8 +207,7 @@ def main():
         else:
             unit = launched["platform_data"].get("systemd-unit")
             checks.check("scope asked for", unit is not None, json.dumps(launched["platform_data"]))
-            extra = check_app(checks, launched, launched["cgroup"], False, waited=True,
-                              logged=f"Scope {unit} did not exist after {SCOPE_TIMEOUT_S} seconds")
+            extra = check_app(checks, launched, launched["cgroup"], False, logged=f"systemd did not create scope {unit}")
         return checks.finish(extra)
 
     if scenario not in SCENARIOS:
@@ -230,7 +231,8 @@ def main():
     def launched_cb(_context, _info, platform_data):
         data = platform_data.unpack()
         if scenario == "late-request":
-            # gnome-desktop's gnome_start_systemd_scope() asks for this scope after GLib, on the same connection.
+            # gnome-desktop's gnome_start_systemd_scope() asks for this scope right after launching, on the same
+            # connection.
             unit = f"app-gnome-{ESCAPED_APP_ID}-{data['pid']}.scope"
             bus = Gio.bus_get_sync(Gio.BusType.SESSION)
 
@@ -303,8 +305,10 @@ def main():
         extra = check_app(checks, launched, own_cgroup, True, slow=scenario == "slow",
                           name="sh" if scenario == "command-line" else ESCAPED_APP_ID)
         if scenario == "late-request":
+            # systemd creates the scope for whichever of the two requests it receives first, and refuses the other.
             error = late_reply.get("error", "no reply")
-            checks.check("late request refused", error == "org.freedesktop.systemd1.UnitExists", repr(error))
+            checks.check("late request created the scope or was refused as the scope exists",
+                         error in (None, "org.freedesktop.systemd1.UnitExists"), repr(error))
 
     return checks.finish({"launcher_cgroup": own_cgroup, "platform_data": launched["platform_data"], **extra})
 
