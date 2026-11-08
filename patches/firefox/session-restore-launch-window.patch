@@ -21,6 +21,7 @@ Description: Keep the window opened for a launch as it was opened and restore th
  Related to Mozilla bug 1565050: with external links opening in a tab, the URL opens in the first window of the
  saved session rather than in the last used one.
 Author: Mitar
+Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090730
 Forwarded: no
 Last-Update: 2026-11-07
 diff --git a/browser/components/sessionstore/SessionStore.sys.mjs b/browser/components/sessionstore/SessionStore.sys.mjs

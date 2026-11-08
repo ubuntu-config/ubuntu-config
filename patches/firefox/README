@@ -86,12 +86,15 @@ session-restore-launch-window.patch
     workspace.
 
     GTK 3 activates the first window it shows with the activation token of the launch, which during session restore
-    is a restored window, so with a valid token, as from the dock, GNOME switches to that window's workspace.
-    wayland-launch-activation-token.patch hands the token to Firefox's own widget code instead, keeps restored
-    windows from using it and drops it when every window was restored. Links opened from Ptyxis carry no token yet:
-    Ptyxis opens them through libportal, which sends none to the portal.
+    is a restored window. mutter does not activate it and marks it as demanding attention instead, and the token is
+    gone for the window opened for the launch. wayland-launch-activation-token.patch hands the token to Firefox's
+    own widget code instead, keeps restored windows from using it and drops it when every window was restored. Links
+    opened from Ptyxis carry no token yet: Ptyxis opens them through libportal, which sends none to the portal.
 
-    tests/run-session.sh checks both with every scenario, see tests/README. Neither is reported to Mozilla yet.
+    tests/run-session.sh checks both with every scenario, see tests/README. wayland-launch-activation-token.patch is
+    proposed as D340739 on phabricator.services.mozilla.com, for Mozilla bug 2090734, together with
+    wayland-session-restore-no-activation.patch. For session-restore-launch-window.patch, Mozilla bug 2090730 asks
+    whether and in which form Mozilla would accept the change, which is not proposed yet.
 
 sigterm-handler-after-app-shell.patch
 quit-at-session-end.patch
@@ -135,7 +138,7 @@ wayland-session-restore-no-activation.patch
     The requests are in nsWindowWaylandToplevel::NativeShow in widget/gtk/nsWindowWayland.cpp and nsWindow::SetFocus
     in widget/gtk/nsWindow.cpp, and the patch builds on wayland-launch-activation-token.patch, which records which
     windows are restored from the session. The session test in tests/session/ checks that no restored window demands
-    attention. Not proposed to Mozilla yet.
+    attention. Proposed as D340740 on phabricator.services.mozilla.com, for Mozilla bug 2090734, on top of D340739.
 
 wasm-sandboxed-libraries.patch (debian-series)
     Builds graphite, ogg, hunspell, expat, woff2 and soundtouch as wasm sandboxed libraries, as Mozilla's own

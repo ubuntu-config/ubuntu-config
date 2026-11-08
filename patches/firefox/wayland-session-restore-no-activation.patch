@@ -10,7 +10,8 @@ Description: Do not ask to activate the windows restored from the session while 
  while session restore runs at startup, neither when it is shown nor when session restore focuses it. The window
  opened for the launch still receives the activation token of the launch.
 Author: Mitar
-Forwarded: no
+Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090734
+Forwarded: https://phabricator.services.mozilla.com/D340740
 Last-Update: 2026-11-07
 ---
 diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp

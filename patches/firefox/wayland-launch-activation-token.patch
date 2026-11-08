@@ -1,9 +1,8 @@
 Description: Activate the window opened for the launch, not a restored one, with the launch activation token on Wayland.
  GTK 3 reads the activation token Firefox is launched with from DESKTOP_STARTUP_ID and activates the first toplevel
- it maps with it. During startup session restore that is the first restored window shown, so with a valid token,
- such as from a launch in GNOME Shell's dock, the compositor focuses that window and switches to its workspace,
- away from where Firefox was launched, while the window opened for the launch, holding the URL or the start page,
- stays without it.
+ it maps with it. During startup session restore that is the first restored window shown. mutter does not activate
+ it and marks it as demanding attention instead, and the window opened for the launch, holding the URL or the start
+ page, stays without the token.
  .
  The token is now removed from GTK at startup and given to nsGTKToolkit, whose token the first window shown uses,
  as it already does for a launch passed to a running Firefox. While session restore runs, a window which the
@@ -12,7 +11,8 @@ Description: Activate the window opened for the launch, not a restored one, with
  token which no window used, because every window was restored, is dropped at that point, so that a window opened
  later transfers the focus to itself as usual.
 Author: Mitar
-Forwarded: no
+Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090734
+Forwarded: https://phabricator.services.mozilla.com/D340739
 Last-Update: 2026-11-06
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
 index 003fc85..513d100 100644
