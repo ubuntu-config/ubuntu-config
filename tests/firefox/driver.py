@@ -42,8 +42,6 @@ import subprocess
 import sys
 import time
 
-from gi.repository import Gio, GLib
-
 
 def free_port():
     with socket.socket() as s:
@@ -352,7 +350,11 @@ def keyboard_focus(log_path, token):
 
 def add_keyboard():
     """Adds a keyboard to mutter's seat through its remote desktop API, by pressing Shift, so that mutter gives the
-    keyboard focus to windows. Returns the remote desktop session, which keeps the keyboard until it is stopped."""
+    keyboard focus to windows. Returns the remote desktop session, which keeps the keyboard until remove_keyboard()
+    stops it."""
+    # GI is imported here, so that the tests which use this module without a keyboard do not need it.
+    from gi.repository import Gio, GLib
+
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     desktop = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.NONE, None, "org.gnome.Mutter.RemoteDesktop",
                                      "/org/gnome/Mutter/RemoteDesktop", "org.gnome.Mutter.RemoteDesktop", None)
@@ -364,6 +366,13 @@ def add_keyboard():
         session.call_sync("NotifyKeyboardKeysym", GLib.Variant("(ub)", (0xffe1, pressed)), Gio.DBusCallFlags.NONE, -1,
                           None)
     return session
+
+
+def remove_keyboard(session):
+    """Stops the remote desktop session add_keyboard() returned, which removes its keyboard."""
+    from gi.repository import Gio
+
+    session.call_sync("Stop", None, Gio.DBusCallFlags.NONE, -1, None)
 
 
 def alive_after(proc, seconds):
@@ -486,7 +495,7 @@ def main():
             report("run 2: %s windows restored by the compositor", restored_toplevels(run2_log), 3)
             report("run 2: pages of the focused window %s", focused_window_pages(m), [new_page])
     report("run 2: exit status %s", quit(m, proc), 0)
-    keyboard.call_sync("Stop", None, Gio.DBusCallFlags.NONE, -1, None)
+    remove_keyboard(keyboard)
 
     # A third run restores the session saved by the second one, which shows that the IDs it saved are the ones the
     # compositor knows. One saved window is given DIGITS_ID instead, under which Firefox has to restore it, though the

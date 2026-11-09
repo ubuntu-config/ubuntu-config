@@ -34,8 +34,8 @@
 # root, as do the rules added to AppArmor profiles and the option added to AppArmor's parser configuration, the
 # drop-ins for GDM's unit and for application scopes, the user service which stops application scopes and its script,
 # the script which starts applications at login once there is a tray, Chromium's flags, its Ctrl+Q extension with the
-# native messaging host and script it uses, and the option added to /etc/crypttab, so those parts call sudo
-# themselves and will ask for a password.
+# native messaging host and script it uses, the patched Firefox add-on, and the option added to /etc/crypttab, so those
+# parts call sudo themselves and will ask for a password.
 
 set -euo pipefail
 
@@ -225,6 +225,8 @@ want_package gnome-shell-extension-auto-move-windows
 want_package gnome-shell-extension-drive-menu
 # Provides kbdrate, which the console keyboard unit runs.
 want_package kbd
+# Applies the patches of the Firefox add-ons from firefox-addons/ when they are built.
+want_package patch
 if [ "$MODE" = apply ] && [ "${#MISSING_PACKAGES[@]}" -gt 0 ]; then
   sudo apt-get install "${MISSING_PACKAGES[@]}"
 fi
@@ -426,6 +428,38 @@ install_chromium_extension() {
   sudo install -d -m 755 "$(dirname "$dst")"
   sudo cp -r "$src" "$dst"
   sudo chmod -R u=rwX,go=rX "$dst"
+  return 0
+}
+
+# Builds a Firefox add-on from firefox-addons/NAME/ in this repository with firefox-addons/build-addon.py, from its
+# release on addons.mozilla.org with the patches there applied, and installs it as a root-owned file into
+# /usr/lib/firefox-addons/extensions through sudo, Firefox's application directory for add-ons on Ubuntu. Firefox
+# loads unsigned add-ons from there, finds a new or changed one at its next start, and never updates it. A copy of the
+# add-on installed into a Firefox profile takes precedence over it, so such a copy is reported.
+install_firefox_addon() {
+  local name=$1 dir=$REPO_DIR/firefox-addons/$1 id dst build copy
+  id=$(awk '$1 == "id" {print $2}' "$dir/release")
+  dst=/usr/lib/firefox-addons/extensions/$id.xpi
+  build=$(mktemp -d)
+  if ! python3 -I "$REPO_DIR/firefox-addons/build-addon.py" "$dir" "$build/$id.xpi"; then
+    rm -rf "$build"
+    return 1
+  fi
+  if ! cmp -s "$build/$id.xpi" "$dst"; then
+    echo "  install $dst"
+    CHANGED=$((CHANGED+1))
+    if [ "$MODE" = apply ]; then
+      sudo install -D -m 644 "$build/$id.xpi" "$dst"
+    fi
+  fi
+  rm -rf "$build"
+  # Deleting the file while Firefox is not running keeps the add-on's data, which removing the add-on in Firefox
+  # deletes.
+  for copy in "$HOME"/.config/mozilla/firefox/Profiles/*/extensions/"$id".xpi \
+              "$HOME"/.mozilla/firefox/*/extensions/"$id".xpi; do
+    [ -e "$copy" ] || continue
+    echo "  $copy takes precedence over $dst: quit Firefox and delete it, which keeps the add-on's data"
+  done
   return 0
 }
 
@@ -812,6 +846,11 @@ if [ -d /etc/chromium.d ]; then
   install_libexec chromium-quit.sh chromium-quit
   install_chromium_native_host local.chromium_quit.json
   install_chromium_extension quit-shortcut
+fi
+# Multi-Account Containers otherwise reopens a page assigned to a container in another window than the page's own, see
+# firefox-addons/multi-account-containers/README. Only Ubuntu's Firefox loads add-ons from this directory.
+if [ -d /usr/lib/firefox-addons/extensions ]; then
+  install_firefox_addon multi-account-containers
 fi
 # snapd starts snapd-desktop-integration before there is a display, see the drop-in. The snap is optional, so this is
 # done only when it is installed.

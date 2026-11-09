@@ -415,6 +415,27 @@ test_firefox_local_handler:
   script:
     - su tester -c "python3 -I tests/firefox/test_local_handler.py /usr/lib/firefox/firefox out/firefox-local-handler"
 
+# The test builds Firefox Multi-Account Containers from its release on addons.mozilla.org with the patches of
+# firefox-addons/multi-account-containers/ applied.
+test_firefox_container_tab_window:
+  extends: .test
+
+  needs:
+    - job: build_large
+      parallel:
+        matrix:
+          - PACKAGE: firefox
+
+  before_script:
+    - apt-get update -q
+    - apt-get install -y -q --no-install-recommends ca-certificates patch python3 ./build/firefox/firefox_*.deb
+    - useradd --create-home --shell /bin/bash tester
+    - mkdir out
+    - chown tester:tester out
+
+  script:
+    - su tester -c "python3 -I tests/firefox/test_container_tab_window.py /usr/lib/firefox/firefox out/firefox-container-tab-window"
+
 # Firefox runs with the GTK 3 from the build, extracted into /tmp/gtk-root, and with XDG_CURRENT_DESKTOP as on this
 # desktop, ubuntu:GNOME, for which an unpatched Firefox disables session restore.
 test_firefox_session:

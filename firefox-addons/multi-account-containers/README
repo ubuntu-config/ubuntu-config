@@ -1,0 +1,31 @@
+Firefox add-on: Firefox Multi-Account Containers (@testpilot-containers)
+
+configure-gnome-desktop.sh builds the add-on with ../build-addon.py from the release which "release" pins, the file
+addons.mozilla.org serves for version 8.4.0 with the SHA-256 it publishes for it, applies the patches listed in
+"series" and installs the result into /usr/lib/firefox-addons/extensions, Firefox's application directory for add-ons
+on Ubuntu. Ubuntu's Firefox is built with MOZ_UNSIGNED_APP_SCOPE, so it loads add-ons from there without a signature,
+which it requires everywhere else, and only root can write there. The add-on keeps its ID, and with it its data, such
+as the site assignments of its containers.
+
+Firefox never updates an add-on in that directory, so a new release of the add-on needs a new pin in "release", after
+checking that the patches still apply. A copy installed from addons.mozilla.org into a profile takes precedence over
+the add-on there, and configure-gnome-desktop.sh reports such a copy. Deleting its file from the profile's extensions
+directory while Firefox is not running activates the add-on from the application directory with the same data, while
+removing the add-on in Firefox's add-on manager deletes its data.
+
+reopen-in-window-of-tab.patch
+    The add-on reopens a page assigned to a container in a new tab of that container, and removes the tab it replaces
+    when that tab was new. It creates the new tab in the window which had the focus last, at the index the tab it
+    replaces has in its own window, and removes that tab at once. When Firefox opens a link from another application in
+    a new window while another window has the focus, as during a start which restores the session, the link becomes a
+    tab of that other window, and its own window closes with its only tab. When the tab it replaces stays, Firefox
+    refuses to create the new tab, whose opener that tab is, in another window, so the page does not open at all. This
+    is https://github.com/mozilla/multi-account-containers/issues/2000.
+
+    The patch creates the new tab in the window of the tab it replaces, and removes that tab only once the new one
+    exists. It is a commit of the add-on's repository, against 8.4.0, whose main branch has the same code, and changes
+    the add-on's tests too, so that they check the window and wait for the removal. Only its changes below src/ apply to
+    the release. The add-on's tests pass with it (npm ci --legacy-peer-deps, then npx mocha 'test/**/*.test.js').
+
+    tests/firefox/test_container_tab_window.py checks it in Firefox, see tests/firefox/README. The patch is not proposed
+    upstream yet. Drop it once a release of the add-on includes the fix.

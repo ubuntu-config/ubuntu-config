@@ -1,8 +1,8 @@
-Tests for the patches in patches/firefox/, run by hand and in GitLab CI, see .gitlab-ci.yml. Firefox's own tests
-do not run in the package build.
+Tests for the patches in patches/firefox/ and for the patched Firefox add-ons of firefox-addons/, run by hand and in
+GitLab CI, see .gitlab-ci.yml. Firefox's own tests do not run in the package build.
 
-Both drive Firefox through Marionette, with a new profile in a directory of their own and on a port of their
-own, so they run next to your own Firefox without touching it. Pass the Firefox to test, usually the installed
+Each drives Firefox through Marionette, with a new profile in a directory of their own and on a port of their own,
+so they run next to your own Firefox without touching it. Pass the Firefox to test, usually the installed
 /usr/lib/firefox/firefox, or one extracted from a package with dpkg-deb -x.
 
 Session restore: run-session.sh and driver.py
@@ -130,3 +130,19 @@ Handlers chosen as executables: test_local_handler.py
     The script exits with 0 then, and with 1 when a launch is missing, changed its argument or did not run through
     gio-launch-desktop, with --scope when it ran outside a scope of its own, or when Firefox did not exit with
     status 0. Without the patch each launch runs directly, in the cgroup of Firefox.
+
+Container tabs in the window of their page: test_container_tab_window.py
+    Runs Firefox headless with Firefox Multi-Account Containers, built by firefox-addons/build-addon.py from
+    firefox-addons/multi-account-containers/, which downloads the release from addons.mozilla.org. The test installs it
+    as a temporary add-on, which needs no signature, and checks that the Firefox tested loads unsigned add-ons from its
+    application directory, where configure-gnome-desktop.sh installs it. It assigns the host of a page served on
+    127.0.0.1 to a container, opens a second window, which then has the focus, and opens the page in a new tab of the
+    first window. The add-on has to reopen the page in a tab of the container in the first window and remove the tab
+    it replaces, while the second window keeps its only tab.
+
+      python3 -I test_container_tab_window.py /usr/lib/firefox/firefox /tmp/container-tab-window-test
+
+    A third argument names another build of the add-on to test instead. With the release from addons.mozilla.org,
+    the page opens in a tab of the second window, and the checks of both windows fail. The script prints one line for
+    each check and finally "RESULT: OK", and exits with 0, or with 1 when a check failed or Firefox did not exit with
+    status 0.

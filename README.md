@@ -68,6 +68,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
       Text Editor and the terminal save their state a few seconds after every change.
   - [Firefox runs with its whole sandbox](#firefox-runs-with-its-whole-sandbox): WebAssembly sandboxed libraries,
     Ubuntu's AppArmor profile, and user namespaces for its content processes.
+  - [Container tabs open in the window of their page](#container-tabs-open-in-the-window-of-their-page): Firefox
+    Multi-Account Containers reopens a page in its container in the same window, also at Firefox's start.
   - [Windows keep their size when the screen locks](#windows-keep-their-size-when-the-screen-locks): snapped and
     maximized windows keep the space the dock leaves them.
   - [Claude Desktop and Slack show their tray icon after every login](#claude-desktop-and-slack-show-their-tray-icon-after-every-login):
@@ -216,7 +218,10 @@ application, like a terminal, when the profile opens external links in new windo
 (`browser.link.open_newwindow.override.external` set to 2 in `about:config`). Firefox itself restores the first window
 of the previous session into the window it opens for the launch, so a link would become a tab of that window, on its
 workspace (`patches/firefox/session-restore-launch-window.patch`). A start after a crash opens the new window as well,
-while a restart by Firefox itself, such as after an update, restores the windows as they were, without a new one.
+while a restart by Firefox itself, such as after an update, restores the windows as they were, without a new one. A
+link to a site which Firefox Multi-Account Containers assigns to a container opens in a tab of that container in the
+same new window (see [Container tabs open in the window of their
+page](#container-tabs-open-in-the-window-of-their-page)).
 
 For Text Editor, started from the dock or for a file opened from the terminal or the file manager, the new window
 holds an empty document or the files. A file opened while Text Editor runs opens in a new window as well, unless it is
@@ -636,6 +641,22 @@ Mozilla's own package too. `configure-gnome-desktop.sh` adds `Optimize=no-diff-e
 is [Ubuntu bug 2172229](https://bugs.launchpad.net/bugs/2172229), fixed in mainline by commit
 [e667fc72f7f4](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e667fc72f7f4a54674962c324048ca2cc58bc703).
 Once the running kernel has it, the line in `parser.conf` and its call in the script can go.
+
+### Container tabs open in the window of their page
+
+Firefox Multi-Account Containers reopens a page assigned to a container in a new tab of that container and closes the
+tab the page opened in. Its release creates the new tab in the window which had the focus last, so a link from another
+application, which Firefox opens in a new window, becomes a tab of another window when that window had the focus last,
+as at a start of Firefox which restores the session, and the link's own window closes ([issue
+2000](https://github.com/mozilla/multi-account-containers/issues/2000)). The add-on is patched to create the new tab
+in the window of the tab it replaces (`firefox-addons/multi-account-containers/`).
+
+`configure-gnome-desktop.sh` builds the add-on from its release on addons.mozilla.org with the patch applied and
+installs it into `/usr/lib/firefox-addons/extensions`, from which Ubuntu's Firefox loads add-ons without a signature
+and never updates them, so a new release of the add-on needs a new pin in this repository. A copy of the add-on
+installed from addons.mozilla.org into the profile takes precedence, and the script reports it. Deleting its file from
+the profile's `extensions` directory while Firefox is not running keeps the add-on's data, such as which sites open in
+which container, while removing the add-on in Firefox's add-on manager deletes it.
 
 ### Windows keep their size when the screen locks
 
