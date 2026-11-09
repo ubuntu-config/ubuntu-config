@@ -8,7 +8,7 @@ Author: Mitar
 Forwarded: https://gitlab.gnome.org/GNOME/gnome-text-editor/-/merge_requests/261
 Last-Update: 2026-11-09
 diff --git a/src/editor-session-private.h b/src/editor-session-private.h
-index aa7b729..ba26b56 100644
+index 8521d06..99d9873 100644
 --- a/src/editor-session-private.h
 +++ b/src/editor-session-private.h
 @@ -52,7 +52,6 @@ struct _EditorSession
@@ -20,10 +20,10 @@ index aa7b729..ba26b56 100644
  };
  
 diff --git a/src/editor-session.c b/src/editor-session.c
-index c15e396..27cf0c6 100644
+index 3cffb49..fca07f1 100644
 --- a/src/editor-session.c
 +++ b/src/editor-session.c
-@@ -1403,8 +1403,6 @@ editor_session_save_async (EditorSession       *self,
+@@ -1380,8 +1380,6 @@ editor_session_save_async (EditorSession       *self,
    g_return_if_fail (EDITOR_IS_SESSION (self));
    g_return_if_fail (!cancellable || G_IS_CANCELLABLE (cancellable));
  
@@ -32,7 +32,7 @@ index c15e396..27cf0c6 100644
    g_variant_builder_init (&builder, G_VARIANT_TYPE ("a{sv}"));
    g_variant_builder_add_parsed (&builder, "{'version', <%u>}", 1);
    add_draft_state (self, &builder);
-@@ -2630,16 +2628,13 @@ _editor_session_mark_dirty (EditorSession *self)
+@@ -2607,16 +2605,13 @@ _editor_session_mark_dirty (EditorSession *self)
  {
    g_return_if_fail (EDITOR_IS_SESSION (self));
  

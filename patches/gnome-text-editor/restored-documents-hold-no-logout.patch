@@ -13,9 +13,10 @@ Author: Mitar
 Forwarded: no
 Last-Update: 2026-11-08
 diff --git a/src/editor-application.c b/src/editor-application.c
+index a06f75e..10b554e 100644
 --- a/src/editor-application.c
 +++ b/src/editor-application.c
-@@ -658,6 +658,9 @@
+@@ -703,6 +703,9 @@ editor_application_shutdown (GApplication *application)
  {
    EditorApplication *self = (EditorApplication *)application;
  
@@ -26,6 +27,7 @@ diff --git a/src/editor-application.c b/src/editor-application.c
    g_clear_object (&self->recoloring);
    g_clear_object (&self->portal);
 diff --git a/src/editor-session.c b/src/editor-session.c
+index 88deebb..387a270 100644
 --- a/src/editor-session.c
 +++ b/src/editor-session.c
 @@ -32,6 +32,7 @@
@@ -36,7 +38,7 @@ diff --git a/src/editor-session.c b/src/editor-session.c
  #define MAX_AUTO_SAVE_TIMEOUT_SECONDS (60*5)
  #define MAX_BOOKMARKS 1000
  #define HUGE_WINDOW 8000
-@@ -1709,6 +1710,9 @@
+@@ -1686,6 +1687,9 @@ editor_session_queue_save (EditorSession       *self,
    state->shutting_down = !!shutting_down;
    state->auto_save = !!auto_save;
  
@@ -46,7 +48,7 @@ diff --git a/src/editor-session.c b/src/editor-session.c
    g_application_hold (state->app);
  
    task = g_task_new (self, cancellable, callback, user_data);
-@@ -1848,6 +1852,62 @@
+@@ -1825,6 +1829,62 @@ editor_session_save_completed_cb (EditorSession *self,
      editor_session_run_save (self, next);
  }
  
@@ -110,9 +112,10 @@ diff --git a/src/editor-session.c b/src/editor-session.c
  editor_session_save_finish (EditorSession  *self,
                              GAsyncResult   *result,
 diff --git a/src/editor-session-private.h b/src/editor-session-private.h
+index 3a7fe3d..1c91959 100644
 --- a/src/editor-session-private.h
 +++ b/src/editor-session-private.h
-@@ -64,6 +64,7 @@
+@@ -64,6 +64,7 @@ struct _EditorSession
    guint               restore_pages : 1;
    guint               can_clear_history : 1;
    guint               saving : 1;
@@ -120,7 +123,7 @@ diff --git a/src/editor-session-private.h b/src/editor-session-private.h
    guint               restoring : 1;
    guint               present_grace : 1;
  };
-@@ -100,5 +101,6 @@
+@@ -99,5 +100,6 @@ void           _editor_session_mark_dirty             (EditorSession  *self);
  void           _editor_session_set_restore_pages      (EditorSession  *self,
                                                         gboolean        restore_pages);
  void           _editor_session_clear_history          (EditorSession  *self);
@@ -128,9 +131,10 @@ diff --git a/src/editor-session-private.h b/src/editor-session-private.h
  
  G_END_DECLS
 diff --git a/src/editor-window.c b/src/editor-window.c
+index 95c0a4b..a03c86d 100644
 --- a/src/editor-window.c
 +++ b/src/editor-window.c
-@@ -1160,6 +1160,7 @@
+@@ -1160,6 +1160,7 @@ modified_to_icon (GBinding     *binding,
  static void
  editor_window_update_inhibit (EditorWindow *self)
  {
@@ -138,7 +142,7 @@ diff --git a/src/editor-window.c b/src/editor-window.c
    gboolean inhibit = FALSE;
    guint n_pages;
  
-@@ -1178,6 +1179,13 @@
+@@ -1178,6 +1179,13 @@ editor_window_update_inhibit (EditorWindow *self)
          }
      }
  

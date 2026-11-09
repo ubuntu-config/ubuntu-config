@@ -10,10 +10,10 @@ Author: Mitar
 Forwarded: https://gitlab.gnome.org/GNOME/gnome-text-editor/-/merge_requests/261
 Last-Update: 2026-11-09
 diff --git a/src/editor-session.c b/src/editor-session.c
-index 36bee4a..c15e396 100644
+index 0397c80..3cffb49 100644
 --- a/src/editor-session.c
 +++ b/src/editor-session.c
-@@ -2630,14 +2630,15 @@ _editor_session_mark_dirty (EditorSession *self)
+@@ -2607,14 +2607,15 @@ _editor_session_mark_dirty (EditorSession *self)
  {
    g_return_if_fail (EDITOR_IS_SESSION (self));
  

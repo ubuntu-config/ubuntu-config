@@ -9,7 +9,7 @@ Author: Mitar
 Forwarded: https://gitlab.gnome.org/GNOME/gnome-text-editor/-/merge_requests/261
 Last-Update: 2026-11-09
 diff --git a/src/editor-session-private.h b/src/editor-session-private.h
-index ba26b56..de459d6 100644
+index 99d9873..6b474ac 100644
 --- a/src/editor-session-private.h
 +++ b/src/editor-session-private.h
 @@ -48,11 +48,14 @@ struct _EditorSession
@@ -28,7 +28,7 @@ index ba26b56..de459d6 100644
  
  EditorSession *_editor_session_new                    (void);
 diff --git a/src/editor-session.c b/src/editor-session.c
-index 27cf0c6..a388567 100644
+index fca07f1..0a53a20 100644
 --- a/src/editor-session.c
 +++ b/src/editor-session.c
 @@ -45,6 +45,8 @@ typedef struct
@@ -40,7 +40,7 @@ index 27cf0c6..a388567 100644
  } EditorSessionSave;
  
  typedef struct
-@@ -1387,21 +1389,26 @@ editor_session_save_draft_cb (GObject      *object,
+@@ -1364,21 +1366,26 @@ editor_session_save_draft_cb (GObject      *object,
                                           g_steal_pointer (&task));
  }
  
@@ -72,7 +72,7 @@ index 27cf0c6..a388567 100644
  
    g_variant_builder_init (&builder, G_VARIANT_TYPE ("a{sv}"));
    g_variant_builder_add_parsed (&builder, "{'version', <%u>}", 1);
-@@ -1441,12 +1448,63 @@ editor_session_save_async (EditorSession       *self,
+@@ -1418,12 +1425,63 @@ editor_session_save_async (EditorSession       *self,
          g_ptr_array_add (state->forgot, g_object_ref (file));
      }
  
@@ -136,7 +136,7 @@ index 27cf0c6..a388567 100644
    drafts_dir = g_build_filename (g_get_user_data_dir (), APP_ID, "drafts", NULL);
    g_mkdir_with_parents (drafts_dir, 0750);
  
-@@ -1486,6 +1544,52 @@ editor_session_save_async (EditorSession       *self,
+@@ -1463,6 +1521,52 @@ editor_session_save_async (EditorSession       *self,
                                           g_steal_pointer (&task));
  }
  
@@ -189,7 +189,7 @@ index 27cf0c6..a388567 100644
  gboolean
  editor_session_save_finish (EditorSession  *self,
                              GAsyncResult   *result,
-@@ -2467,7 +2571,7 @@ editor_session_auto_save_timeout_cb (gpointer user_data)
+@@ -2444,7 +2548,7 @@ editor_session_auto_save_timeout_cb (gpointer user_data)
    self->auto_save_source = 0;
  
    g_debug ("Performing auto-save of session state");

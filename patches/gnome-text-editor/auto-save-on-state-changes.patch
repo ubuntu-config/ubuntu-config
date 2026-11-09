@@ -13,7 +13,7 @@ Author: Mitar
 Forwarded: no
 Last-Update: 2026-11-05
 diff --git a/src/editor-session.c b/src/editor-session.c
-index a388567..601402b 100644
+index 0a53a20..1dcc949 100644
 --- a/src/editor-session.c
 +++ b/src/editor-session.c
 @@ -665,6 +665,27 @@ get_default_size (EditorSession *self,
@@ -91,7 +91,7 @@ index a388567..601402b 100644
    g_signal_emit (self, signals [WINDOW_ADDED], 0, window);
  
    _editor_session_mark_dirty (self);
-@@ -920,6 +981,25 @@ editor_session_add_page (EditorSession *self,
+@@ -897,6 +958,25 @@ editor_session_add_page (EditorSession *self,
                             self,
                             G_CONNECT_SWAPPED);
  
