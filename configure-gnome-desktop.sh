@@ -32,10 +32,10 @@
 # Runs as your own user, because these settings live in your dconf and would land in root's under sudo. Installing
 # packages, the console's boot-time unit, the udev rules, the module options, and the login screen settings need
 # root, as do the rules added to AppArmor profiles and the option added to AppArmor's parser configuration, the
-# drop-ins for GDM's unit and for application scopes, the user service which stops application scopes and its script,
-# the script which starts applications at login once there is a tray, Chromium's flags, its Ctrl+Q extension with the
-# native messaging host and script it uses, the patched Firefox add-on, and the option added to /etc/crypttab, so those
-# parts call sudo themselves and will ask for a password.
+# drop-ins for GDM's unit, for the unit of each user's service manager and for application scopes, the user service
+# which stops application scopes and its script, the script which starts applications at login once there is a tray,
+# Chromium's flags, its Ctrl+Q extension with the native messaging host and script it uses, the patched Firefox add-on,
+# and the option added to /etc/crypttab, so those parts call sudo themselves and will ask for a password.
 
 set -euo pipefail
 
@@ -695,6 +695,11 @@ install_modprobe_blacklist snd-acp-legacy-mach.conf snd_acp_legacy_mach
 if [ "$MODE" = apply ] && [ "$CHANGED" -gt "$MIC_CHANGED" ]; then
   systemctl --user restart wireplumber
 fi
+
+echo "=== locked memory ==="
+# Programs running models on the NPU need more locked memory than the session allows, see the drop-in. Your service
+# manager receives the new limit when it starts again, at the next login after all your sessions have ended.
+install_dropin user@.service.d/50-memlock.conf
 
 echo "=== disk encryption ==="
 # Without the option, systemd tries to close the encrypted device holding the root filesystem during the regular

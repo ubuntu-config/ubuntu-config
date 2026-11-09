@@ -295,7 +295,9 @@ Requirements:
 ### Hardware tweaks
 
 The touchscreen is disabled, the power button light is off, and a held key starts repeating only after a second, in
-the console as well as in GNOME (`udev/`, `systemd/`).
+the console as well as in GNOME (`udev/`, `systemd/`). A program in the session may raise its limit on locked memory as
+far as it needs, as FastFlowLM does to run a model on the NPU, while the default limit stays at 8 MiB
+(`systemd/user@.service.d/`).
 
 ## Additions
 
