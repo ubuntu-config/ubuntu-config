@@ -114,8 +114,12 @@ the source to rebuild Firefox with, unlike Mozilla's own repository (requested i
 [Mozilla bug 2087959](https://bugzilla.mozilla.org/show_bug.cgi?id=2087959)).
 
 `rebuild-patched-packages.sh` rebuilds a package whenever Ubuntu publishes a new version of it or its patches change,
-and publishes the result to a local APT repository. That repository is pinned above the Ubuntu archive, so
-unattended-upgrades or the next ordinary `apt upgrade` installs the patched build. A daily cron job keeps patched
+and publishes the result to a local APT repository. That repository is pinned above the Ubuntu archive, so the next
+ordinary `apt upgrade` installs the patched build. unattended-upgrades installs it only when it would install the
+original version by itself, one from Ubuntu's release or security pockets or from the PPAs of Firefox and Chromium.
+A generated `Package-Blacklist` keeps it from the other packages of the local repository, such as rebuilds of
+Ubuntu's other updates, and from any `.deb` placed there by hand, which `sudo rebuild-patched-packages --refresh`
+publishes. A daily cron job keeps patched
 packages current, running root-owned copies of the script and patches, installed with
 `install-rebuild-patched-packages.sh` (`cron.daily/`). The daily run also mails when a Firefox add-on patched here has
 a new release (see [Container tabs open in the window of their
@@ -135,8 +139,8 @@ headless, with the patched packages, the settings of `configure-gnome-desktop.sh
 driven through a test extension. GitLab CI runs these tests too.
 
 Packages whose vendors publish a `.deb` but no APT repository are published to the same local repository:
-`fetch-vendor-debs.py` downloads the newest version of each daily and verifies it, and unattended-upgrades or the next
-`apt upgrade` upgrades it where it is installed (see
+`fetch-vendor-debs.py` downloads the newest version of each daily and verifies it, and the next `apt upgrade` upgrades
+it where it is installed (see
 [Packages without an APT repository kept up to date](#packages-without-an-apt-repository-kept-up-to-date)).
 
 GNOME Shell extensions are installed from extensions.gnome.org and configured by `configure-gnome-desktop.sh`, with
@@ -310,7 +314,8 @@ Third-party repositories are pinned by hostname, with an allowlist of the packag
 deny for everything else from them, so a vendor repository cannot replace an Ubuntu package by publishing a higher
 version under the same name (`lockdown-apt-sources.sh`). Unattended upgrades are likewise tied to Ubuntu's own
 hosts, so a vendor repository cannot have its packages installed unattended by claiming to be Ubuntu's security
-pocket.
+pocket. The only third-party repositories unattended-upgrades installs from are the PPAs of Firefox and Chromium,
+since most releases of both browsers are security fixes, each matched by the origin Launchpad names after it.
 
 A vendor's new signing key does not arrive with its packages: `apt update` fails for that repository until the key
 in its file in `sources.list.d/` is replaced and the script is applied again.
@@ -319,14 +324,14 @@ in its file in `sources.list.d/` is replaced and the script is applied again.
 
 For packages whose vendors publish a `.deb` but no APT repository, a daily cron job downloads the newest version of
 each into the local APT repository of the patched packages (`fetch-vendor-debs.py`, `install-fetch-vendor-debs.sh`,
-`cron.daily/`), from which unattended-upgrades upgrades the installed ones like any other package. One which is not
-installed is only downloaded, ready for `apt install`. The script configures the packages to fetch, each from one
-of two kinds of sources: a fixed URL which redirects to the newest `.deb`, signed by the vendor and verified
-against the vendor's key kept in `vendor-debs/`, or a GitHub release asset, verified against the SHA256 GitHub
-publishes for it. A version lower than the one already in the repository is never published, since the repository's
-pin would make APT downgrade to it, and a download has to carry the package name it is fetched as, so that a vendor
-cannot replace another package through it. When a vendor changes its signing key, the daily fetch fails, naming the
-new key, until the key in `vendor-debs/` is replaced and installed again.
+`cron.daily/`), from which the next `apt upgrade` upgrades the installed ones, while unattended-upgrades is kept from
+them. One which is not installed is only downloaded, ready for `apt install`. The script configures the packages to
+fetch, each from one of two kinds of sources: a fixed URL which redirects to the newest `.deb`, signed by the vendor
+and verified against the vendor's key kept in `vendor-debs/`, or a GitHub release asset, verified against the SHA256
+GitHub publishes for it. A version lower than the one already in the repository is never published, since the
+repository's pin would make APT downgrade to it, and a download has to carry the package name it is fetched as, so
+that a vendor cannot replace another package through it. When a vendor changes its signing key, the daily fetch
+fails, naming the new key, until the key in `vendor-debs/` is replaced and installed again.
 
 ### Daily mail of failures and errors
 
@@ -861,7 +866,7 @@ Run each script first without `--apply` to see what it would change. The general
    ```
 
 4. Download the packages which have no APT repository into the local repository. The installed ones are then upgraded
-   by unattended-upgrades or `apt upgrade`, and the others can be installed with `apt install`:
+   by the next `apt upgrade`, and the others can be installed with `apt install`:
 
    ```sh
    ./install-fetch-vendor-debs.sh --apply

@@ -5,8 +5,9 @@
 # For each package in the patch directory, compare the version Ubuntu currently offers against the version last
 # built here, and the patches against the ones that build was made with. When either has moved on, fetch the
 # source, apply the local patches on top of the ones the package already carries, build it, and publish the result
-# to the local apt repository. Nothing is installed: the rebuilt package simply becomes the candidate, so
-# unattended-upgrades or the next ordinary apt upgrade picks it up.
+# to the local apt repository. Nothing is installed: the rebuilt package simply becomes the candidate, so the next
+# ordinary apt upgrade installs it, and unattended-upgrades does too when it would install the version the package
+# was rebuilt from, see Unattended upgrades below.
 #
 # This only works because the local repository outranks the archive (Pin-Priority 1001, see
 # lockdown-apt-sources.sh), for unattended-upgrades too, which install-rebuild-patched-packages.sh allows to install
@@ -24,6 +25,7 @@
 #   ./rebuild-patched-packages.sh --status [package...]               show recorded state for each package
 #   ./rebuild-patched-packages.sh --prereqs [package...]              list everything still to be installed, and the build chroot
 #   ./rebuild-patched-packages.sh --prepare=DIR [package...]          fetch each source into DIR/<package> with its patches applied
+#   sudo ./rebuild-patched-packages.sh --refresh                      regenerate the holds and the index of the local repository
 #
 # A package is named by its directory under patches/, which is its source package name. Naming packages limits
 # the run to them, and without names every package there is included.
@@ -36,6 +38,9 @@
 #
 # Only one --build runs at a time. A second one waits until the first ends, and then rebuilds only what the first
 # left out of date.
+#
+# --refresh is for publishing a package to the local repository from elsewhere, as fetch-vendor-debs does. It waits
+# for a running --build like a second --build does, and prints nothing when it succeeds.
 #
 # --prepare is for building elsewhere, such as in CI, without the local repository, the build user and the chroot.
 # It reads the patches from the repository it runs from, fetches the source of each package into DIR/<package>,
@@ -144,6 +149,27 @@
 # every build. The README is not part of it, so editing only the documentation does not cause a rebuild.
 #
 #
+# Unattended upgrades
+# -------------------
+# install-rebuild-patched-packages.sh lets unattended-upgrades install from the local repository, and it has to. For
+# a repository it may not install from, unattended-upgrades falls back to the newest version in one it may, which for
+# a patched package is the unpatched build the rebuild replaces.
+#
+# A rebuild is still installed unattended only when unattended-upgrades would install the version it was rebuilt
+# from by itself: a version from Ubuntu's release or security pockets, or from a PPA lockdown-apt-sources.sh allows.
+# Every other package in the local repository is held, so that the next apt upgrade installs it instead: a rebuild of
+# a version from -updates, a package fetch-vendor-debs downloads, and any .deb placed there by hand. Only a package
+# this script built and recorded counts as a rebuild, whatever the version of another one looks like. A .deb placed
+# there by hand is published with --refresh, which holds it before apt sees it in the index. The holds are
+# Unattended-Upgrade::Package-Blacklist entries in HOLDS_FILE, which unattended-upgrades turns into pins keeping a
+# held package at its installed version, so that it does not install Ubuntu's unpatched build of it either.
+#
+# The decision is made by the code of unattended-upgrades itself, which this script loads, so it follows the
+# configuration unattended-upgrades reads. --build and --refresh write the holds before the index of the local
+# repository, so that unattended-upgrades never sees a package before its hold. --status shows the decision for each
+# package.
+#
+#
 # Firefox add-ons
 # ---------------
 # The patched Firefox add-ons of firefox-addons/ are built and installed by configure-gnome-desktop.sh, each from the
@@ -165,6 +191,7 @@ LOCAL_REPO=/usr/local/lib/debs
 STATE_DIR=/var/lib/patched-packages
 LOG_DIR=/var/log/patched-packages
 LOCK_FILE=/run/rebuild-patched-packages.lock
+HOLDS_FILE=/etc/apt/apt.conf.d/53unattended-upgrades-local-holds
 SOURCES_DIR=/etc/apt/sources.list.d
 BUILD_USER=sbuild
 BUILD_ROOT=/tmp
@@ -192,6 +219,7 @@ for arg in "$@"; do
     --status)  MODE=status ;;
     --prereqs) MODE=prereqs ;;
     --check)   MODE=check ;;
+    --refresh) MODE=refresh ;;
     --force)   FORCE=yes ;;
     --prepare=*) MODE=prepare; PREPARE_DIR=${arg#--prepare=} ;;
     -h|--help) awk 'NR>1 && !/^#/{exit} NR>1{sub(/^# ?/, ""); print}' "$0"; exit 0 ;;
@@ -801,6 +829,130 @@ refresh_repo() {
     || error "the index of the local repository is regenerated, but apt sees it only after its next successful update"
 }
 
+# Decides which packages of the local repository unattended-upgrades may install, see Unattended upgrades above.
+# Prints a line for each source package rebuilt there, with tabs between its name, the version it was rebuilt from,
+# "unattended" or "held", and the repositories offering that version. With "write" as the argument it also writes
+# HOLDS_FILE, replacing it only when its content changes. Prints and writes nothing when unattended-upgrades is not
+# installed, and fails when the decision cannot be made.
+local_holds() {
+  python3 -I -B - "$1" "$LOCAL_REPO" "$VERSION_SUFFIX" "$HOLDS_FILE" "$PATCH_DIR" "$STATE_DIR" <<'PY'
+import importlib.machinery, importlib.util, os, re, sys
+import apt, apt_inst, apt_pkg
+
+mode, repo, suffix, holds_file, patch_dir, state_dir = sys.argv[1:7]
+script = "/usr/bin/unattended-upgrade"
+if not os.path.exists(script):
+    sys.exit(0)
+
+# unattended-upgrades is a script, but importing it runs none of it, and its own functions decide which origins it
+# installs from, so the decision follows its configuration exactly.
+loader = importlib.machinery.SourceFileLoader("unattended_upgrade", script)
+uu = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(uu)
+allowed = uu.get_allowed_origins()
+cache = apt.Cache()
+
+rebuilt = {}
+held = set()
+rebuild_version = re.compile("(.+)" + re.escape(suffix) + "[0-9]+")
+for name in sorted(os.listdir(repo)):
+    # Files starting with a dot are ones being written, which apt does not see either.
+    if name.startswith(".") or not name.endswith(".deb"):
+        continue
+    control = apt_pkg.TagSection(apt_inst.DebFile(os.path.join(repo, name)).control.extractdata("control").decode())
+    name = (control.get("Source") or control["Package"]).split()[0]
+    match = rebuild_version.fullmatch(control["Version"])
+    # Only a package this script built counts as a rebuild: its source has patches, and it was rebuilt from the
+    # version recorded for that source. Any other .deb is held, one placed in the repository by hand too, whatever
+    # its version looks like.
+    try:
+        with open(os.path.join(state_dir, name + ".built")) as file:
+            recorded = file.read().strip()
+    except FileNotFoundError:
+        recorded = None
+    if not match or match.group(1) != recorded or not os.path.isfile(os.path.join(patch_dir, name, "series")):
+        held.add(control["Package"])
+        continue
+    source = rebuilt.setdefault(name, {"bases": set(), "packages": set()})
+    source["bases"].add(match.group(1))
+    source["packages"].add(control["Package"])
+
+lines = []
+for source, info in sorted(rebuilt.items()):
+    unattended = True
+    for base in sorted(info["bases"]):
+        # The local repository and the status of dpkg have no site, and unattended-upgrades allows both, so only
+        # origins with a site say where the version comes from.
+        origins = [o for p in sorted(info["packages"]) if p in cache for v in cache[p].versions if v.version == base
+                   for o in v.origins if o.site]
+        allowed_base = any(uu.is_allowed_origin(o, allowed) for o in origins)
+        unattended = unattended and allowed_base
+        where = ", ".join(sorted({"%s (%s)" % (o.archive, o.site) for o in origins})) or "no repository"
+        lines.append("\t".join([source, base, "unattended" if allowed_base else "held", where]))
+    # The binary packages of a source are upgraded together, so they are held together too.
+    if not unattended:
+        held |= info["packages"]
+
+if mode == "write":
+    # A name in the option is a regular expression matched from the start of a package name, so it ends with $, and
+    # the + and . which Debian package names can contain are escaped. apt passes the backslash on as it is.
+    entries = "".join('\t"%s$";\n' % re.sub(r"([+.])", r"\\\1", p) for p in sorted(held))
+    header = [
+        "Written by rebuild-patched-packages, which rewrites it whole, so edits made here are lost.",
+        "",
+        "The packages of the local repository " + repo + " which unattended-upgrades does not install, so",
+        "that the next apt upgrade installs them instead: every package there except the patched rebuilds of",
+        "versions which unattended-upgrades would install by itself. See Unattended upgrades in",
+        "rebuild-patched-packages.",
+    ]
+    text = "".join(("// " + line).rstrip() + "\n" for line in header)
+    text += "Unattended-Upgrade::Package-Blacklist {\n" + entries + "};\n"
+    try:
+        with open(holds_file) as file:
+            current = file.read()
+    except FileNotFoundError:
+        current = None
+    if text != current:
+        # Written outside apt.conf.d, which apt would read a partial file from, and renamed into place.
+        directory, name = os.path.split(holds_file)
+        temporary = os.path.join(os.path.dirname(directory), "." + name + ".new")
+        with open(temporary, "w") as file:
+            file.write(text)
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, holds_file)
+
+print("\n".join(lines))
+PY
+}
+
+# Prints, for each source package named after the verdicts local_holds printed, whether unattended-upgrades installs
+# its rebuild or holds it.
+report_holds() {
+  local verdicts=$1 src base verdict where
+  shift
+  while IFS=$'\t' read -r src base verdict where; do
+    [[ " $* " == *" $src "* ]] || continue
+    if [ "$verdict" = unattended ]; then
+      echo "  $src: unattended-upgrades installs it, $base comes from $where"
+    else
+      echo "  $src: held from unattended-upgrades, $base comes from $where"
+    fi
+  done <<< "$verdicts"
+}
+
+# Waits until no other --build or --refresh runs. Two builds at once would share the build user, the chroot tarball,
+# /tmp, the state and the local repository, and each kills every process of the build user after each of its builds,
+# so the build of the other too. Waiting before reading which packages are out of date lets a second run see what the
+# first one rebuilt. The lock is released when the script exits and its descriptor 9 is closed. The message is
+# printed only to a terminal, so that a daily run which waits sends no mail.
+wait_for_lock() {
+  exec 9>>"$LOCK_FILE" || fail "could not open the lock file $LOCK_FILE"
+  if ! flock -n 9; then
+    [ -t 2 ] && echo "rebuild-patched-packages: another --build or --refresh is running, waiting until it ends" >&2
+    flock 9 || fail "could not lock $LOCK_FILE"
+  fi
+}
+
 prereq_report=$(check_prereqs)
 
 case "$MODE" in
@@ -823,13 +975,16 @@ case "$MODE" in
     ;;
 
   status)
-    printf '%-20s %-22s %-22s %s\n' "package" "offered" "built from" "state"
-    printf -- '-%.0s' {1..80}; echo
+    verdicts=$(local_holds report) || fail "could not decide which rebuilds unattended-upgrades installs"
+    printf '%-20s %-22s %-22s %-11s %s\n' "package" "offered" "built from" "unattended" "state"
+    printf -- '-%.0s' {1..92}; echo
     for src in $(selected_packages); do
       off=$(official_version "$src"); blt=$(built_version "$src")
       if [ -z "$off" ]; then st="NO SOURCE (deb-src missing?)"
       else st=$(rebuild_reason "$src" "$off" "$blt"); st=${st:-current}; fi
-      printf '%-20s %-22s %-22s %s\n' "$src" "${off:-?}" "${blt:--}" "$st"
+      unattended=$(awk -F'\t' -v src="$src" '$1 == src { print ($3 == "unattended" ? "yes" : "held") }' \
+        <<< "$verdicts" | sort -u | head -1)
+      printf '%-20s %-22s %-22s %-11s %s\n' "$src" "${off:-?}" "${blt:--}" "${unattended:--}" "$st"
     done
     ;;
 
@@ -865,17 +1020,7 @@ case "$MODE" in
 
   build)
     [ "$(id -u)" -eq 0 ] || fail "--build needs root, re-run with sudo"
-
-    # Two builds at once would share the build user, the chroot tarball, /tmp, the state and the local repository,
-    # and each kills every process of the build user after each of its builds, so the build of the other too. A
-    # second run therefore waits here, before it reads which packages are out of date, so that it sees what the first
-    # one rebuilt. The lock is released when the script exits and its descriptor 9 is closed. The message is printed
-    # only to a terminal, so that a daily run which waits sends no mail.
-    exec 9>>"$LOCK_FILE" || fail "could not open the lock file $LOCK_FILE"
-    if ! flock -n 9; then
-      [ -t 2 ] && echo "rebuild-patched-packages: another --build is running, waiting until it ends" >&2
-      flock 9 || fail "could not lock $LOCK_FILE"
-    fi
+    wait_for_lock
 
     # Before any version is read, because a missing source index makes every package look current.
     ensure_deb_src apply
@@ -892,7 +1037,7 @@ case "$MODE" in
     drift=$(report_install_drift)
     [ -n "$drift" ] && { echo "installed copies differ from the repository, building from the installed ones:"; echo "$drift"; }
 
-    built=0
+    rebuilt=()
     for src in $(selected_packages); do
       off=$(official_version "$src")
       [ -n "$off" ] || fail "$src: cannot determine the version to rebuild, is deb-src enabled for its repository?"
@@ -904,16 +1049,28 @@ case "$MODE" in
       [ -z "$reason" ] && [ "$FORCE" = yes ] && reason="forced"
       if [ -n "$reason" ]; then
         rebuild "$src" "$off" "$reason"
-        built=$((built+1))
+        rebuilt+=("$src")
       fi
     done
 
-    if [ "$built" -gt 0 ]; then
+    # Also when nothing was rebuilt, so that the holds follow changes to what unattended-upgrades allows.
+    verdicts=$(local_holds write) || fail "could not write the unattended-upgrades holds $HOLDS_FILE"
+    if [ "${#rebuilt[@]}" -gt 0 ]; then
       refresh_repo
       echo
-      echo "Rebuilt packages are now the apt candidate. unattended-upgrades or the next apt upgrade installs them."
+      echo "Rebuilt packages are now the apt candidate, which the next apt upgrade installs:"
+      report_holds "$verdicts" "${rebuilt[@]}"
     fi
     [ "${#PACKAGES[@]}" -eq 0 ] && report_addon_releases build
+    [ "$FAILED" -eq 0 ] || exit 1
+    ;;
+
+  refresh)
+    [ "$(id -u)" -eq 0 ] || fail "--refresh needs root, re-run with sudo"
+    wait_for_lock
+    [ -d "$LOCAL_REPO" ] || fail "local repository $LOCAL_REPO does not exist"
+    local_holds write >/dev/null || fail "could not write the unattended-upgrades holds $HOLDS_FILE"
+    refresh_repo
     [ "$FAILED" -eq 0 ] || exit 1
     ;;
 

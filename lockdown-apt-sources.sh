@@ -6,7 +6,8 @@
 # Each third-party origin has an allowlist of the packages actually in use, followed by a default-deny for
 # everything else from that origin. A denied version is never installable whatever its version number, so a vendor
 # repository cannot replace a core Ubuntu package by publishing a higher version under the same name.
-# unattended-upgrades is likewise restricted to Ubuntu's own hosts, see Unattended upgrades below.
+# unattended-upgrades is likewise restricted to Ubuntu's own hosts and the PPAs of the two browsers, see Unattended
+# upgrades below.
 #
 #
 # Usage
@@ -65,6 +66,11 @@
 # site it has to come from. 50unattended-upgrades belongs to the unattended-upgrades package, so an upgrade of that
 # package can change which origins it allows. The dry-run and --apply report when that set no longer matches
 # UU_ORIGINS, and when any origin is still allowed without a site. Update UU_ORIGINS to match and --apply again.
+#
+# The file also allows the PPAs in UU_PPAS: the Mozilla Team's, from which Firefox is rebuilt, and xtradeb's, from
+# which Chromium is installed. Most releases of both browsers are security fixes, so they are installed unattended
+# like Ubuntu's security updates. Launchpad writes the Release files of PPAs and names each Origin after its PPA, so
+# the Origin together with the site matches exactly one PPA. The pins above still limit each PPA to its browser.
 #
 #
 # Adding a package from a repository already configured here
@@ -128,6 +134,11 @@ ${distro_id}:${distro_codename}                        *.ubuntu.com
 ${distro_id}:${distro_codename}-security               *.ubuntu.com
 ${distro_id}ESMApps:${distro_codename}-apps-security   esm.ubuntu.com
 ${distro_id}ESM:${distro_codename}-infra-security      esm.ubuntu.com
+'
+# The PPAs unattended-upgrades may install from as well, in the same form. 50unattended-upgrades allows neither.
+UU_PPAS='
+LP-PPA-mozillateam:${distro_codename}                   ppa.launchpadcontent.net
+LP-PPA-xtradeb-apps:${distro_codename}                  ppa.launchpadcontent.net
 '
 REPO_DIR=$(dirname "$(readlink -f "$0")")
 # The sources of the third-party repositories: deb822 files kept in this repository, each with its signing key
@@ -510,6 +521,9 @@ generate_uu() {
 // apt update asked. The lockdown pins still apply, which limits that to the packages allowed from it. The allowed origins of
 // 50unattended-upgrades are cleared here and restated with the site each has to come from, the host of the source,
 // which comes from our own configuration and which a repository cannot choose.
+//
+// The PPAs of Firefox and Chromium are allowed too, because most releases of both browsers are security fixes.
+// Launchpad names the Origin of each PPA after it, so with the site the pattern matches exactly that PPA.
 #clear Unattended-Upgrade::Allowed-Origins;
 Unattended-Upgrade::Origins-Pattern {
 UU_EOF
@@ -517,7 +531,7 @@ UU_EOF
   while read -r entry site; do
     [ -n "$entry" ] || continue
     printf '\t"origin=%s,archive=%s,site=%s";\n' "${entry%%:*}" "${entry#*:}" "$site"
-  done <<< "$UU_ORIGINS"
+  done <<< "$UU_ORIGINS$UU_PPAS"
   echo "};"
 }
 

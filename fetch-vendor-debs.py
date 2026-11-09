@@ -3,9 +3,11 @@
 
 For each package in PACKAGES below, find the newest version its vendor offers, and when it is not yet in the local
 repository /usr/local/lib/debs, download it, verify it, publish it there under its Debian file name, remove the older
-versions of the same package from there, and regenerate the repository's index. Nothing is installed: the downloaded
-package simply becomes the candidate, so unattended-upgrades or the next ordinary apt upgrade upgrades it where it is
-installed. A package which is not installed stays so until it is installed by hand, with apt install.
+versions of the same package from there, and let rebuild-patched-packages --refresh regenerate the repository's index
+and the holds of unattended-upgrades. Nothing is installed: the downloaded package simply becomes the candidate, so
+the next ordinary apt upgrade upgrades it where it is installed. unattended-upgrades does not, because it holds every
+package in the local repository except patched rebuilds, see Unattended upgrades in rebuild-patched-packages.sh. A
+package which is not installed stays so until it is installed by hand, with apt install.
 
 The local repository is pinned at 1001 by lockdown-apt-sources.sh, which makes apt downgrade an installed package to
 the version there. A version lower than the one already in the repository is therefore never published, it is only
@@ -50,7 +52,8 @@ have to be as trusted as root itself. Root therefore runs only root-owned copies
 install-fetch-vendor-debs.sh, never the repository itself, which your user can change. Run from the repository, it
 reports each installed copy that differs from the repository.
 
-The local repository itself is set up by install-rebuild-patched-packages.sh.
+The local repository itself is set up by install-rebuild-patched-packages.sh, which also installs
+rebuild-patched-packages, the script regenerating the repository's index.
 
 
 Adding a package
@@ -65,7 +68,6 @@ import base64
 import collections
 import filecmp
 import functools
-import gzip
 import hashlib
 import json
 import os
@@ -87,6 +89,8 @@ STATE_FILE = f'{STATE_DIR}/state.json'
 KEY_DIR = '/usr/local/share/vendor-debs'
 INSTALLED_SCRIPT = '/usr/local/bin/fetch-vendor-debs'
 CRON_JOB = '/etc/cron.daily/fetch-vendor-debs'
+# The installed copy, as for any script root runs.
+REFRESH_COMMAND = ['/usr/local/bin/rebuild-patched-packages', '--refresh']
 
 SCRIPT = os.path.realpath(__file__)
 REPO_DIR = os.path.dirname(SCRIPT)
@@ -98,7 +102,7 @@ CHUNK_BYTES = 1024 * 1024
 SIGNATURE_MEMBER = '_gpgbuilder'
 # The largest _gpgbuilder accepted. It holds three lines of checksums and a signature, so anything near this is not one.
 SIGNATURE_MAX_BYTES = 64 * 1024
-REQUIRED_COMMANDS = ['dpkg', 'dpkg-deb', 'dpkg-scanpackages', 'gpgv', 'apt-get']
+REQUIRED_COMMANDS = ['dpkg', 'dpkg-deb', 'gpgv']
 
 
 def os_release(field):
@@ -481,19 +485,6 @@ def publish(package, source, offer, state):
     return f'{package}: published {version} as {name}' + (f', removed {", ".join(removed)}' if removed else '')
 
 
-def refresh_index():
-    """Regenerates the index of the local repository. Raises FetchError when it cannot."""
-    output = subprocess.run(['dpkg-scanpackages', '.', '/dev/null'], cwd=LOCAL_REPO, capture_output=True)
-    if output.returncode != 0:
-        raise FetchError(f'dpkg-scanpackages failed: {output.stderr.decode(errors="replace").strip()}')
-    # Written under a name starting with a dot and renamed into place, so that apt never reads a partial index.
-    temporary = os.path.join(LOCAL_REPO, '.Packages.gz.new')
-    with open(temporary, 'wb') as file:
-        file.write(gzip.compress(output.stdout, compresslevel=9, mtime=0))
-    os.chmod(temporary, 0o644)
-    os.replace(temporary, os.path.join(LOCAL_REPO, 'Packages.gz'))
-
-
 def install_drift():
     """Returns a line for each installed copy which differs from the repository this runs from.
 
@@ -546,12 +537,13 @@ def fetch(packages):
         sys.exit('fetch-vendor-debs: --fetch requires root, re-run with sudo')
     missing = [command for command in REQUIRED_COMMANDS if shutil.which(command) is None]
     if missing:
-        log(syslog.LOG_ERR, f'cannot fetch, these commands are missing: {" ".join(missing)} (dpkg-scanpackages comes '
-                            f'with the dpkg-dev package)')
+        log(syslog.LOG_ERR, f'cannot fetch, these commands are missing: {" ".join(missing)}')
         return 1
-    if not os.path.isdir(LOCAL_REPO):
-        log(syslog.LOG_ERR, f'the local repository {LOCAL_REPO} does not exist, set it up with '
-                            f'install-rebuild-patched-packages.sh')
+    # Both are checked before anything is published, since a package published without them would be in the local
+    # repository without being in its index and without its hold.
+    if not os.path.isdir(LOCAL_REPO) or not os.access(REFRESH_COMMAND[0], os.X_OK):
+        log(syslog.LOG_ERR, f'the local repository {LOCAL_REPO} or {REFRESH_COMMAND[0]} does not exist, set them up '
+                            f'with install-rebuild-patched-packages.sh')
         return 1
     drift = install_drift()
     if drift:
@@ -578,21 +570,15 @@ def fetch(packages):
 
     if published:
         print('\n'.join(published))
-        try:
-            refresh_index()
-        except (FetchError, OSError) as error:
-            log(syslog.LOG_ERR, f'published packages are not in the index of the local repository yet: {error}')
+        sys.stdout.flush()
+        # Its own errors go to stderr and syslog, so only that it failed is added here.
+        result = subprocess.run(REFRESH_COMMAND)
+        if result.returncode != 0:
+            log(syslog.LOG_ERR, f'{" ".join(REFRESH_COMMAND)} failed with exit status {result.returncode}')
             return 1
-        # A failed update does not undo the index, which apt reads at its next update, so the run continues.
-        try:
-            run(['apt-get', 'update', '-qq'])
-        except FetchError as error:
-            log(syslog.LOG_ERR, f'the index of the local repository is regenerated, but apt sees it only after its '
-                                f'next successful update: {error}')
-            failed = True
         print()
-        print('Downloaded packages are now the apt candidate. unattended-upgrades or the next apt upgrade upgrades the '
-              'installed ones.')
+        print('Downloaded packages are now the apt candidate. The next apt upgrade upgrades the installed ones, which '
+              'unattended-upgrades holds.')
     return 1 if failed else 0
 
 
