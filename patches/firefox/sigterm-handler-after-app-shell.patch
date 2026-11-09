@@ -15,10 +15,10 @@ Forwarded: https://phabricator.services.mozilla.com/D340638
 Last-Update: 2026-11-09
 ---
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
-index 513d100..e9a9cde 100644
+index 2893f3d..c125a71 100644
 --- a/toolkit/xre/nsAppRunner.cpp
 +++ b/toolkit/xre/nsAppRunner.cpp
-@@ -5966,9 +5966,6 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
+@@ -6000,9 +6000,6 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
      if (IsWaylandEnabled()) {
        (void)WaylandDisplayGet();
      }
@@ -28,7 +28,7 @@ index 513d100..e9a9cde 100644
  #endif
    }
  
-@@ -6387,6 +6384,14 @@ nsresult XREMain::XRE_mainRun() {
+@@ -6421,6 +6418,14 @@ nsresult XREMain::XRE_mainRun() {
          g_unsetenv(name.get());
        }
        nsAppShell::InitSessionRestore();
@@ -41,13 +41,13 @@ index 513d100..e9a9cde 100644
 +        nsAppShell::InstallTermSignalHandler();
 +      }
  #endif
-
+ 
  #ifdef XP_MACOSX
 diff --git a/widget/gtk/nsAppShell.cpp b/widget/gtk/nsAppShell.cpp
-index 789db98..513edbd 100644
+index 0103af5..b94d486 100644
 --- a/widget/gtk/nsAppShell.cpp
 +++ b/widget/gtk/nsAppShell.cpp
-@@ -435,12 +435,22 @@ void nsAppShell::TermSignalHandler(int signo) {
+@@ -436,12 +436,22 @@ void nsAppShell::TermSignalHandler(int signo) {
      NS_WARNING("Wrong signal!");
      return;
    }
@@ -58,7 +58,7 @@ index 789db98..513edbd 100644
 +  }
    sAppShell->ScheduleQuitEvent();
  }
-
+ 
  void nsAppShell::InstallTermSignalHandler() {
 -  if (!XRE_IsParentProcess() || PR_GetEnv("MOZ_DISABLE_SIG_HANDLER") ||
 -      !sAppShell) {
@@ -71,4 +71,4 @@ index 789db98..513edbd 100644
 +  if (!sAppShell) {
      return;
    }
-
+ 
