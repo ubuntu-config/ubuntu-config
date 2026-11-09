@@ -3,8 +3,8 @@
 # Install rebuild-patched-packages.sh, its patches and its daily cron job from this repository as the root-owned
 # copies that root runs, and give the sbuild user its builds run as the subordinate ids building in unshare mode
 # needs. Also set up the local repository the rebuilds are published to, let unattended-upgrades install from it,
-# and let /tmp, where builds run, hold as many files as a Firefox build needs. Only a file which differs from its
-# installed copy is replaced.
+# let /tmp, where builds run, hold as many files as a Firefox build needs, and start the daily cron jobs at 05:00.
+# Only a file which differs from its installed copy is replaced.
 #
 #   rebuild-patched-packages.sh                         ->  /usr/local/bin/rebuild-patched-packages
 #   patches/                                            ->  /usr/local/share/patched-packages
@@ -12,6 +12,7 @@
 #   sources.list.d/local.list                           ->  /etc/apt/sources.list.d/local.list
 #   apt.conf.d/52unattended-upgrades-local-repository   ->  /etc/apt/apt.conf.d/52unattended-upgrades-local-repository
 #   systemd/tmp.mount.d/50-nr-inodes.conf               ->  /etc/systemd/system/tmp.mount.d/50-nr-inodes.conf
+#   systemd/anacron.timer.d/50-start-at-5.conf          ->  /etc/systemd/system/anacron.timer.d/50-start-at-5.conf
 #
 # See Installing in rebuild-patched-packages.sh for why root does not run the repository directly.
 #
@@ -122,6 +123,21 @@ if [ -n "$have" ] && [ "$have" -lt "$(numfmt --from=iec "${want^^}")" ]; then
   CHANGED=$((CHANGED+1))
   if [ "$MODE" = apply ]; then
     sudo mount -o remount,nr_inodes="$want" /tmp
+  fi
+fi
+
+echo "=== anacron.timer, which starts the daily cron jobs ==="
+# The drop-in adds a run at 05:00, see its comment. The timer is restarted so that it schedules its next run with the
+# added trigger. anacron runs the daily jobs at most once a day, so a run the restart starts does nothing new.
+ANACRON_DROPIN_SRC=$REPO_DIR/systemd/anacron.timer.d/50-start-at-5.conf
+ANACRON_DROPIN_DST=/etc/systemd/system/anacron.timer.d/50-start-at-5.conf
+if ! cmp -s "$ANACRON_DROPIN_SRC" "$ANACRON_DROPIN_DST"; then
+  echo "  install $ANACRON_DROPIN_DST"
+  CHANGED=$((CHANGED+1))
+  if [ "$MODE" = apply ]; then
+    sudo install -D -o root -g root -m 644 "$ANACRON_DROPIN_SRC" "$ANACRON_DROPIN_DST"
+    sudo systemctl daemon-reload
+    sudo systemctl restart anacron.timer
   fi
 fi
 

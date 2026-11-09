@@ -115,13 +115,15 @@ the source to rebuild Firefox with, unlike Mozilla's own repository (requested i
 change, and publishes the result to a local APT repository. That repository is pinned above the Ubuntu archive, so
 unattended-upgrades or the next ordinary `apt upgrade` installs the patched build. A daily cron job keeps patched
 packages current, running root-owned copies of the script and patches, installed with
-`install-rebuild-patched-packages.sh` (`cron.daily/`). Packages are built the way Ubuntu builds its own packages,
-with sbuild in a throwaway chroot without network access, with build dependencies installed only inside it. Its
-unshare mode needs no root even to set up the chroot, so everything runs as an unprivileged system user, and a
-package's build scripts and test suite cannot change the system. Builds run in `/tmp`, whose limit on the number
-of files is raised, since a Firefox build holds more files there than systemd's default allows
-(`systemd/tmp.mount.d/`). GitLab CI builds the patched packages too and runs the tests in `tests/<source-package>/`
-against them (`.gitlab-ci.yml`).
+`install-rebuild-patched-packages.sh` (`cron.daily/`). The daily cron jobs start at 05:00, after the daily
+measurement of cooling and performance at 04:00 and usually early enough for unattended-upgrades, which runs between
+06:00 and 07:00, to install a rebuilt package the same morning (`systemd/anacron.timer.d/`). Packages are built the
+way Ubuntu builds its own packages, with sbuild in a throwaway chroot without network access, with build
+dependencies installed only inside it. Its unshare mode needs no root even to set up the chroot, so everything runs
+as an unprivileged system user, and a package's build scripts and test suite cannot change the system. Builds run in
+`/tmp`, whose limit on the number of files is raised, since a Firefox build holds more files there than systemd's
+default allows (`systemd/tmp.mount.d/`). GitLab CI builds the patched packages too and runs the tests in
+`tests/<source-package>/` against them (`.gitlab-ci.yml`).
 
 Tests which require a whole desktop, such as windows returning to their workspaces after logging out and in, or the
 logout dialog, run in a GNOME session in a container (`tests/session/`): the real gnome-session and GNOME Shell,
