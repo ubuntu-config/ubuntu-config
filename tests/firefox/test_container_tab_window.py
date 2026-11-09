@@ -45,7 +45,9 @@ def run(m, body):
 
 
 def main():
-    firefox, out = sys.argv[1:3]
+    firefox = sys.argv[1]
+    # Marionette installs an add-on only from an absolute path, and the add-on is built into OUT_DIR.
+    out = os.path.abspath(sys.argv[2])
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(out)
     if len(sys.argv) > 3:
