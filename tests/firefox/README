@@ -35,6 +35,10 @@ Session restore: run-session.sh and driver.py
                        as a tab of the first restored window
       startup-url-tab  like startup-url, with external links opening in tabs, as by default; the URL opens as a
                        tab of the first restored window, with and without the patches
+      startup-restore-crash, startup-url-crash
+                       like startup-restore and startup-url, but the first run is killed instead of quitting, so
+                       the second one recovers from a crash, with crash recovery enabled as by default; the results
+                       have to be the same
 
     Each window of the first run shows a page of its own, and the second run starts with an activation token in
     DESKTOP_STARTUP_ID and XDG_ACTIVATION_TOKEN, as a launcher passes it. With the patches, the first run reports 3
@@ -53,12 +57,14 @@ Session restore: run-session.sh and driver.py
     reports it as its active window. startup-no-ids prints both without checking them: its restored windows have no
     IDs, so they wait for the end of the session restore like the new window and are shown right after it, and mutter
     gives the focus to the last one it shows. This happens only at the first start of a profile saved before the
-    patches. In menu-restore the token is passed with the window Firefox starts with. Each run exits with status 0.
-    The script then prints "RESULT: OK" and exits with 0. A value which differs is marked with FAIL, and the script
-    exits with 1. With ubuntu:GNOME, an unpatched Firefox restores its windows without session management, so the
-    checks of windows restored by the compositor and of the window given the ID above fail, and without
-    session-restore-launch-window.patch and wayland-launch-activation-token.patch also those of the new window and the
-    token. The session requests are in the WAYLAND_DEBUG output of each run in the output directory:
+    patches. In menu-restore the token is passed with the window Firefox starts with. Each run exits with status 0,
+    except the first run of startup-restore-crash and startup-url-crash, which has to have left only the recovery file
+    of the session store, sessionstore-backups/recovery.jsonlz4, when it is killed. The script then prints "RESULT:
+    OK" and exits with 0. A value which differs is marked with FAIL, and the script exits with 1. With ubuntu:GNOME,
+    an unpatched Firefox restores its windows without session management, so the checks of windows restored by the
+    compositor and of the window given the ID above fail, and without session-restore-launch-window.patch and
+    wayland-launch-activation-token.patch also those of the new window and the token. The session requests are in the
+    WAYLAND_DEBUG output of each run in the output directory:
 
       grep -h -o -E '(add|restore)_toplevel\([^)]*"[^"]*"|toplevel_session_v1#[0-9]+\.restored\(\)|activate\("[^"]*", wl_surface#[0-9]+\)' /tmp/session-test/run*.log
 

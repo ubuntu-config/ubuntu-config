@@ -19,12 +19,16 @@ SCENARIO is one of:
                    window
   startup-url-tab  like startup-url, with external links opening in a tab as by default; the URL has to open as
                    a tab of the first restored window, and no window may receive the token
+  startup-restore-crash, startup-url-crash
+                   like startup-restore and startup-url, but the first run is killed instead of quitting, so the
+                   second one recovers from a crash, with crash recovery enabled as by default; the results have
+                   to be the same
 
 Each window of the first run shows a page of its own. A third run then restores the session the second one saved,
 in which the last window is given the ID DIGITS_ID. Each Firefox run writes its output to LOG_DIR/runN.log, and a
 summary of each run is printed. The first run has to have 3 windows, the second 3 or, when it opens a new window
 beside the restored ones, 4, and the third one more than the second saved, all of them shown. Every run has to exit
-with status 0. In the third run, Firefox has to restore the window given DIGITS_ID under it, and the compositor has to
+with status 0, except a first run which is killed. In the third run, Firefox has to restore the window given DIGITS_ID under it, and the compositor has to
 restore every other window the second run saved, which it does only when Firefox uses session management. The script
 then prints "RESULT: OK" and exits with 0. It exits with 1 when a check fails, or when Firefox exited on its own.
 """
@@ -116,14 +120,14 @@ DIGITS_ID = "{12345678-1234-4123-8123-123456789abc}"
 ACTIVATION_TOKEN = "session-test-activation-token"
 
 
-def write_prefs(profile, startup_page, session_management=True, external_links="default"):
+def write_prefs(profile, startup_page, session_management=True, external_links="default", resume_from_crash=False):
     with open(os.path.join(profile, "user.js"), "w") as f:
         for key, value in [
             ("widget.wayland.session-management.enabled", session_management),
             ("marionette.port", PORT),
             ("browser.startup.page", startup_page),
             ("browser.sessionstore.interval", 1000),
-            ("browser.sessionstore.resume_from_crash", False),
+            ("browser.sessionstore.resume_from_crash", resume_from_crash),
             ("browser.aboutwelcome.enabled", False),
             ("browser.startup.homepage_override.mstone", "ignore"),
             ("browser.shell.checkDefaultBrowser", False),
@@ -395,6 +399,12 @@ def main():
     os.makedirs(profile)
     os.makedirs(log_dir, exist_ok=True)
 
+    # A crash scenario runs the scenario it is named after, but the first run is killed instead of quitting, and the
+    # second recovers from that crash, as Firefox does by default.
+    crash = scenario in ("startup-restore-crash", "startup-url-crash")
+    if crash:
+        scenario = scenario.removesuffix("-crash")
+
     with_url = scenario in ("startup-url", "startup-url-tab")
     at_startup = scenario != "menu-restore"
     external_links = "window" if scenario == "startup-url" else "default"
@@ -411,9 +421,17 @@ def main():
     # Session store collects window data, and so calls GetWorkspaceID(), every second.
     time.sleep(5)
     report("run 1: %s windows shown", mapped_toplevels(os.path.join(log_dir, "run1.log")), 3)
-    report("run 1: exit status %s", quit(m, proc), 0)
+    if crash:
+        proc.kill()
+        proc.wait()
+        # Firefox writes sessionstore.jsonlz4 only when it quits, and while it runs only the recovery file.
+        saved = [name for name in ("sessionstore.jsonlz4", "sessionstore-backups/recovery.jsonlz4")
+                 if os.path.exists(os.path.join(profile, name))]
+        report("run 1: killed, with the session saved in %s", saved, ["sessionstore-backups/recovery.jsonlz4"])
+    else:
+        report("run 1: exit status %s", quit(m, proc), 0)
 
-    write_prefs(profile, 0 if scenario == "menu-restore" else 3, external_links=external_links)
+    write_prefs(profile, 0 if scenario == "menu-restore" else 3, external_links=external_links, resume_from_crash=crash)
     # Without a keyboard, mutter gives no window the keyboard focus.
     keyboard = add_keyboard()
     proc, m = start(firefox, profile, os.path.join(log_dir, "run2.log"), [link] if with_url else [], ACTIVATION_TOKEN)

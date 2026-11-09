@@ -213,10 +213,10 @@ shell of the launch appear in a new window on the current workspace, which has t
 
 For Firefox, that is the start page for a launch from the dock, and the link for a link opened from another
 application, like a terminal, when the profile opens external links in new windows
-(`browser.link.open_newwindow.override.external` set to 2 in `about:config`). Firefox itself restores the first
-window of the previous session into the window it opens for the launch, so a link would become a tab of that window,
-on its workspace (`patches/firefox/session-restore-launch-window.patch`). A restart by Firefox itself, such as after
-an update, restores the windows as they were, without a new one.
+(`browser.link.open_newwindow.override.external` set to 2 in `about:config`). Firefox itself restores the first window
+of the previous session into the window it opens for the launch, so a link would become a tab of that window, on its
+workspace (`patches/firefox/session-restore-launch-window.patch`). A start after a crash opens the new window as well,
+while a restart by Firefox itself, such as after an update, restores the windows as they were, without a new one.
 
 For Text Editor, started from the dock or for a file opened from the terminal or the file manager, the new window
 holds an empty document or the files. A file opened while Text Editor runs opens in a new window as well, unless it is

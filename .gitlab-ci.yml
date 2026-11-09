@@ -440,6 +440,8 @@ test_firefox_session:
           - startup-no-ids
           - startup-url
           - startup-url-tab
+          - startup-restore-crash
+          - startup-url-crash
 
   script:
     - mkdir /tmp/gtk-root

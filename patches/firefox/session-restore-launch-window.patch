@@ -8,9 +8,9 @@ Description: Keep the window opened for a launch as it was opened and restore th
  .
  The window opened for the launch now keeps its page, the URL or the start page, every saved window is
  restored into a new window, and the window opened for the launch is the one focused afterwards. With a URL this
- follows where external links open. Without one it holds when the user's settings restore the session
- (browser.startup.page set to 3), but not for a restart by Firefox itself (browser.sessionstore.resume_session_once)
- or a recovery after a crash, which reopen the windows as they were.
+ follows where external links open. Without one it holds for every start by the user, also a recovery after a
+ crash, but not for a restart by Firefox itself (browser.sessionstore.resume_session_once), such as after an
+ update, which reopens the windows as they were.
  .
  On Wayland every window opened during startup session restore waits hidden until it is restored, and a window
  which is not restored is shown when session restore finishes (wayland-session-restore-show-waiting-windows.patch).
@@ -23,9 +23,9 @@ Description: Keep the window opened for a launch as it was opened and restore th
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090730
 Forwarded: no
-Last-Update: 2026-11-07
+Last-Update: 2026-11-09
 diff --git a/browser/components/sessionstore/SessionStore.sys.mjs b/browser/components/sessionstore/SessionStore.sys.mjs
-index da2abe1..f527249 100644
+index da2abe1..f696a52 100644
 --- a/browser/components/sessionstore/SessionStore.sys.mjs
 +++ b/browser/components/sessionstore/SessionStore.sys.mjs
 @@ -144,6 +144,9 @@
@@ -38,7 +38,30 @@ index da2abe1..f527249 100644
   * @property {string} [trigger]
   *   The reason recorded when the restore opens a Smart Window.
   */
-@@ -1877,6 +1880,17 @@ class _SessionStore {
+@@ -465,6 +468,11 @@ class _SessionStore {
+   // open a new tab for the user.
+   #isUserConfiguredRestore = false;
+ 
++  // True when the session is restored because Firefox restarted itself
++  // (browser.sessionstore.resume_session_once), as after an update, and not
++  // for a start by the user.
++  #isRestartRestore = false;
++
+   // True when a URL was provided on the command line at startup
+   // (e.g. `firefox https://example.com`). When true, the new-tab-on-restore
+   // feature is preempted since the user already has a destination.
+@@ -956,6 +964,10 @@ class _SessionStore {
+         this.#isUserConfiguredRestore = true;
+       }
+ 
++      if (this.#prefBranch.getBoolPref("sessionstore.resume_session_once")) {
++        this.#isRestartRestore = true;
++      }
++
+       // at this point, we've as good as resumed the session, so we can
+       // clear the resume_session_once flag, if it's set
+       if (
+@@ -1877,6 +1889,16 @@ class _SessionStore {
              firstWindow: true,
              overwriteTabs: overwrite,
              restoreSource: "automatic_startup",
@@ -46,17 +69,16 @@ index da2abe1..f527249 100644
 +            // opened while Firefox runs does, and every saved window is restored
 +            // into a new one. With a page from the command line, like a link
 +            // opened from another application, this follows where external
-+            // links open. Without one, it holds for a launch by the user whose
-+            // settings restore the session, but not for a restart by Firefox
-+            // itself or a recovery after a crash, which reopen the windows as
-+            // they were.
++            // links open. Without one, it holds for every start by the user,
++            // also after a crash, but not for a restart by Firefox itself,
++            // which reopens the windows as they were.
 +            restoreIntoNewWindows: this.#cmdLineHasURL(aWindow)
 +              ? this.#externalLinksOpenInNewWindow()
-+              : this.#isUserConfiguredRestore,
++              : !this.#isRestartRestore,
            };
            this.#restoreWindows(aWindow, aInitialState, options);
          }
-@@ -6531,15 +6545,18 @@ class _SessionStore {
+@@ -6531,15 +6553,18 @@ class _SessionStore {
     *
     * @param {BrowserWindow[]} windows
     *        unordered array of windows to restore
@@ -77,7 +99,7 @@ index da2abe1..f527249 100644
      this.#restoreWindowsFeaturesAndTabs(windows);
    }
  
-@@ -6601,6 +6618,21 @@ class _SessionStore {
+@@ -6601,6 +6626,21 @@ class _SessionStore {
        return;
      }
  
@@ -99,7 +121,7 @@ index da2abe1..f527249 100644
      let firstWindowData = root.windows.splice(0, 1);
      let firstWindowState = firstWindowData[0];
      if (!this.#canRestoreIntoExistingWindow(aWindow, firstWindowState)) {
-@@ -7627,6 +7659,39 @@ class _SessionStore {
+@@ -7627,6 +7667,39 @@ class _SessionStore {
      return !hasFirstArgument;
    }
  

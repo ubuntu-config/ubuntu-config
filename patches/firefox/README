@@ -74,22 +74,21 @@ session-restore-launch-window.patch
     page the launch opens appears in a new window on the current workspace, which has the focus: a URL from another
     application or, without one, the start page.
 
-    The session store restores the first saved window into the window Firefox opens for the launch, so a URL
-    becomes a tab of that window, on whichever workspace it returns to, and a launch from the dock opens nothing
-    new. With session-restore-launch-window.patch, every saved window is restored into a window of its own and the
-    window opened for the launch keeps the page it opened. With a URL this follows where external links open: in a
-    new window when browser.link.open_newwindow.override.external is 2, otherwise the URL still becomes a tab of
-    the first saved window (Mozilla bug 1565050). Without a URL it holds for a start whose settings restore the
-    session (browser.startup.page set to 3), not for a restart by Firefox itself, such as after an update, or a
-    recovery after a crash, which restore the windows as they were. The window opened for the launch is shown when
-    session restore finishes (the second patch above), after the restored ones, so GNOME places it on the current
-    workspace.
+    The session store restores the first saved window into the window Firefox opens for the launch, so a URL becomes a
+    tab of that window, on whichever workspace it returns to, and a launch from the dock opens nothing new. With
+    session-restore-launch-window.patch, every saved window is restored into a window of its own and the window opened
+    for the launch keeps the page it opened. With a URL this follows where external links open: in a new window when
+    browser.link.open_newwindow.override.external is 2, otherwise the URL still becomes a tab of the first saved
+    window (Mozilla bug 1565050). Without a URL it holds for every start by the user, also a recovery after a crash,
+    but not for a restart by Firefox itself, such as after an update, which restores the windows as they were. The
+    window opened for the launch is shown when session restore finishes (the second patch above), after the restored
+    ones, so GNOME places it on the current workspace.
 
-    GTK 3 activates the first window it shows with the activation token of the launch, which during session restore
-    is a restored window. mutter does not activate it and marks it as demanding attention instead, and the token is
-    gone for the window opened for the launch. wayland-launch-activation-token.patch hands the token to Firefox's
-    own widget code instead, keeps restored windows from using it and drops it when every window was restored. Links
-    opened from Ptyxis carry no token yet: Ptyxis opens them through libportal, which sends none to the portal.
+    GTK 3 activates the first window it shows with the activation token of the launch, which during session restore is
+    a restored window. mutter does not activate it and marks it as demanding attention instead, and the token is gone
+    for the window opened for the launch. wayland-launch-activation-token.patch hands the token to Firefox's own
+    widget code instead, keeps restored windows from using it and drops it when every window was restored. Links
+    opened from Ptyxis carry a token too, which Ptyxis passes to the portal through libportal with patches/libportal/.
 
     tests/firefox/run-session.sh checks both with every scenario, see tests/firefox/README.
     wayland-launch-activation-token.patch is proposed as D340739 on phabricator.services.mozilla.com, for Mozilla bug
