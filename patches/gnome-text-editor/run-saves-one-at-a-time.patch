@@ -6,8 +6,8 @@ Description: Run session saves one at a time.
  are requested, each with the state from when it was requested. A waiting auto-save is replaced by a newer one, and
  saves still waiting when a save for shutdown finishes are completed without running, since Text Editor quits then.
 Author: Mitar
-Forwarded: no
-Last-Update: 2026-11-05
+Forwarded: https://gitlab.gnome.org/GNOME/gnome-text-editor/-/merge_requests/261
+Last-Update: 2026-11-09
 diff --git a/src/editor-session-private.h b/src/editor-session-private.h
 index ba26b56..de459d6 100644
 --- a/src/editor-session-private.h

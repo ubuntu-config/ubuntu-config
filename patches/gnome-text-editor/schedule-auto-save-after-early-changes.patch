@@ -7,8 +7,8 @@ Description: Schedule auto-save for changes made before it is enabled.
  with an auto-save-delay other than the default, which it applies before it enables auto-save. The session is now
  marked dirty only when auto-save is enabled and an auto-save is scheduled with it.
 Author: Mitar
-Forwarded: no
-Last-Update: 2026-11-05
+Forwarded: https://gitlab.gnome.org/GNOME/gnome-text-editor/-/merge_requests/261
+Last-Update: 2026-11-09
 diff --git a/src/editor-session.c b/src/editor-session.c
 index 36bee4a..c15e396 100644
 --- a/src/editor-session.c

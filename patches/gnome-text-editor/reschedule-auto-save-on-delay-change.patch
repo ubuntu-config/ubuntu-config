@@ -5,8 +5,8 @@ Description: Reschedule a pending auto-save when the auto-save delay changes.
  dconf-editor, while Text Editor runs and within the delay after a change. A scheduled auto-save is now tracked by its
  timeout source, and the separate dirty flag, which removing the source left set, is gone.
 Author: Mitar
-Forwarded: no
-Last-Update: 2026-11-05
+Forwarded: https://gitlab.gnome.org/GNOME/gnome-text-editor/-/merge_requests/261
+Last-Update: 2026-11-09
 diff --git a/src/editor-session-private.h b/src/editor-session-private.h
 index aa7b729..ba26b56 100644
 --- a/src/editor-session-private.h
