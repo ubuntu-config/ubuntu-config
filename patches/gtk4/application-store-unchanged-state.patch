@@ -1,0 +1,63 @@
+Description: Do not write an application's state again when it has not changed.
+ GTK saves the state of an application which sets GtkApplication:support-save every 15 seconds while one of its
+ windows has the keyboard focus, and rewrites its state file each time, although the state mostly has not changed
+ since: the windows and the names mutter knows them by stay the same. Text Editor rewrote its state file every 15
+ seconds while it had the focus, so a focused but unused window kept writing to the disk. The file is now read first,
+ and a state equal to what it holds is not written again.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-09
+diff --git a/gtk/gtkapplication-dbus.c b/gtk/gtkapplication-dbus.c
+index 23893d0..ce782c5 100644
+--- a/gtk/gtkapplication-dbus.c
++++ b/gtk/gtkapplication-dbus.c
+@@ -35,6 +35,7 @@
+ #endif
+ 
+ #include <glib/gstdio.h>
++#include <string.h>
+ 
+ G_DEFINE_TYPE (GtkApplicationImplDBus, gtk_application_impl_dbus, GTK_TYPE_APPLICATION_IMPL)
+ 
+@@ -703,16 +704,36 @@ gtk_application_impl_dbus_store_state (GtkApplicationImpl *impl,
+                                        GVariant           *state)
+ {
+   char *file;
++  char *contents = NULL;
++  gsize length;
++  gsize size;
+ 
+   file = get_state_file (impl, NULL);
+   if (file)
+     {
+-      GTK_DEBUG (SESSION, "Store state, file %s", file);
++      size = g_variant_get_size (state);
++
++      /* The state is saved every few seconds while a window of the
++       * application has the focus, and it rarely changes in between,
++       * so a state the file already holds is not written again.
++       */
++      if (g_file_get_contents (file, &contents, &length, NULL) &&
++          length == size &&
++          (size == 0 || memcmp (contents, g_variant_get_data (state), size) == 0))
++        {
++          GTK_DEBUG (SESSION, "State unchanged, file %s", file);
++        }
++      else
++        {
++          GTK_DEBUG (SESSION, "Store state, file %s", file);
++
++          g_file_set_contents (file,
++                               g_variant_get_data (state),
++                               size,
++                               NULL);
++        }
+ 
+-      g_file_set_contents (file,
+-                           g_variant_get_data (state),
+-                           g_variant_get_size (state),
+-                           NULL);
++      g_free (contents);
+       g_free (file);
+     }
+ }

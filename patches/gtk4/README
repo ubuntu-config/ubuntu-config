@@ -7,13 +7,13 @@ application which does not set GtkApplication:support-save.
 
 GTK keeps the window state of such an application in $XDG_STATE_HOME/<application ID>@fallback.state, for Text
 Editor ~/.local/state/org.gnome.TextEditor@fallback.state. It holds the name of the application's session with
-mutter and, for each window, the name mutter knows the window by and the application's own state of it. GTK
-reads it when the application starts and writes it every 15 seconds while one of its windows has the focus, and
-when the application quits. Moving the file away makes the application's windows open unplaced
-once, and placed again from the start after that. Mutter keeps the places it stored under the old names in
-~/.local/share/gnome-shell/session.gvdb, see patches/mutter/README, and so it does for a window GTK restores and
-the application then destroys without showing it, as Text Editor does when it restores no documents, since GTK
-cannot remove a name stored in an earlier run (mutter issue 5174).
+mutter and, for each window, the name mutter knows the window by and the application's own state of it. GTK reads
+it when the application starts, saves it every 15 seconds while one of its windows has the focus and when the
+application quits, and writes the file only when the state changed. Moving the file away makes the application's
+windows open unplaced once, and placed again from the start after that. Mutter keeps the places it stored under
+the old names in ~/.local/share/gnome-shell/session.gvdb, see patches/mutter/README, and so it does for a window
+GTK restores and the application then destroys without showing it, as Text Editor does when it restores no
+documents, since GTK cannot remove a name stored in an earlier run (mutter issue 5174).
 
 application-save-restore-api.patch
     Upstream's revert, commit 15ed5c2fea, of the removal of the public save/restore API of GtkApplication before
@@ -42,6 +42,13 @@ application-register-restore-only-when-supported.patch
     restores it at every start of the application with the restore reason launch. Mutter ignores the reason, so
     the windows are placed again either way. Neither GTK main nor the branch with the asynchronous API reads the
     property, which makes this a candidate for an upstream merge request.
+
+application-store-unchanged-state.patch
+    GTK saves the state of an application every 15 seconds while one of its windows has the keyboard focus, and
+    rewrote the state file each time, although the state mostly does not change in between. Text Editor and Ptyxis
+    each rewrote their state file every 15 seconds while focused and unused. GTK now reads the file first and does
+    not write a state equal to what it holds. GTK main writes the same way, which makes this a candidate for an
+    upstream merge request.
 
 application-save-restore-symbols.patch (debian-series)
     Lists gtk_application_save, gtk_application_forget and gtk_restore_reason_get_type in
