@@ -10,7 +10,7 @@ Description: Reopen a tab in its container in the window of the tab it replaces.
  exists, so that the window does not close before. When the new tab cannot be created, the tab stays.
 Author: Mitar
 Bug: https://github.com/mozilla/multi-account-containers/issues/2000
-Forwarded: no
+Forwarded: https://github.com/mozilla/multi-account-containers/pull/2957
 Last-Update: 2026-11-09
 diff --git a/src/js/background/assignManager.js b/src/js/background/assignManager.js
 index 65ea48d..608e910 100644

@@ -29,5 +29,6 @@ reopen-in-window-of-tab.patch
     the add-on's tests too, so that they check the window and wait for the removal. Only its changes below src/ apply to
     the release. The add-on's tests pass with it (npm ci --legacy-peer-deps, then npx mocha 'test/**/*.test.js').
 
-    tests/firefox/test_container_tab_window.py checks it in Firefox, see tests/firefox/README. The patch is not proposed
-    upstream yet. Drop it once a release of the add-on includes the fix.
+    tests/firefox/test_container_tab_window.py checks it in Firefox, see tests/firefox/README. The patch is proposed
+    upstream as https://github.com/mozilla/multi-account-containers/pull/2957. Drop it once a release of the add-on
+    includes the fix.

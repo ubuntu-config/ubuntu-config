@@ -651,7 +651,8 @@ tab the page opened in. Its release creates the new tab in the window which had 
 application, which Firefox opens in a new window, becomes a tab of another window when that window had the focus last,
 as at a start of Firefox which restores the session, and the link's own window closes ([issue
 2000](https://github.com/mozilla/multi-account-containers/issues/2000)). The add-on is patched to create the new tab
-in the window of the tab it replaces (`firefox-addons/multi-account-containers/`).
+in the window of the tab it replaces (`firefox-addons/multi-account-containers/`), as proposed upstream in [pull
+request 2957](https://github.com/mozilla/multi-account-containers/pull/2957).
 
 `configure-gnome-desktop.sh` builds the add-on from its release on addons.mozilla.org with the patch applied and
 installs it into `/usr/lib/firefox-addons/extensions`, from which Ubuntu's Firefox loads add-ons without a signature
