@@ -1,11 +1,12 @@
-"""Run Text Editor twice to test that GTK names its windows to the compositor and restores them. See README.
+"""Run Text Editor four times to test that GTK names its windows to the compositor and restores them. See README.
 
 Usage: text_editor_session.py TEXT_EDITOR OUT_DIR SCENARIO
 
 TEXT_EDITOR is the gnome-text-editor binary to run, with the GTK it is to use already on LD_LIBRARY_PATH. The
 first run opens two files, each in a window of its own, and quits. The second run starts without files, which
-restores the last session. The third run starts with --ignore-session, so that Text Editor has to discard the
-windows GTK restores. Text Editor's output, with its Wayland requests and events, goes to OUT_DIR/runN.log.
+restores the last session. The third run does the same while two more launches arrive before Text Editor loaded
+its session. The fourth run starts with --ignore-session, so that Text Editor has to discard the windows GTK
+restores. Text Editor's output, with its Wayland requests and events, goes to OUT_DIR/runN.log.
 SCENARIO says which session manager the private D-Bus session has, which run-text-editor-session.sh sets up:
 none, unsupported (RestoreSupported is false) or supported (RestoreSupported is true), and so whether GTK has to
 register with it. The exit status is 0 when every check passed.
@@ -127,15 +128,33 @@ def add_keyboard():
     return session
 
 
+def open_count(pid, target):
+    """The number of file descriptors process pid has open on the file whose os.stat() result is target."""
+    count = 0
+    fd_dir = "/proc/%d/fd" % pid
+    for fd in os.listdir(fd_dir):
+        try:
+            st = os.stat(os.path.join(fd_dir, fd))
+        except OSError:
+            continue
+        if (st.st_dev, st.st_ino) == (target.st_dev, target.st_ino):
+            count += 1
+    return count
+
+
 def load_variant(path, type_string):
     with open(path, "rb") as f:
         data = f.read()
     return GLib.Variant.new_from_bytes(GLib.VariantType(type_string), GLib.Bytes.new(data), False).unpack()
 
 
+def session_path():
+    return os.path.join(GLib.get_user_data_dir(), APP_ID, "session.gvariant")
+
+
 def editor_windows():
     """The windows of Text Editor's session state which have pages, as (window ID, URIs of the pages)."""
-    state = load_variant(os.path.join(GLib.get_user_data_dir(), APP_ID, "session.gvariant"), "a{sv}")
+    state = load_variant(session_path(), "a{sv}")
     return [(w.get("window-id"), sorted(p.get("uri", "") for p in w.get("pages", [])))
             for w in state.get("windows", []) if w.get("pages")]
 
@@ -225,25 +244,87 @@ def main():
     check(set(gtk1) <= set(gtk2) and len(gtk2) == 3, "run 2: GTK saved the same windows again and the new one")
     check(sorted(editor2) == sorted(editor1), "run 2: each window has the file it had in run 1, the new one none")
 
-    # Run 3: --ignore-session makes the session restore open one new window instead of restoring the windows, so the
-    # three windows created for GTK's restored window state are destroyed without ever being shown.
+    # Run 3: Text Editor reads its session from a pipe, which receives the session saved by run 2 only after two more
+    # launches from the command line arrived, one without files and one with a third file. Opened for reading and
+    # writing here, the pipe does not block Text Editor opening it, so each load of the session keeps it open while
+    # reading. Text Editor has to load its session once, restore both windows of run 1, and then open a window for
+    # each launch: two with a draft and one with the third file.
+    third = os.path.join(out, "third.txt")
+    with open(third, "w") as f:
+        f.write("The third file.\n")
+    with open(session_path(), "rb") as f:
+        session_bytes = f.read()
+    os.unlink(session_path())
+    os.mkfifo(session_path())
+    pipe = os.open(session_path(), os.O_RDWR)
+    fifo = os.fstat(pipe)
+    keyboard = add_keyboard()
     log3 = os.path.join(out, "run3.log")
-    proc = start(text_editor, ["--ignore-session"], log3)
-    check(wait_for(log3, "restore_toplevel", 1), "run 3: a window was named to the compositor")
+    proc3 = proc = start(text_editor, [], log3)
+    deadline = time.time() + 30
+    while open_count(proc.pid, fifo) == 0 and time.time() < deadline:
+        time.sleep(0.1)
+    check(open_count(proc.pid, fifo) == 1, "run 3: Text Editor started loading its session")
+    # A remote instance exits once Text Editor handled its command line.
+    with open(os.path.join(out, "run3-launches.log"), "w") as log:
+        subprocess.run([text_editor], stdout=log, stderr=subprocess.STDOUT, check=True, timeout=30)
+        subprocess.run([text_editor, third], stdout=log, stderr=subprocess.STDOUT, check=True, timeout=30)
+    time.sleep(1)
+    loads = open_count(proc.pid, fifo)
+    check(loads == 1, "run 3: the launches did not load the session again (loading it %d times)" % loads)
+    check(not scan(log3)["restore_toplevel"], "run 3: no window was shown before the session was loaded")
+    # Saving the session over the pipe would block, so it is removed first. Text Editor reads it until the last
+    # writer closes it.
+    os.unlink(session_path())
+    os.write(pipe, session_bytes)
+    os.close(pipe)
+    check(wait_for(log3, "restored_toplevel", 2), "run 3: the compositor restored both windows")
+    check(wait_for(log3, "restore_toplevel", 5), "run 3: three new windows were named to the compositor beside them")
     time.sleep(2)
-    check(proc.poll() is None, "run 3: Text Editor still runs after discarding the restored windows")
+    check(focused(log3) == "new", "run 3: a new window has the keyboard focus (%s)" % focused(log3))
+    keyboard.call_sync("Stop", None, Gio.DBusCallFlags.NONE, -1, None)
     quit_text_editor(proc)
     run3 = scan(log3)
     summary(3, run3)
     check(not run3["error"], "run 3: no protocol error")
-    check(len(run3["restore_toplevel"]) == 1 and run3["restore_toplevel"][0] not in run2["restore_toplevel"],
-          "run 3: only the new window was named, under a new name")
-    check(not run3["restored_toplevel"], "run 3: no window was restored")
+    check(len(run3["restored_toplevel"]) == 2, "run 3: no other window was restored")
+    check(set(run1["restore_toplevel"]) <= set(run3["restore_toplevel"]) and len(run3["restore_toplevel"]) == 5,
+          "run 3: the restored windows used their names of run 1, and the three new windows names of their own")
+    check("restored" not in activated(log3), "run 3: no restored window was activated (%s)" % activated(log3))
+
+    check(os.path.exists(session_path()), "run 3: Text Editor saved its session")
+    if not os.path.exists(session_path()):
+        return 1
     _, gtk3 = gtk_windows(state_path)
+    editor3 = editor_windows()
     print("GTK state: windows %s" % gtk3)
-    check(len(gtk3) == 1 and gtk3[0][0] not in [i for i, _ in gtk2] and gtk3[0][1] == run3["restore_toplevel"][0],
-          "run 3: GTK saved only the new window")
-    for run, p in ((1, proc1), (2, proc2), (3, proc)):
+    print("Text Editor session: windows %s" % editor3)
+    check(set(gtk1) <= set(gtk3) and len(gtk3) == 5, "run 3: GTK saved the restored windows and the three new ones")
+    window_ids = [i for i, _ in editor3]
+    check(len(set(window_ids)) == len(window_ids) and all(w in editor3 for w in editor1),
+          "run 3: each window of run 1 was saved once, with its file")
+    check(sorted(u for _, pages in editor3 for u in pages) == sorted(uris + [GLib.filename_to_uri(third, None)]),
+          "run 3: Text Editor saved each file once")
+
+    # Run 4: --ignore-session makes the session restore open one new window instead of restoring the windows, so the
+    # five windows created for GTK's restored window state are destroyed without ever being shown.
+    log4 = os.path.join(out, "run4.log")
+    proc = start(text_editor, ["--ignore-session"], log4)
+    check(wait_for(log4, "restore_toplevel", 1), "run 4: a window was named to the compositor")
+    time.sleep(2)
+    check(proc.poll() is None, "run 4: Text Editor still runs after discarding the restored windows")
+    quit_text_editor(proc)
+    run4 = scan(log4)
+    summary(4, run4)
+    check(not run4["error"], "run 4: no protocol error")
+    check(len(run4["restore_toplevel"]) == 1 and run4["restore_toplevel"][0] not in run3["restore_toplevel"],
+          "run 4: only the new window was named, under a new name")
+    check(not run4["restored_toplevel"], "run 4: no window was restored")
+    _, gtk4 = gtk_windows(state_path)
+    print("GTK state: windows %s" % gtk4)
+    check(len(gtk4) == 1 and gtk4[0][0] not in [i for i, _ in gtk3] and gtk4[0][1] == run4["restore_toplevel"][0],
+          "run 4: GTK saved only the new window")
+    for run, p in ((1, proc1), (2, proc2), (3, proc3), (4, proc)):
         check(p.returncode == 0, "run %d: Text Editor exited with 0, not %s" % (run, p.returncode))
 
     calls = []
@@ -253,7 +334,7 @@ def main():
             calls = [line.split(" ", 1)[0] for line in f]
     print("session manager calls: %s" % (calls or "none"))
     if scenario == "supported":
-        check(calls.count("RegisterRestore") == 3, "GTK registered with the session manager in every run")
+        check(calls.count("RegisterRestore") == 4, "GTK registered with the session manager in every run")
     else:
         check("RegisterRestore" not in calls, "GTK did not register with the session manager")
 

@@ -18,9 +18,9 @@ Description: Restore windows to their places with the session save/restore API o
  up at runtime: Text Editor builds against Ubuntu's GTK and behaves as before when it runs with it.
 Author: Mitar
 Forwarded: not-needed
-Last-Update: 2026-11-04
+Last-Update: 2026-11-09
 diff --git a/src/editor-application.c b/src/editor-application.c
-index 1b8b464..6201c6a 100644
+index 18c4b54..c3a2d43 100644
 --- a/src/editor-application.c
 +++ b/src/editor-application.c
 @@ -29,7 +29,7 @@
@@ -32,17 +32,17 @@ index 1b8b464..6201c6a 100644
  
  #define PORTAL_BUS_NAME "org.freedesktop.portal.Desktop"
  #define PORTAL_OBJECT_PATH "/org/freedesktop/portal/desktop"
-@@ -118,6 +118,9 @@ editor_application_restore_cb (GObject      *object,
+@@ -120,6 +120,9 @@ editor_application_restore_cb (GObject      *object,
                                 restore->files->len,
                                 restore->hint);
  
 +  /* A failed restore leaves the windows GTK restored next to the one above */
 +  _editor_session_discard_restored_windows (session);
 +
-   g_application_release (g_application_get_default ());
- }
- 
-@@ -136,7 +139,7 @@ editor_application_activate (GApplication *application)
+   /* The requests which arrived while the session was restored are handled
+    * as if they arrived after it.
+    */
+@@ -189,7 +192,7 @@ editor_application_activate (GApplication *application)
      {
        GtkWindow *window = iter->data;
  
@@ -51,18 +51,7 @@ index 1b8b464..6201c6a 100644
          {
            gtk_window_present (window);
            return;
-@@ -169,7 +172,9 @@ editor_application_open (GApplication  *application,
-   g_assert (EDITOR_IS_APPLICATION (self));
-   g_assert (files != NULL || n_files == 0);
- 
--  if (_editor_session_did_restore (self->session))
-+  /* Windows GTK restored wait for the session restore to give them pages */
-+  if (_editor_session_did_restore (self->session) &&
-+      !_editor_session_has_restored_windows (self->session))
-     {
-       editor_session_open_files (self->session, files, n_files, hint);
-     }
-@@ -791,6 +796,26 @@ editor_application_init (EditorApplication *self)
+@@ -838,6 +841,26 @@ editor_application_init (EditorApplication *self)
    g_application_add_main_option_entries (G_APPLICATION (self), entries);
  }
  
@@ -89,7 +78,7 @@ index 1b8b464..6201c6a 100644
  EditorApplication *
  _editor_application_new (gboolean standalone)
  {
-@@ -805,6 +830,27 @@ _editor_application_new (gboolean standalone)
+@@ -852,6 +875,27 @@ _editor_application_new (gboolean standalone)
                         NULL);
    self->standalone = !!standalone;
  
@@ -117,7 +106,7 @@ index 1b8b464..6201c6a 100644
    return self;
  }
  
-@@ -845,7 +891,7 @@ editor_application_get_current_window (EditorApplication *self)
+@@ -892,7 +936,7 @@ editor_application_get_current_window (EditorApplication *self)
      {
        GtkWindow *window = iter->data;
  
@@ -127,22 +116,21 @@ index 1b8b464..6201c6a 100644
      }
  
 diff --git a/src/editor-session-private.h b/src/editor-session-private.h
-index 95292b2..aa7b729 100644
+index 95292b2..8521d06 100644
 --- a/src/editor-session-private.h
 +++ b/src/editor-session-private.h
-@@ -58,6 +58,10 @@ struct _EditorSession
+@@ -58,6 +58,9 @@ struct _EditorSession
  
  EditorSession *_editor_session_new                    (void);
  EditorWindow  *_editor_session_create_window_no_draft (EditorSession  *self);
 +EditorWindow  *_editor_session_create_restored_window (EditorSession  *self,
 +                                                       const char     *window_id);
-+gboolean       _editor_session_has_restored_windows   (EditorSession  *self);
 +void           _editor_session_discard_restored_windows (EditorSession *self);
  gboolean       _editor_session_did_restore            (EditorSession  *self);
  GPtrArray     *_editor_session_get_pages              (EditorSession  *self);
  void           _editor_session_document_seen          (EditorSession  *self,
 diff --git a/src/editor-session.c b/src/editor-session.c
-index d1b3cda..36bee4a 100644
+index d1b3cda..0397c80 100644
 --- a/src/editor-session.c
 +++ b/src/editor-session.c
 @@ -221,8 +221,14 @@ add_window_state (EditorSession   *self,
@@ -169,7 +157,7 @@ index d1b3cda..36bee4a 100644
          return EDITOR_WINDOW (win);
      }
  
-@@ -698,6 +704,135 @@ _editor_session_create_window_no_draft (EditorSession *self)
+@@ -698,6 +704,112 @@ _editor_session_create_window_no_draft (EditorSession *self)
    return window;
  }
  
@@ -247,29 +235,6 @@ index d1b3cda..36bee4a 100644
 +}
 +
 +/*
-+ * _editor_session_has_restored_windows:
-+ * @self: an #EditorSession
-+ *
-+ * Returns: whether windows created by _editor_session_create_restored_window()
-+ *    are still waiting for the session restore to give them their pages
-+ */
-+gboolean
-+_editor_session_has_restored_windows (EditorSession *self)
-+{
-+  g_return_val_if_fail (EDITOR_IS_SESSION (self), FALSE);
-+
-+  for (guint i = 0; i < self->windows->len; i++)
-+    {
-+      EditorWindow *window = g_ptr_array_index (self->windows, i);
-+
-+      if (window->restore_pending)
-+        return TRUE;
-+    }
-+
-+  return FALSE;
-+}
-+
-+/*
 + * _editor_session_discard_restored_windows:
 + * @self: an #EditorSession
 + *
@@ -305,7 +270,7 @@ index d1b3cda..36bee4a 100644
  /**
   * editor_session_create_window:
   * @self: an #EditorSession
-@@ -1824,6 +1959,9 @@ editor_session_restore_v1 (EditorSession *self,
+@@ -1824,6 +1936,9 @@ editor_session_restore_v1 (EditorSession *self,
      {
        g_autoptr(GVariant) pages = NULL;
        gboolean maximized = FALSE;
@@ -315,7 +280,7 @@ index d1b3cda..36bee4a 100644
  
        if (!g_variant_lookup (window, "size", "(uu)", &width, &height) ||
            width > HUGE_WINDOW || height > HUGE_WINDOW)
-@@ -1838,7 +1976,25 @@ editor_session_restore_v1 (EditorSession *self,
+@@ -1838,7 +1953,25 @@ editor_session_restore_v1 (EditorSession *self,
        if ((pages = g_variant_lookup_value (window, "pages", G_VARIANT_TYPE ("aa{sv}"))) &&
            g_variant_n_children (pages) > 0)
          {
@@ -342,7 +307,7 @@ index d1b3cda..36bee4a 100644
  
            if (width > 0 && height > 0)
              gtk_window_set_default_size (GTK_WINDOW (ewin), width, height);
-@@ -1872,7 +2028,7 @@ editor_session_restore_v1 (EditorSession *self,
+@@ -1872,7 +2005,7 @@ editor_session_restore_v1 (EditorSession *self,
          }
      }
  
@@ -351,7 +316,7 @@ index d1b3cda..36bee4a 100644
      {
        if (had_failure)
          goto failure;
-@@ -1953,6 +2109,8 @@ editor_session_restore (EditorSession *self,
+@@ -1953,6 +2086,8 @@ editor_session_restore (EditorSession *self,
    else
      editor_session_create_window (self);
  

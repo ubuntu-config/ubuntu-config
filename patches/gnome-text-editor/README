@@ -1,5 +1,22 @@
 Source package: gnome-text-editor
 
+requests-wait-for-session-restore.patch
+    Text Editor loads its session asynchronously when it starts, and the first activation or the first files to open
+    start the restore. An activation which arrived before the session was loaded, such as a second launch from the
+    dock while Text Editor started, found no window and restored the session a second time, which opened each window
+    of the session and each of its documents twice, two of them saving to the same draft. Files to open which arrived
+    meanwhile opened before the session added its pages, so a file of the session was open twice.
+
+    editor_application_activate and editor_application_open now queue the requests which arrive while the session is
+    restored, and editor_application_restore_cb handles them once it is restored, as if they arrived after it. With
+    restore-window-placement.patch, the windows GTK restored wait for their pages until then, and with
+    launch-opens-new-window.patch, each of the requests opens a window of its own.
+
+    The patch applies to Text Editor's main branch as it does to 50.1, and is not yet proposed upstream. It is tested
+    by the third run of tests/gnome-text-editor/run-text-editor-session.sh, which holds the session file back until
+    two more launches arrived. Drop it once Text Editor handles the requests which arrive while it restores its
+    session.
+
 restore-window-placement.patch
     Lets Text Editor's windows return to their workspace, monitor, position and size when it restores its session,
     with the session save/restore API of GtkApplication, which only the GTK of patches/gtk4/ has. Text Editor keeps

@@ -1,0 +1,153 @@
+Description: Handle requests which arrive while the session is restored once it is restored.
+ Text Editor loads its session asynchronously, and the first activation or the first files to open start the
+ restore. An activation which arrives before the session is loaded finds no window and restores the session a second
+ time, which opens each window of the session and each of its documents twice, and two documents then save to the
+ same draft. Files to open which arrive meanwhile are opened before the session adds its pages, so a file of the
+ session is open twice.
+ .
+ Requests which arrive while the session is restored are now queued and handled once it is restored, as if they
+ arrived after it.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-09
+diff --git a/src/editor-application-private.h b/src/editor-application-private.h
+index f46c7f5..21bea29 100644
+--- a/src/editor-application-private.h
++++ b/src/editor-application-private.h
+@@ -33,6 +33,10 @@ struct _EditorApplication
+   GDBusProxy     *portal;
+   char           *system_font_name;
+   GHashTable     *open_at_position;
++  /* The requests which arrived while the session is restored, see
++   * editor_application_restore_session(), or NULL when it is not.
++   */
++  GPtrArray      *pending_requests;
+   guint           standalone : 1;
+ };
+ 
+diff --git a/src/editor-application.c b/src/editor-application.c
+index 1b8b464..18c4b54 100644
+--- a/src/editor-application.c
++++ b/src/editor-application.c
+@@ -95,7 +95,9 @@ editor_application_restore_cb (GObject      *object,
+                                gpointer      user_data)
+ {
+   EditorSession *session = (EditorSession *)object;
++  EditorApplication *self = EDITOR_APPLICATION_DEFAULT;
+   g_autoptr(Restore) restore = user_data;
++  g_autoptr(GPtrArray) pending_requests = NULL;
+   g_autoptr(GError) error = NULL;
+ 
+   g_assert (G_IS_ASYNC_RESULT (result));
+@@ -118,7 +120,48 @@ editor_application_restore_cb (GObject      *object,
+                                restore->files->len,
+                                restore->hint);
+ 
+-  g_application_release (g_application_get_default ());
++  /* The requests which arrived while the session was restored are handled
++   * as if they arrived after it.
++   */
++  pending_requests = g_steal_pointer (&self->pending_requests);
++  for (guint i = 0; i < pending_requests->len; i++)
++    {
++      Restore *request = g_ptr_array_index (pending_requests, i);
++
++      if (request->files->len > 0)
++        g_application_open (G_APPLICATION (self),
++                            (GFile **)(gpointer)request->files->pdata,
++                            request->files->len,
++                            request->hint ? request->hint : "");
++      else
++        g_application_activate (G_APPLICATION (self));
++    }
++
++  g_application_release (G_APPLICATION (self));
++}
++
++/* Restores the session, and then opens @files, or with none, makes sure a
++ * window is shown. Requests which arrive until the session is restored are
++ * queued in pending_requests and handled afterwards.
++ */
++static void
++editor_application_restore_session (EditorApplication  *self,
++                                    GFile             **files,
++                                    guint               n_files,
++                                    const char         *hint)
++{
++  g_assert (EDITOR_IS_APPLICATION (self));
++  g_assert (self->pending_requests == NULL);
++
++  self->pending_requests = g_ptr_array_new_with_free_func ((GDestroyNotify)restore_free);
++
++  g_application_hold (G_APPLICATION (self));
++
++  editor_session_set_auto_save (self->session, TRUE);
++  editor_session_restore_async (self->session,
++                                NULL,
++                                editor_application_restore_cb,
++                                restore_new (files, n_files, hint));
+ }
+ 
+ static void
+@@ -130,6 +173,16 @@ editor_application_activate (GApplication *application)
+   g_assert (EDITOR_IS_APPLICATION (self));
+   g_assert (EDITOR_IS_SESSION (self->session));
+ 
++  /* While the session is restored, the activation waits for it, as there is
++   * no window yet and restoring the session a second time would open each of
++   * its windows and documents twice.
++   */
++  if (self->pending_requests != NULL)
++    {
++      g_ptr_array_add (self->pending_requests, restore_new (NULL, 0, NULL));
++      return;
++    }
++
+   windows = gtk_application_get_windows (GTK_APPLICATION (application));
+ 
+   for (const GList *iter = windows; iter; iter = iter->next)
+@@ -148,14 +201,7 @@ editor_application_activate (GApplication *application)
+    * possible to start shutdown and race with an activation, but reloading
+    * the session is probably fine in either case.
+    */
+-
+-  g_application_hold (application);
+-
+-  editor_session_set_auto_save (self->session, TRUE);
+-  editor_session_restore_async (self->session,
+-                                NULL,
+-                                editor_application_restore_cb,
+-                                restore_new (NULL, 0, NULL));
++  editor_application_restore_session (self, NULL, 0, NULL);
+ }
+ 
+ static void
+@@ -169,19 +215,20 @@ editor_application_open (GApplication  *application,
+   g_assert (EDITOR_IS_APPLICATION (self));
+   g_assert (files != NULL || n_files == 0);
+ 
+-  if (_editor_session_did_restore (self->session))
++  /* While the session is restored, the files wait for it, as the restore
++   * would add its pages after them and open a file of the session twice.
++   */
++  if (self->pending_requests != NULL)
++    {
++      g_ptr_array_add (self->pending_requests, restore_new (files, n_files, hint));
++    }
++  else if (_editor_session_did_restore (self->session))
+     {
+       editor_session_open_files (self->session, files, n_files, hint);
+     }
+   else
+     {
+-      g_application_hold (application);
+-
+-      editor_session_set_auto_save (self->session, TRUE);
+-      editor_session_restore_async (self->session,
+-                                    NULL,
+-                                    editor_application_restore_cb,
+-                                    restore_new (files, n_files, hint));
++      editor_application_restore_session (self, files, n_files, hint);
+     }
+ }
+ 

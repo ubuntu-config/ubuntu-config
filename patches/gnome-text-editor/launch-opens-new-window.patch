@@ -17,12 +17,12 @@ Description: Show restored windows without activating them and open a new window
  first frame, as one on another workspace is not shown, and after a second at the latest.
 Author: Mitar
 Forwarded: no
-Last-Update: 2026-11-06
+Last-Update: 2026-11-09
 diff --git a/src/editor-application.c b/src/editor-application.c
-index 6201c6a..f2b1fed 100644
+index c3a2d43..a06f75e 100644
 --- a/src/editor-application.c
 +++ b/src/editor-application.c
-@@ -107,18 +107,22 @@ editor_application_restore_cb (GObject      *object,
+@@ -109,18 +109,22 @@ editor_application_restore_cb (GObject      *object,
      {
        if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
          g_warning ("Failed to restore session: %s", error->message);
@@ -49,8 +49,8 @@ index 6201c6a..f2b1fed 100644
 +   */
    _editor_session_discard_restored_windows (session);
  
-   g_application_release (g_application_get_default ());
-@@ -135,13 +139,16 @@ editor_application_activate (GApplication *application)
+   /* The requests which arrived while the session was restored are handled
+@@ -188,13 +192,16 @@ editor_application_activate (GApplication *application)
  
    windows = gtk_application_get_windows (GTK_APPLICATION (application));
  
@@ -68,9 +68,9 @@ index 6201c6a..f2b1fed 100644
            return;
          }
      }
-@@ -176,7 +183,8 @@ editor_application_open (GApplication  *application,
-   if (_editor_session_did_restore (self->session) &&
-       !_editor_session_has_restored_windows (self->session))
+@@ -227,7 +234,8 @@ editor_application_open (GApplication  *application,
+     }
+   else if (_editor_session_did_restore (self->session))
      {
 -      editor_session_open_files (self->session, files, n_files, hint);
 +      /* Files opened from outside open in a window of their own */
@@ -79,7 +79,7 @@ index 6201c6a..f2b1fed 100644
    else
      {
 diff --git a/src/editor-session-private.h b/src/editor-session-private.h
-index de459d6..ece59cf 100644
+index 6b474ac..3a7fe3d 100644
 --- a/src/editor-session-private.h
 +++ b/src/editor-session-private.h
 @@ -50,12 +50,22 @@ struct _EditorSession
@@ -106,7 +106,7 @@ index de459d6..ece59cf 100644
  
  EditorSession *_editor_session_new                    (void);
 diff --git a/src/editor-session.c b/src/editor-session.c
-index 601402b..f5fd004 100644
+index 1dcc949..88deebb 100644
 --- a/src/editor-session.c
 +++ b/src/editor-session.c
 @@ -399,6 +399,10 @@ editor_session_finalize (GObject *object)
@@ -120,7 +120,7 @@ index 601402b..f5fd004 100644
    g_clear_pointer (&self->pages, g_ptr_array_unref);
    g_clear_pointer (&self->windows, g_ptr_array_unref);
    g_clear_pointer (&self->seen, g_hash_table_unref);
-@@ -896,6 +900,178 @@ _editor_session_discard_restored_windows (EditorSession *self)
+@@ -873,6 +877,178 @@ _editor_session_discard_restored_windows (EditorSession *self)
      }
  }
  
@@ -299,7 +299,7 @@ index 601402b..f5fd004 100644
  /**
   * editor_session_create_window:
   * @self: an #EditorSession
-@@ -927,7 +1103,7 @@ editor_session_create_window (EditorSession *self)
+@@ -904,7 +1080,7 @@ editor_session_create_window (EditorSession *self)
    document = editor_document_new_draft ();
    editor_session_add_document (self, window, document);
  
@@ -308,7 +308,7 @@ index 601402b..f5fd004 100644
  
    return window;
  }
-@@ -1005,7 +1181,9 @@ editor_session_add_page (EditorSession *self,
+@@ -982,7 +1158,9 @@ editor_session_add_page (EditorSession *self,
    _editor_window_add_page (window, page);
    _editor_page_raise (page);
  
@@ -319,7 +319,7 @@ index 601402b..f5fd004 100644
  
    editor_page_grab_focus (page);
  
-@@ -1730,7 +1908,7 @@ editor_session_open (EditorSession           *self,
+@@ -1707,7 +1885,7 @@ editor_session_open (EditorSession           *self,
        _editor_page_raise (page);
  
        if ((window = _editor_page_get_window (page)))
@@ -328,7 +328,7 @@ index 601402b..f5fd004 100644
  
        return page;
      }
-@@ -1774,8 +1952,20 @@ editor_session_open_files (EditorSession  *self,
+@@ -1751,8 +1929,20 @@ editor_session_open_files (EditorSession  *self,
  
    g_return_if_fail (EDITOR_IS_SESSION (self));
  
@@ -350,7 +350,7 @@ index 601402b..f5fd004 100644
  
    for (guint i = 0; i < n_files; i++)
      editor_session_open (self, window, files[i], NULL);
-@@ -2136,12 +2326,15 @@ editor_session_restore_v1 (EditorSession *self,
+@@ -2113,12 +2303,15 @@ editor_session_restore_v1 (EditorSession *self,
        g_variant_n_children (windows) == 0)
      goto failure;
  
@@ -366,7 +366,7 @@ index 601402b..f5fd004 100644
  
        g_variant_lookup (window, "window-id", "&s", &window_id);
  
-@@ -2189,19 +2382,19 @@ editor_session_restore_v1 (EditorSession *self,
+@@ -2166,19 +2359,19 @@ editor_session_restore_v1 (EditorSession *self,
                continue;
              }
  
@@ -392,7 +392,7 @@ index 601402b..f5fd004 100644
          }
        else
          {
-@@ -2210,17 +2403,13 @@ editor_session_restore_v1 (EditorSession *self,
+@@ -2187,17 +2380,13 @@ editor_session_restore_v1 (EditorSession *self,
          }
      }
  
@@ -416,7 +416,7 @@ index 601402b..f5fd004 100644
  
    /* XXX: this probably needs to change once we track all the recent
     * documents for quick re-use.
-@@ -2232,8 +2421,6 @@ editor_session_restore_v1 (EditorSession *self,
+@@ -2209,8 +2398,6 @@ editor_session_restore_v1 (EditorSession *self,
  failure:
    if (!restore_pages)
      g_debug ("Failed to restore session or nothing to restore");
@@ -425,7 +425,7 @@ index 601402b..f5fd004 100644
  }
  
  static void
-@@ -2286,12 +2473,11 @@ editor_session_restore (EditorSession *self,
+@@ -2263,12 +2450,11 @@ editor_session_restore (EditorSession *self,
                             self,
                             G_CONNECT_SWAPPED);
  

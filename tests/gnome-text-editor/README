@@ -2,19 +2,33 @@ Tests for the patches in patches/gnome-text-editor/ and patches/gtk4/, and for
 patches/mutter/save-toplevels-on-session-destroy.patch with them, run by hand and in GitLab CI, see .gitlab-ci.yml.
 
 Text Editor session restore: run-text-editor-session.sh, text_editor_session.py and fake_session_manager.py
-    Checks that Text Editor, with GTK's save/restore API, names its windows to mutter and has them restored under
-    the same names at the next start, and that a launch opens a new window beside them. Starts a headless mutter
-    with one virtual monitor in a D-Bus session of its own and runs Text Editor three times in it, with GSettings
-    in memory, so that its defaults apply. The first run opens two files, each in a window of its own, and quits
-    through the app.quit action. The second run starts without files and with an activation token in
-    XDG_ACTIVATION_TOKEN and DESKTOP_STARTUP_ID, as a launcher passes it, which restores the session and opens a
-    new window with a draft beside the restored ones. The new window has to receive the token and the keyboard
-    focus, for which the test adds a keyboard through mutter's remote desktop API, and no restored window may be
-    activated. The third run starts with --ignore-session, which opens one new window instead, so Text Editor has
-    to destroy the three windows it created for GTK's restored window state without showing them, and must keep
-    running. It covers the protocol between GTK and mutter and the link between GTK's window state and Text
-    Editor's session state, but not whether windows return to their workspaces, which needs a desktop. The test
-    also runs next to your own Text Editor without touching it.
+    Checks that Text Editor, with GTK's save/restore API, names its windows to mutter and has them restored under the
+    same names at the next start, and that a launch opens a new window beside them, also one which arrives while Text
+    Editor loads its session. Starts a headless mutter with one virtual monitor in a D-Bus session of its own and runs
+    Text Editor four times in it, with GSettings in memory, so that its defaults apply. The first run opens two files,
+    each in a window of its own, and quits through the app.quit action. The second run starts without files and with
+    an activation token in XDG_ACTIVATION_TOKEN and DESKTOP_STARTUP_ID, as a launcher passes it, which restores the
+    session and opens a new window with a draft beside the restored ones. The new window has to receive the token and
+    the keyboard focus, for which the test adds a keyboard through mutter's remote desktop API, and no restored window
+    may be activated.
+
+    The third run starts without files too, but session.gvariant is a named pipe, which the test keeps open for
+    reading and writing, so that Text Editor's load of the session waits in a read until the test writes the session
+    saved by the second run into it. Before that, gnome-text-editor runs twice more, without files and with a third
+    file, and each of these remote instances exits once Text Editor handled its command line. Text Editor has to load
+    its session only once, which the test sees in the file descriptors it has open on the pipe, then restore both
+    windows of the first run and open three new windows, two with a draft and one with the third file, with one of
+    them focused. The session it saves has each file once. Without
+    patches/gnome-text-editor/requests-wait-for-session-restore.patch, each launch starts another load of the session,
+    which fails the check of the file descriptors. Only one of the loads reads the bytes the test writes, while on the
+    desktop each of them would restore every window of the session.
+
+    The fourth run starts with --ignore-session, which opens one new window instead, so Text Editor has to destroy the
+    five windows it created for GTK's restored window state without showing them, and must keep running.
+
+    The test covers the protocol between GTK and mutter and the link between GTK's window state and Text Editor's
+    session state, but not whether windows return to their workspaces, which needs a desktop. It also runs next to
+    your own Text Editor without touching it.
 
     Mutter's binary is only in the mutter package, and Text Editor and GTK are tested without installing them, so
     all three are extracted, mutter from the local repository and the other two from the build to test:
@@ -30,19 +44,20 @@ Text Editor session restore: run-text-editor-session.sh, text_editor_session.py 
     and keep its state under the instance ID the session manager returns. With none there is no session manager.
 
     In each run GTK sends get_session, the first time for a new session and then with the session ID mutter created
-    the first time, and names each window with restore_toplevel, which in the second run uses the names of the
-    first for the restored windows, answered with restored(), and a new name for the new window. The third run
-    names only its new window, under a new name. The script prints the messages each run sent and received, the
-    window IDs and names GTK saved, the windows Text Editor saved, one line for each check, and finally "RESULT:
-    OK", and exits with 0. With Ubuntu's GTK, Text Editor sends nothing over the protocol and the checks fail from
-    the first one. Without patches/mutter/save-toplevels-on-session-destroy.patch, only the first window is
-    restored in the second run, since mutter forgets where the other one was when Text Editor quits with it open.
-    Without launch-opens-new-window.patch, the second run opens no new window, and the first restored window
-    receives the token and the focus.
+    the first time, and names each window with restore_toplevel, which in the second run uses the names of the first
+    for the restored windows, answered with restored(), and a new name for the new window, and in the third run the
+    same names for the restored windows and new names for the three new windows. The fourth run names only its new
+    window, under a new name. The script prints the messages each run sent and received, the window IDs and names GTK
+    saved, the windows Text Editor saved, one line for each check, and finally "RESULT: OK", and exits with 0. With
+    Ubuntu's GTK, Text Editor sends nothing over the protocol and the checks fail from the first one. Without
+    patches/mutter/save-toplevels-on-session-destroy.patch, only the first window is restored in the second run, since
+    mutter forgets where the other one was when Text Editor quits with it open. Without launch-opens-new-window.patch,
+    the second run opens no new window, and the first restored window receives the token and the focus.
 
-    The full WAYLAND_DEBUG output of each run is in the output directory as run1.log, run2.log and run3.log, and the
-    calls the session manager received are in session-manager.log. The D-Bus and portal messages printed on the way
-    are expected in the private session.
+    The full WAYLAND_DEBUG output of each run is in the output directory as run1.log to run4.log, the output of the
+    remote instances of the first and third run in run1-new-window.log and run3-launches.log, and the calls the
+    session manager received in session-manager.log. The D-Bus and portal messages printed on the way are expected in
+    the private session.
 
 Text Editor auto-save: run-text-editor-autosave.sh and text_editor_autosave.py
     Checks that Text Editor autosaves its session, with the drafts of unsaved documents, a few seconds after every

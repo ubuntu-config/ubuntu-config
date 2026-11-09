@@ -1,3 +1,4 @@
+requests-wait-for-session-restore.patch
 restore-window-placement.patch
 hide-restored-banners.patch
 schedule-auto-save-after-early-changes.patch
