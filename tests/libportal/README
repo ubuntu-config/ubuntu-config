@@ -1,0 +1,26 @@
+Tests for the patches in patches/libportal/, run by hand and in GitLab CI, see .gitlab-ci.yml.
+
+libportal activation token: run-libportal-token.sh, libportal_token.py and openuri_portal.py
+    Checks that libportal passes an activation token from a GTK 4 and a GTK 3 window when an application opens a URI
+    through the OpenURI portal. Starts a headless mutter in a D-Bus session of its own, in which openuri_portal.py stands in for
+    xdg-desktop-portal: it owns org.freedesktop.portal.Desktop, answers every OpenURI request as done and records it.
+    libportal_token.py then runs a GTK 4 application and then a GTK 3 one, each of which shows a window and opens a URI
+    through libportal for it, with xdp_parent_new_gtk(), as Ptyxis opens a link, and checks for each that the portal
+    received one OpenURI request for that URI, with the window as its parent, and with an activation token in its
+    options which mutter created for the application. Mutter does not see an event of the user behind the token, which the test does not need: it checks
+    only that the token reaches the portal, which passes it on to the application it launches.
+
+    libportal and its GTK helpers are tested without installing them, so the packages to test are extracted, and the
+    test runs with the installed GTK 4 and GTK 3 and their introspection data:
+
+      mkdir /tmp/mutter-root /tmp/libportal-root
+      for p in mutter libmutter-18-0; do dpkg-deb -x /usr/local/lib/debs/${p}_*.deb /tmp/mutter-root; done
+      for p in libportal1 libportal-gtk4-1 libportal-gtk3-1 gir1.2-xdp-1.0 gir1.2-xdpgtk4-1.0 gir1.2-xdpgtk3-1.0; do
+        dpkg-deb -x /usr/local/lib/debs/${p}_*.deb /tmp/libportal-root
+      done
+      ./run-libportal-token.sh /tmp/mutter-root /tmp/libportal-root /tmp/libportal-token-test
+
+    The script prints the request the portal received and one line for each check, and finally "RESULT: OK", and
+    exits with 0. With Ubuntu's libportal, the requests carry no activation token, and the last two checks of each
+    toolkit fail. The output directory has mutter's output as mutter.log, the clients' WAYLAND_DEBUG output as
+    client-gtk4.log and client-gtk3.log, and the requests as requests.json.

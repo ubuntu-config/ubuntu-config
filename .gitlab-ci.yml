@@ -98,6 +98,7 @@ build:
           - gnome-shell-ubuntu-extensions
           - gnome-text-editor
           - gtksourceview5
+          - libportal
           - localsearch
           - ptyxis
           - tinysparql
@@ -348,6 +349,30 @@ test_ptyxis_session:
     - mkdir /tmp/ptyxis-root
     - dpkg-deb -x build/ptyxis/ptyxis_*.deb /tmp/ptyxis-root
     - su tester -c "tests/ptyxis/run-ptyxis-session.sh /tmp/mutter-root /tmp/ptyxis-root out/ptyxis-session"
+
+test_libportal_token:
+  extends: .test
+
+  needs:
+    - job: build
+      parallel:
+        matrix:
+          - PACKAGE: libportal
+    - job: build_large
+      parallel:
+        matrix:
+          - PACKAGE:
+              - gtk4
+              - mutter
+
+  variables:
+    TEST_PACKAGES: gir1.2-gtk-3.0 gir1.2-gtk-4.0
+
+  script:
+    - dpkg -i build/gtk4/libgtk-4-1_*.deb build/gtk4/gir1.2-gtk-4.0_*.deb
+    - mkdir /tmp/libportal-root
+    - for p in libportal1 libportal-gtk4-1 libportal-gtk3-1 gir1.2-xdp-1.0 gir1.2-xdpgtk4-1.0 gir1.2-xdpgtk3-1.0; do dpkg-deb -x build/libportal/${p}_*.deb /tmp/libportal-root; done
+    - su tester -c "tests/libportal/run-libportal-token.sh /tmp/mutter-root /tmp/libportal-root out/libportal-token"
 
 # Firefox runs headless, without mutter.
 test_firefox_wasm:

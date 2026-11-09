@@ -223,6 +223,10 @@ open already, when its window is shown (`patches/gnome-text-editor/launch-opens-
 For the terminal, started from the dock or with a directory from the file manager, the new window holds a new shell
 (`patches/ptyxis/launch-opens-new-window.patch`).
 
+A link clicked in the terminal reaches the browser with an activation token from the terminal's window, so that GNOME
+focuses the browser's window for the click, but not when the user has clicked or typed elsewhere since. The terminal
+opens links through libportal, which is patched to request the token for a GTK 4 window (`patches/libportal/`).
+
 ### Text Editor keeps unsaved documents without warnings
 
 Text Editor keeps unsaved documents and returns them at its next start, also after logging out, but it still asked

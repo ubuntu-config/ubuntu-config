@@ -1,0 +1,22 @@
+Source package: libportal
+
+openuri-activation-token-gtk4.patch
+    Passes an activation token from the application's window when an application using libportal opens a URI, a
+    file or a directory through the OpenURI portal, so that the browser or the application which opens it can be
+    focused on Wayland as a result of the user's click. Ptyxis opens links that way, and without a token Firefox
+    focused its window for a link only as a newly mapped window, also when the user had clicked or typed elsewhere
+    in the meantime. The token comes from GDK's application launch context for a window given with
+    xdp_parent_new_gtk(), as GTK's own OpenURI portal client requests it, so applications need no change, and
+    xdg-desktop-portal passes it to the application it launches. Building against GLib older than 2.82 leaves the
+    token out, as those GLib versions require an application for the launch context.
+
+    tests/libportal/run-libportal-token.sh checks that the token reaches the portal. The patch is the first commit of
+    https://github.com/flatpak/libportal/pull/236, which also covers the GTK 3 and the Qt 6 helper. Drop it once
+    Ubuntu's libportal contains the change.
+
+openuri-activation-token-gtk3.patch
+    Does the same for a window given with xdp_parent_new_gtk() of libportal's GTK 3 helper, on Wayland only, as GDK's
+    X11 launch context requires an application. tests/libportal/run-libportal-token.sh checks it with a GTK 3 client
+    as well. The patch is the second commit of the pull request.
+
+The third commit of the pull request, for libportal's Qt 6 helper, has no patch here, as Ubuntu builds no Qt 6 helper.
