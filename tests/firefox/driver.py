@@ -12,7 +12,8 @@ SCENARIO is one of:
                    their own, beside a new window with the start page, which has to receive the token and the
                    focus
   startup-no-ids   like startup-restore, but the first run has session management disabled, so it saves its
-                   windows without IDs, as every profile used on GNOME before the patches did
+                   windows without IDs, as every profile used on GNOME before the patches did; which window
+                   receives the focus is printed but not checked
   startup-url      like startup-restore, but the second run is started with a URL, as when a link is opened from
                    another application, and external links open in a new window; the URL has to open in the new
                    window
@@ -36,6 +37,8 @@ import socket
 import subprocess
 import sys
 import time
+
+from gi.repository import Gio, GLib
 
 
 def free_port():
@@ -328,6 +331,37 @@ def activated_toplevels(log_path, token):
     return [kinds.get(toplevel) for toplevel in activated]
 
 
+def keyboard_focus(log_path, token):
+    """Returns whether the window which received the keyboard focus last is the one Firefox passed token with
+    ("token"), another one ("other"), or None when no window received it."""
+    token_surfaces = set()
+    focused = None
+    with open(log_path, errors="replace") as f:
+        for line in f:
+            if match := re.search(r'-> xdg_activation_v1#\d+\.activate\("([^"]*)", wl_surface#(\d+)\)', line):
+                if match[1] == token:
+                    token_surfaces.add(match[2])
+            elif match := re.search(r"wl_keyboard#\d+\.enter\(\d+, wl_surface#(\d+),", line):
+                focused = match[1]
+    return None if focused is None else "token" if focused in token_surfaces else "other"
+
+
+def add_keyboard():
+    """Adds a keyboard to mutter's seat through its remote desktop API, by pressing Shift, so that mutter gives the
+    keyboard focus to windows. Returns the remote desktop session, which keeps the keyboard until it is stopped."""
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    desktop = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.NONE, None, "org.gnome.Mutter.RemoteDesktop",
+                                     "/org/gnome/Mutter/RemoteDesktop", "org.gnome.Mutter.RemoteDesktop", None)
+    path = desktop.call_sync("CreateSession", None, Gio.DBusCallFlags.NONE, -1, None).unpack()[0]
+    session = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.NONE, None, "org.gnome.Mutter.RemoteDesktop", path,
+                                     "org.gnome.Mutter.RemoteDesktop.Session", None)
+    session.call_sync("Start", None, Gio.DBusCallFlags.NONE, -1, None)
+    for pressed in (True, False):
+        session.call_sync("NotifyKeyboardKeysym", GLib.Variant("(ub)", (0xffe1, pressed)), Gio.DBusCallFlags.NONE, -1,
+                          None)
+    return session
+
+
 def alive_after(proc, seconds):
     try:
         proc.wait(timeout=seconds)
@@ -380,6 +414,8 @@ def main():
     report("run 1: exit status %s", quit(m, proc), 0)
 
     write_prefs(profile, 0 if scenario == "menu-restore" else 3, external_links=external_links)
+    # Without a keyboard, mutter gives no window the keyboard focus.
+    keyboard = add_keyboard()
     proc, m = start(firefox, profile, os.path.join(log_dir, "run2.log"), [link] if with_url else [], ACTIVATION_TOKEN)
     windows = None
     try:
@@ -412,12 +448,27 @@ def main():
         new_page = link if with_url else "about:blank"
         report("run 2: pages of the windows %s", window_pages(m), sorted([[new_page]] + [[page] for page in pages]))
         report("run 2: activation token passed with windows %s", activated_toplevels(run2_log, ACTIVATION_TOKEN), ["add"])
-        # Windows saved without IDs are shown at the same time as the new one, so which of them has the focus is
-        # left open.
-        if scenario != "startup-no-ids":
+        # Mutter gives the keyboard focus to each window it shows without an activation token, so a restored window
+        # shown after the new one would take the focus from it. A restored window with a saved ID is shown as soon as
+        # Firefox gives it that ID, and the new window only once the session restore finished, after them.
+        focus = keyboard_focus(run2_log, ACTIVATION_TOKEN)
+        if scenario == "startup-no-ids":
+            # The focus is printed but not checked. Windows saved without IDs wait for the session restore to finish
+            # too, and are shown right after the new window, so mutter gives the focus to the restored window it shows
+            # last. Firefox also activates each of them, as it activates every window it adds to the session under a
+            # new ID, so that the window opens on the current workspace. Only a session saved without session
+            # management, as before the patches, has windows without IDs, so this happens once for a profile, at its
+            # first start with the patched Firefox. That does not justify a patch which waits for the restored windows
+            # before showing the new one, as the patches of Ptyxis and Text Editor do.
+            print("run 2: keyboard focus on the window with the token or another one: %s (not checked)" % focus,
+                  flush=True)
+            print("run 2: pages of the focused window %s (not checked)" % focused_window_pages(m), flush=True)
+        else:
+            report("run 2: keyboard focus on the window with the token or another one: %s", focus, "token")
             report("run 2: %s windows restored by the compositor", restored_toplevels(run2_log), 3)
             report("run 2: pages of the focused window %s", focused_window_pages(m), [new_page])
     report("run 2: exit status %s", quit(m, proc), 0)
+    keyboard.call_sync("Stop", None, Gio.DBusCallFlags.NONE, -1, None)
 
     # A third run restores the session saved by the second one, which shows that the IDs it saved are the ones the
     # compositor knows. One saved window is given DIGITS_ID instead, under which Firefox has to restore it, though the
