@@ -113,18 +113,20 @@ the patched behavior which run during the build where the package has a test sui
 the source to rebuild Firefox with, unlike Mozilla's own repository (requested in
 [Mozilla bug 2087959](https://bugzilla.mozilla.org/show_bug.cgi?id=2087959)).
 
-`rebuild-patched-packages.sh` rebuilds a package whenever Ubuntu publishes a new version of it or its patches
-change, and publishes the result to a local APT repository. That repository is pinned above the Ubuntu archive, so
+`rebuild-patched-packages.sh` rebuilds a package whenever Ubuntu publishes a new version of it or its patches change,
+and publishes the result to a local APT repository. That repository is pinned above the Ubuntu archive, so
 unattended-upgrades or the next ordinary `apt upgrade` installs the patched build. A daily cron job keeps patched
 packages current, running root-owned copies of the script and patches, installed with
-`install-rebuild-patched-packages.sh` (`cron.daily/`). The daily cron jobs start at 05:00, after the daily
+`install-rebuild-patched-packages.sh` (`cron.daily/`). The daily run also mails when a Firefox add-on patched here has
+a new release (see [Container tabs open in the window of their
+page](#container-tabs-open-in-the-window-of-their-page)). The daily cron jobs start at 05:00, after the daily
 measurement of cooling and performance at 04:00 and usually early enough for unattended-upgrades, which runs between
 06:00 and 07:00, to install a rebuilt package the same morning (`systemd/anacron.timer.d/`). Packages are built the
-way Ubuntu builds its own packages, with sbuild in a throwaway chroot without network access, with build
-dependencies installed only inside it. Its unshare mode needs no root even to set up the chroot, so everything runs
-as an unprivileged system user, and a package's build scripts and test suite cannot change the system. Builds run in
-`/tmp`, whose limit on the number of files is raised, since a Firefox build holds more files there than systemd's
-default allows (`systemd/tmp.mount.d/`). GitLab CI builds the patched packages too and runs the tests in
+way Ubuntu builds its own packages, with sbuild in a throwaway chroot without network access, with build dependencies
+installed only inside it. Its unshare mode needs no root even to set up the chroot, so everything runs as an
+unprivileged system user, and a package's build scripts and test suite cannot change the system. Builds run in `/tmp`,
+whose limit on the number of files is raised, since a Firefox build holds more files there than systemd's default
+allows (`systemd/tmp.mount.d/`). GitLab CI builds the patched packages too and runs the tests in
 `tests/<source-package>/` against them (`.gitlab-ci.yml`).
 
 Tests which require a whole desktop, such as windows returning to their workspaces after logging out and in, or the
@@ -653,10 +655,11 @@ in the window of the tab it replaces (`firefox-addons/multi-account-containers/`
 
 `configure-gnome-desktop.sh` builds the add-on from its release on addons.mozilla.org with the patch applied and
 installs it into `/usr/lib/firefox-addons/extensions`, from which Ubuntu's Firefox loads add-ons without a signature
-and never updates them, so a new release of the add-on needs a new pin in this repository. A copy of the add-on
-installed from addons.mozilla.org into the profile takes precedence, and the script reports it. Deleting its file from
-the profile's `extensions` directory while Firefox is not running keeps the add-on's data, such as which sites open in
-which container, while removing the add-on in Firefox's add-on manager deletes it.
+and never updates them, so a new release of the add-on needs a new pin in this repository. The daily run of
+`rebuild-patched-packages.sh` mails when addons.mozilla.org offers a newer release, and whether the patch applies to
+it. A copy of the add-on installed from addons.mozilla.org into the profile takes precedence, and the script reports
+it. Deleting its file from the profile's `extensions` directory while Firefox is not running keeps the add-on's data,
+such as which sites open in which container, while removing the add-on in Firefox's add-on manager deletes it.
 
 ### Windows keep their size when the screen locks
 

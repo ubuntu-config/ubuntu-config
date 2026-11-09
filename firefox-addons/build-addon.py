@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Build a patched Firefox add-on from its release on addons.mozilla.org.
 
-Usage: build-addon.py ADDON_DIR OUT_XPI
+Usage: build-addon.py ADDON_DIR OUT_XPI [--url URL --sha256 SHA256]
 
 ADDON_DIR is a directory of firefox-addons/ in this repository. Its file "release" names the add-on's ID ("id"), the
-URL of the release ("url") and the SHA-256 of that file ("sha256"), one "key value" per line, and its file "series"
-lists the patches to apply, in order. The release is downloaded and refused when its SHA-256 differs. Its signature,
+version it pins ("version"), the URL of that release ("url") and the SHA-256 of the file ("sha256"), one "key value"
+per line, and its file "series" lists the patches to apply, in order. --url and --sha256 build another release with
+the same patches instead. The release is downloaded and refused when its SHA-256 differs. Its signature,
 META-INF/, is left out, since the patched files no longer match it, and the patches are applied to the other files.
 Each patch is a commit of the add-on's repository, whose add-on files are below src/, and only its changes there are
 applied, with patch -p2, without fuzz. The result is written to OUT_XPI with the order, dates and compression of the
@@ -14,6 +15,7 @@ entries of the release, so that building the same release with the same patches 
 Exits with 1 and a message when the download fails, the SHA-256 differs or a patch does not apply.
 """
 
+import argparse
 import hashlib
 import io
 import os
@@ -42,8 +44,16 @@ def src_part(patch):
 
 
 def main():
-    addon_dir, out = sys.argv[1:3]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("addon_dir")
+    parser.add_argument("out")
+    parser.add_argument("--url")
+    parser.add_argument("--sha256")
+    args = parser.parse_args()
+    addon_dir, out = args.addon_dir, args.out
     release = read_release(addon_dir)
+    if args.url:
+        release["url"], release["sha256"] = args.url, args.sha256
     with urllib.request.urlopen(release["url"], timeout=60) as response:
         data = response.read()
     digest = hashlib.sha256(data).hexdigest()

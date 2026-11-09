@@ -1,3 +1,4 @@
 id @testpilot-containers
+version 8.4.0
 url https://addons.mozilla.org/firefox/downloads/file/5168122/multi_account_containers-8.4.0.xpi
 sha256 10936d682e17bd2e8afa018bde94f927b50cf05973d6ef8ca3c54f807b2cf7ba

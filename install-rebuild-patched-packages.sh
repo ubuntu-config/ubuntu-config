@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 #
-# Install rebuild-patched-packages.sh, its patches and its daily cron job from this repository as the root-owned
-# copies that root runs, and give the sbuild user its builds run as the subordinate ids building in unshare mode
-# needs. Also set up the local repository the rebuilds are published to, let unattended-upgrades install from it,
-# let /tmp, where builds run, hold as many files as a Firefox build needs, and start the daily cron jobs at 05:00.
-# Only a file which differs from its installed copy is replaced.
+# Install rebuild-patched-packages.sh, its patches, the patched Firefox add-ons whose releases it checks, and its
+# daily cron job from this repository as the root-owned copies that root runs, and give the sbuild user its builds
+# run as the subordinate ids building in unshare mode needs. Also set up the local repository the rebuilds are
+# published to, let unattended-upgrades install from it, let /tmp, where builds run, hold as many files as a Firefox
+# build needs, and start the daily cron jobs at 05:00. Only a file which differs from its installed copy is
+# replaced.
 #
 #   rebuild-patched-packages.sh                         ->  /usr/local/bin/rebuild-patched-packages
 #   patches/                                            ->  /usr/local/share/patched-packages
+#   firefox-addons/                                     ->  /usr/local/share/patched-firefox-addons
 #   cron.daily/rebuild-patched-packages                 ->  /etc/cron.daily/rebuild-patched-packages
 #   sources.list.d/local.list                           ->  /etc/apt/sources.list.d/local.list
 #   apt.conf.d/52unattended-upgrades-local-repository   ->  /etc/apt/apt.conf.d/52unattended-upgrades-local-repository
@@ -86,6 +88,7 @@ if ! grep -q '^sbuild:' /etc/subuid || ! grep -q '^sbuild:' /etc/subgid; then
   fi
 fi
 install_dir  "$REPO_DIR/patches"                             /usr/local/share/patched-packages
+install_dir  "$REPO_DIR/firefox-addons"                      /usr/local/share/patched-firefox-addons
 install_file "$REPO_DIR/rebuild-patched-packages.sh"         /usr/local/bin/rebuild-patched-packages  755
 install_file "$REPO_DIR/cron.daily/rebuild-patched-packages" /etc/cron.daily/rebuild-patched-packages 755
 

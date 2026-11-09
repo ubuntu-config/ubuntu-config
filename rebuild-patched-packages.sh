@@ -142,12 +142,23 @@
 # Patch changes are noticed through a fingerprint of everything a build reads from patches/<source-package>/: both
 # series files, the patches they list, the optional files above and the keys extra-repositories names, recorded with
 # every build. The README is not part of it, so editing only the documentation does not cause a rebuild.
+#
+#
+# Firefox add-ons
+# ---------------
+# The patched Firefox add-ons of firefox-addons/ are built and installed by configure-gnome-desktop.sh, each from the
+# release its directory pins, and Firefox never updates them. --build without package names therefore also asks
+# addons.mozilla.org for the current release of each add-on, and when it is not the pinned one, tries the patches on
+# it and reports the outcome once, with the new pin when they apply, see firefox-addons/check-addon-release.py. The
+# default mode reports every add-on. They are read from the root-owned copy of firefox-addons/ in
+# /usr/local/share/patched-firefox-addons, which install-rebuild-patched-packages.sh installs.
 
 set -euo pipefail
 
 SCRIPT=$(readlink -f "$0")
 REPO_DIR=$(dirname "$SCRIPT")
 PATCH_DIR=/usr/local/share/patched-packages
+ADDON_DIR=/usr/local/share/patched-firefox-addons
 INSTALLED_SCRIPT=/usr/local/bin/rebuild-patched-packages
 CRON_JOB=/etc/cron.daily/rebuild-patched-packages
 LOCAL_REPO=/usr/local/lib/debs
@@ -257,8 +268,36 @@ report_install_drift() {
   [ -d "$REPO_DIR/patches" ] || return 0
   cmp -s "$SCRIPT" "$INSTALLED_SCRIPT" || echo "  $INSTALLED_SCRIPT differs from $SCRIPT"
   diff -rq "$REPO_DIR/patches" "$PATCH_DIR" >/dev/null 2>&1 || echo "  $PATCH_DIR differs from $REPO_DIR/patches"
+  diff -rq "$REPO_DIR/firefox-addons" "$ADDON_DIR" >/dev/null 2>&1 \
+    || echo "  $ADDON_DIR differs from $REPO_DIR/firefox-addons"
   cmp -s "$REPO_DIR/cron.daily/rebuild-patched-packages" "$CRON_JOB" \
     || echo "  $CRON_JOB differs from $REPO_DIR/cron.daily/rebuild-patched-packages"
+  return 0
+}
+
+# Reports each patched Firefox add-on of ADDON_DIR for which addons.mozilla.org offers another release than the one
+# its directory pins, and whether the patches apply to that release, see firefox-addons/check-addon-release.py. With
+# "build", as in the daily run, each release is reported once, which STATE_DIR records, and a failed query is an error.
+# Otherwise every add-on is reported, a current one too.
+report_addon_releases() {
+  local mode=$1 dir name out check=$ADDON_DIR/check-addon-release.py
+  [ -d "$ADDON_DIR" ] || return 0
+  for dir in "$ADDON_DIR"/*/; do
+    [ -f "$dir/release" ] || continue
+    name=$(basename "$dir")
+    if [ "$mode" = build ]; then
+      if ! out=$(python3 -I "$check" "$dir" --state "$STATE_DIR/firefox-addon-$name.reported" 2>&1); then
+        error "Firefox add-on $name: $out"
+        continue
+      fi
+    elif ! out=$(python3 -I "$check" "$dir" 2>&1); then
+      echo "Firefox add-on $name: $out"
+      continue
+    else
+      out=${out:-"Firefox add-on $name: $(awk '$1 == "version" {print $2}' "$dir/release"), the pinned release, is current"}
+    fi
+    [ -z "$out" ] || echo "$out"
+  done
   return 0
 }
 
@@ -816,6 +855,10 @@ case "$MODE" in
       true
     done
     [ "$n" -eq 0 ] && echo "everything current, nothing to rebuild"
+    if [ "${#PACKAGES[@]}" -eq 0 ]; then
+      addons=$(report_addon_releases check)
+      [ -z "$addons" ] || { echo; echo "$addons"; }
+    fi
     echo
     echo "Nothing was built. Re-run with --build as root to rebuild."
     ;;
@@ -870,6 +913,7 @@ case "$MODE" in
       echo
       echo "Rebuilt packages are now the apt candidate. unattended-upgrades or the next apt upgrade installs them."
     fi
+    [ "${#PACKAGES[@]}" -eq 0 ] && report_addon_releases build
     [ "$FAILED" -eq 0 ] || exit 1
     ;;
 

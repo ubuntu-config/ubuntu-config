@@ -7,11 +7,13 @@ on Ubuntu. Ubuntu's Firefox is built with MOZ_UNSIGNED_APP_SCOPE, so it loads ad
 which it requires everywhere else, and only root can write there. The add-on keeps its ID, and with it its data, such
 as the site assignments of its containers.
 
-Firefox never updates an add-on in that directory, so a new release of the add-on needs a new pin in "release", after
-checking that the patches still apply. A copy installed from addons.mozilla.org into a profile takes precedence over
-the add-on there, and configure-gnome-desktop.sh reports such a copy. Deleting its file from the profile's extensions
-directory while Firefox is not running activates the add-on from the application directory with the same data, while
-removing the add-on in Firefox's add-on manager deletes its data.
+Firefox never updates an add-on in that directory, so a new release of the add-on needs a new pin in "release". The
+daily run of rebuild-patched-packages.sh asks addons.mozilla.org for the current release, and when it is not the
+pinned one, tries the patches on it and mails the outcome once, with the new lines for "release" when they apply, see
+../check-addon-release.py. A copy installed from addons.mozilla.org into a profile takes precedence over the add-on
+there, and configure-gnome-desktop.sh reports such a copy. Deleting its file from the profile's extensions directory
+while Firefox is not running activates the add-on from the application directory with the same data, while removing
+the add-on in Firefox's add-on manager deletes its data.
 
 reopen-in-window-of-tab.patch
     The add-on reopens a page assigned to a container in a new tab of that container, and removes the tab it replaces
