@@ -26,7 +26,7 @@ index e9a9cde..9ea42d2 100644
  #endif
  
 diff --git a/widget/gtk/nsAppShell.cpp b/widget/gtk/nsAppShell.cpp
-index 789db98..143e7f1 100644
+index 513edbd..c732bc5 100644
 --- a/widget/gtk/nsAppShell.cpp
 +++ b/widget/gtk/nsAppShell.cpp
 @@ -427,6 +427,131 @@ void nsAppShell::StopDBusListening() {

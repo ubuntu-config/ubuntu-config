@@ -7,11 +7,12 @@ Description: Install the SIGTERM handler once the app shell exists, so that SIGT
  Firefox was still running counted as a crash.
  .
  The handler is now installed in XREMain::XRE_mainRun(), once XPCOM created the app shell, and still not in background
- task mode.
+ task mode. Diagnostic builds assert in nsAppShell::InstallTermSignalHandler() that the app shell exists, and the
+ handler ignores SIGTERM with a warning after the app shell is destroyed in shutdown.
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2086801
 Author: Mitar
 Forwarded: https://phabricator.services.mozilla.com/D340638
-Last-Update: 2026-11-07
+Last-Update: 2026-11-09
 ---
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
 index 513d100..e9a9cde 100644
@@ -40,5 +41,34 @@ index 513d100..e9a9cde 100644
 +        nsAppShell::InstallTermSignalHandler();
 +      }
  #endif
- 
+
  #ifdef XP_MACOSX
+diff --git a/widget/gtk/nsAppShell.cpp b/widget/gtk/nsAppShell.cpp
+index 789db98..513edbd 100644
+--- a/widget/gtk/nsAppShell.cpp
++++ b/widget/gtk/nsAppShell.cpp
+@@ -435,12 +435,22 @@ void nsAppShell::TermSignalHandler(int signo) {
+     NS_WARNING("Wrong signal!");
+     return;
+   }
++  // The handler stays installed after the app shell is destroyed in shutdown.
++  if (!sAppShell) {
++    NS_WARNING("SIGTERM received without an app shell");
++    return;
++  }
+   sAppShell->ScheduleQuitEvent();
+ }
+
+ void nsAppShell::InstallTermSignalHandler() {
+-  if (!XRE_IsParentProcess() || PR_GetEnv("MOZ_DISABLE_SIG_HANDLER") ||
+-      !sAppShell) {
++  if (!XRE_IsParentProcess() || PR_GetEnv("MOZ_DISABLE_SIG_HANDLER")) {
++    return;
++  }
++  // TermSignalHandler() quits through the app shell, so without one SIGTERM
++  // keeps its default disposition.
++  MOZ_DIAGNOSTIC_ASSERT(sAppShell, "Install the handler after the app shell");
++  if (!sAppShell) {
+     return;
+   }
+
