@@ -34,6 +34,9 @@
 # --build prints nothing when everything is current, so a daily cron job stays quiet until there is something to
 # say. It prints a summary when it rebuilds, so that a successful rebuild is still mailed as a notification.
 #
+# Only one --build runs at a time. A second one waits until the first ends, and then rebuilds only what the first
+# left out of date.
+#
 # --prepare is for building elsewhere, such as in CI, without the local repository, the build user and the chroot.
 # It reads the patches from the repository it runs from, fetches the source of each package into DIR/<package>,
 # applies the patches there as a build does, and leaves building the source tree to the caller. Like --build, it
@@ -150,6 +153,7 @@ CRON_JOB=/etc/cron.daily/rebuild-patched-packages
 LOCAL_REPO=/usr/local/lib/debs
 STATE_DIR=/var/lib/patched-packages
 LOG_DIR=/var/log/patched-packages
+LOCK_FILE=/run/rebuild-patched-packages.lock
 SOURCES_DIR=/etc/apt/sources.list.d
 BUILD_USER=sbuild
 BUILD_ROOT=/tmp
@@ -166,7 +170,7 @@ BUILD_JOBS=$(nproc 2>/dev/null || echo 1)
 # failure mail names the whole install rather than the first thing noticed.
 REQUIRED_COMMANDS="apt-get:apt apt-cache:apt patch:patch gzip:gzip dpkg-deb:dpkg dpkg-scanpackages:dpkg-dev
                    dpkg-source:dpkg-dev dch:devscripts sbuild:sbuild mmdebstrap:mmdebstrap newuidmap:uidmap
-                   zstd:zstd setpriv:util-linux"
+                   zstd:zstd setpriv:util-linux flock:util-linux"
 
 MODE=check
 FORCE=no
@@ -624,8 +628,10 @@ prune_old_debs() {
 as_builder() {
   local work=$1
   shift
+  # The descriptor of the lock --build holds is closed for the command, so that a process the build leaves behind
+  # cannot keep later runs waiting.
   setpriv --reuid="$BUILD_USER" --regid="$BUILD_USER" --init-groups --inh-caps=-all \
-    env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME="$work/home" LANG=C.UTF-8 "$@"
+    env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME="$work/home" LANG=C.UTF-8 "$@" 9>&-
 }
 
 # Creates the chroot tarball the builds run in when there is none or it is older than CHROOT_MAX_AGE_DAYS. It is
@@ -816,6 +822,17 @@ case "$MODE" in
 
   build)
     [ "$(id -u)" -eq 0 ] || fail "--build needs root, re-run with sudo"
+
+    # Two builds at once would share the build user, the chroot tarball, /tmp, the state and the local repository,
+    # and each kills every process of the build user after each of its builds, so the build of the other too. A
+    # second run therefore waits here, before it reads which packages are out of date, so that it sees what the first
+    # one rebuilt. The lock is released when the script exits and its descriptor 9 is closed. The message is printed
+    # only to a terminal, so that a daily run which waits sends no mail.
+    exec 9>>"$LOCK_FILE" || fail "could not open the lock file $LOCK_FILE"
+    if ! flock -n 9; then
+      [ -t 2 ] && echo "rebuild-patched-packages: another --build is running, waiting until it ends" >&2
+      flock 9 || fail "could not lock $LOCK_FILE"
+    fi
 
     # Before any version is read, because a missing source index makes every package look current.
     ensure_deb_src apply
