@@ -23,8 +23,9 @@ Usage
 -----
   health-benchmark                       report the latest measurement against the best ones
   health-benchmark --run [--note TEXT]   measure now, once the load has dropped (root)
-  health-benchmark --scheduled           measure if the laptop is on AC power with the screen locked, and skip
-                                         otherwise (root, run once a day by health-benchmark.timer)
+  health-benchmark --scheduled           measure if started between 04:00 and 04:05, with the laptop on AC power
+                                         and the screen locked, and skip otherwise (root, run once a day at 04:00
+                                         by health-benchmark.timer)
   health-benchmark --restore-fan         return the fan to the EC's automatic control if a measurement which ended
                                          abnormally left it at a fixed duty cycle (root)
 
@@ -76,6 +77,12 @@ FAN_MARKER = '/run/health-benchmark.fan-fixed'
 SEVENZIP = '/usr/local/lib/health-benchmark/7zzs'
 
 PROFILE = 'performance'
+
+# health-benchmark.timer starts a scheduled measurement at SCHEDULED_AT, so the two have to match. A timer which
+# elapses while the laptop is suspended starts the service on resume, when the laptop is likely in use, so a scheduled
+# measurement which starts more than SCHEDULED_LATE_S after SCHEDULED_AT is skipped.
+SCHEDULED_AT = datetime.time(4, 0)
+SCHEDULED_LATE_S = 300
 
 # A phase is disturbed when other processes used more than this share of all CPU time during it. That costs the score
 # on all threads about as much, and the changes the measurements are meant to show are a few percent.
@@ -915,7 +922,8 @@ def run_manual(note):
 
 
 def run_scheduled():
-    """Measures if the laptop is on AC power with the screen locked, and otherwise skips, until the next day."""
+    """Measures if it starts within SCHEDULED_LATE_S after SCHEDULED_AT, with the laptop on AC power and the screen
+    locked, and otherwise skips, until the next day."""
     require_root()
     os.umask(0o022)
     with measurement_lock() as acquired:
@@ -925,6 +933,12 @@ def run_scheduled():
         if os.path.exists(FAN_MARKER):
             print('returning the fan to automatic control, which an earlier measurement left fixed', flush=True)
             restore_fan()
+        now = datetime.datetime.now()
+        start = datetime.datetime.combine(now.date(), SCHEDULED_AT)
+        end = start + datetime.timedelta(seconds=SCHEDULED_LATE_S)
+        if not start <= now <= end:
+            print(f'not measuring: started at {now:%H:%M:%S}, not between {start:%H:%M} and {end:%H:%M}', flush=True)
+            return
         if not on_ac_power():
             print('not measuring: not on AC power', flush=True)
             return
@@ -1104,8 +1118,11 @@ def main():
                     'the latest measurement against the best ones.')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--run', action='store_true', help='measure now, once the load has dropped (root)')
+    latest = (datetime.datetime.combine(datetime.date.today(), SCHEDULED_AT)
+              + datetime.timedelta(seconds=SCHEDULED_LATE_S))
     mode.add_argument('--scheduled', action='store_true',
-                      help='measure if the laptop is on AC power with the screen locked, and skip otherwise (root)')
+                      help=f'measure if started between {SCHEDULED_AT:%H:%M} and {latest:%H:%M}, with the laptop on AC '
+                           'power and the screen locked, and skip otherwise (root)')
     mode.add_argument('--restore-fan', action='store_true',
                       help='return the fan to automatic control if a measurement left it fixed (root)')
     mode.add_argument('--measure', action='store_true', help=argparse.SUPPRESS)

@@ -7,7 +7,9 @@
 # cannot be avoided this way.
 #
 # A day on which the laptop is suspended or off at 04:00 is skipped rather than made up later, because later the
-# laptop is likely in use.
+# laptop is likely in use. Persistent=false keeps a boot from starting a measurement missed while the laptop was off.
+# A timer which elapses during suspend still starts the service on resume, so health-benchmark --scheduled skips a
+# start later than 04:05. Its SCHEDULED_AT has to match OnCalendar.
 
 [Unit]
 Description=Measure cooling and processor performance once a day
