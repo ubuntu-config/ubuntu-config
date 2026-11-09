@@ -1,0 +1,83 @@
+Description: Wait in tracker-service-test until the loop of the endpoint thread runs, and join the thread.
+ Each test of tracker-service-test runs a D-Bus endpoint in a thread with its own main loop. The test waited only
+ until the thread had created the endpoint, and after the query it quit and freed the loop and set endpoint_loop to
+ NULL without waiting for the thread. When the thread reached g_main_loop_run() only after that, GLib aborted the test
+ with "g_main_loop_run: assertion 'loop != NULL' failed", which failed a build of the package in service-empty-2. With
+ a 200 ms sleep before g_main_loop_run(), the test aborts this way every time.
+ .
+ The thread now sets a flag from an idle callback, which runs only inside its running loop, the test waits for the
+ flag, and the cleanup quits the loop and joins the thread before it frees the loop and the endpoint. With the patch,
+ the test passes with the sleep, and 800 runs of it next to each other passed.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-09
+--- a/tests/core/tracker-service-test.c
++++ b/tests/core/tracker-service-test.c
+@@ -66,6 +66,7 @@
+ static TrackerSparqlConnection *remote = NULL;
+ static TrackerEndpointDBus *endpoint = NULL;
+ static GMainLoop *endpoint_loop = NULL;
++static gint endpoint_loop_running = FALSE;
+ 
+ static void
+ check_result (TrackerSparqlCursor *cursor,
+@@ -166,10 +167,19 @@
+ 	g_free (results);
+ }
+ 
++static gboolean
++endpoint_loop_running_cb (gpointer user_data)
++{
++	g_atomic_int_set (&endpoint_loop_running, TRUE);
++
++	return G_SOURCE_REMOVE;
++}
++
+ static gpointer
+ thread_func (gpointer user_data)
+ {
+ 	GMainContext *context;
++	GSource *source;
+ 	GError *error = NULL;
+ 
+ 	context = g_main_context_new ();
+@@ -183,6 +193,11 @@
+ 	if (!endpoint)
+ 		return NULL;
+ 
++	source = g_idle_source_new ();
++	g_source_set_callback (source, endpoint_loop_running_cb, NULL, NULL);
++	g_source_attach (source, context);
++	g_source_unref (source);
++
+ 	g_main_loop_run (endpoint_loop);
+ 	g_main_context_pop_thread_default (context);
+ 	g_main_context_unref (context);
+@@ -217,7 +232,10 @@
+ 	g_object_unref (ontology);
+ 
+ 	thread = g_thread_new (NULL, thread_func, remote);
+-	while (!endpoint) {
++	/* Wait until the loop of the endpoint runs, as quitting it
++	 * earlier would not stop it.
++	 */
++	while (!g_atomic_int_get (&endpoint_loop_running)) {
+ 		g_usleep (100);
+ 	}
+ 
+@@ -254,13 +272,14 @@
+ 
+ 	/* cleanup */
+ 	g_main_loop_quit (endpoint_loop);
++	g_thread_join (thread);
+ 	g_main_loop_unref (endpoint_loop);
+ 	endpoint_loop = NULL;
++	g_atomic_int_set (&endpoint_loop_running, FALSE);
+ 
+ 	g_clear_object (&local);
+ 	g_clear_object (&remote);
+ 	g_clear_object (&endpoint);
+-	g_thread_unref (thread);
+ }
+ 
+ static void

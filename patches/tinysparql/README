@@ -9,5 +9,16 @@ resource-print-null-on-invalid-input.patch
     https://gitlab.gnome.org/GNOME/tinysparql/-/merge_requests/819, including its test, which is
     added to tests/libtinysparql/tracker-resource-test.c and runs during the build.
 
-Drop the patch once Ubuntu ships a version which includes the merge request. If upstream changed
-the commit before merging it, check first that all three functions still return NULL there.
+service-test-wait-for-endpoint-loop.patch
+    Fixes a race in tests/core/tracker-service-test.c, which runs during the build. Each of its
+    tests runs a D-Bus endpoint in a thread with its own main loop, and quit and freed that loop
+    without waiting for the thread. When the thread reached g_main_loop_run() only after that, GLib
+    aborted the test, and with it the build, with "g_main_loop_run: assertion 'loop != NULL'
+    failed". The test now waits until the loop runs, and joins the thread before it frees the
+    loop. A 200 ms sleep before g_main_loop_run() makes the test fail every time without the patch
+    and pass with it. The patch changes only the test and is not proposed upstream yet.
+
+Drop resource-print-null-on-invalid-input.patch once Ubuntu ships a version which includes the
+merge request. If upstream changed the commit before merging it, check first that all three
+functions still return NULL there. Drop service-test-wait-for-endpoint-loop.patch once Ubuntu
+ships a version whose tracker-service-test waits for the loop of the endpoint to run.

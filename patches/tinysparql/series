@@ -1,1 +1,2 @@
 resource-print-null-on-invalid-input.patch
+service-test-wait-for-endpoint-loop.patch
