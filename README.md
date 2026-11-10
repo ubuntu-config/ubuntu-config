@@ -49,6 +49,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     back, and a warning when the fan stops following the heat.
   - [Cooling and performance tracked over time](#cooling-and-performance-tracked-over-time): a measurement at night,
     to follow dust in the fan and slowdowns from updates over the years.
+  - [FastFlowLM reads a shared history once](#fastflowlm-reads-a-shared-history-once): language models on the NPU
+    continue prompts which share all but their last message from a saved state.
 - [Fixes](#fixes): bugs fixed here, most of them reported or proposed upstream too.
   - [Applications quit cleanly and return as they were](#applications-quit-cleanly-and-return-as-they-were): every
     application runs in its own scope and quits before the session ends, and windows, documents and terminal tabs
@@ -107,31 +109,31 @@ system files through sudo). Every script by default only shows what it would cha
 when run with `--apply`. They are idempotent, so they can be rerun at any time to bring the system back to the
 configuration or to see how it has drifted from it.
 
-Where a setting is not enough, Ubuntu's own packages are patched. `patches/<source-package>/` contains patches
-which are applied on top of Ubuntu's source package, or for Firefox the Mozilla Team PPA's, together with tests for
-the patched behavior which run during the build where the package has a test suite to add them to. The PPA publishes
-the source to rebuild Firefox with, unlike Mozilla's own repository (requested in
-[Mozilla bug 2087959](https://bugzilla.mozilla.org/show_bug.cgi?id=2087959)).
+Where a setting is not enough, Ubuntu's own packages are patched. `patches/<source-package>/` contains patches which are
+applied on top of Ubuntu's source package, for Firefox the Mozilla Team PPA's, and for FastFlowLM, which publishes no
+source package, its newest release in its git repository, together with tests for the patched behavior which run during
+the build where the package has a test suite to add them to. The PPA publishes the source to rebuild Firefox with,
+unlike Mozilla's own repository (requested in [Mozilla bug
+2087959](https://bugzilla.mozilla.org/show_bug.cgi?id=2087959)).
 
-`rebuild-patched-packages.sh` rebuilds a package whenever Ubuntu publishes a new version of it or its patches change,
-and publishes the result to a local APT repository. That repository is pinned above the Ubuntu archive, so the next
-ordinary `apt upgrade` installs the patched build. unattended-upgrades installs it only when it would install the
-original version by itself, one from Ubuntu's release or security pockets or from the PPAs of Firefox and Chromium.
-A generated `Package-Blacklist` keeps it from the other packages of the local repository, such as rebuilds of
+`rebuild-patched-packages.sh` rebuilds a package whenever Ubuntu (or FastFlowLM) publishes a new version of it or its
+patches change, and publishes the result to a local APT repository. That repository is pinned above the Ubuntu archive,
+so the next ordinary `apt upgrade` installs the patched build. unattended-upgrades installs it only when it would
+install the original version by itself, one from Ubuntu's release or security pockets or from the PPAs of Firefox and
+Chromium. A generated `Package-Blacklist` keeps it from the other packages of the local repository, such as rebuilds of
 Ubuntu's other updates, and from any `.deb` placed there by hand, which `sudo rebuild-patched-packages --refresh`
-publishes. A daily cron job keeps patched
-packages current, running root-owned copies of the script and patches, installed with
-`install-rebuild-patched-packages.sh` (`cron.daily/`). The daily run also mails when a Firefox add-on patched here has
-a new release (see [Container tabs open in the window of their
+publishes. A daily cron job keeps patched packages current, running root-owned copies of the script and patches,
+installed with `install-rebuild-patched-packages.sh` (`cron.daily/`). The daily run also mails when a Firefox add-on
+patched here has a new release (see [Container tabs open in the window of their
 page](#container-tabs-open-in-the-window-of-their-page)). The daily cron jobs start at 05:00, after the daily
 measurement of cooling and performance at 04:00 and usually early enough for unattended-upgrades, which runs between
-06:00 and 07:00, to install a rebuilt package the same morning (`systemd/anacron.timer.d/`). Packages are built the
-way Ubuntu builds its own packages, with sbuild in a throwaway chroot without network access, with build dependencies
-installed only inside it. Its unshare mode needs no root even to set up the chroot, so everything runs as an
-unprivileged system user, and a package's build scripts and test suite cannot change the system. Builds run in `/tmp`,
-whose limit on the number of files is raised, since a Firefox build holds more files there than systemd's default
-allows (`systemd/tmp.mount.d/`). GitLab CI builds the patched packages too and runs the tests in
-`tests/<source-package>/` against them (`.gitlab-ci.yml`).
+06:00 and 07:00, to install a rebuilt package the same morning (`systemd/anacron.timer.d/`). Packages are built the way
+Ubuntu builds its own packages, with sbuild in a throwaway chroot without network access, except for FastFlowLM, whose
+build downloads its dependencies, with build dependencies installed only inside it. Its unshare mode needs no root even
+to set up the chroot, so everything runs as an unprivileged system user, and a package's build scripts and test suite
+cannot change the system. Builds run in `/tmp`, whose limit on the number of files is raised, since a Firefox build
+holds more files there than systemd's default allows (`systemd/tmp.mount.d/`). GitLab CI builds the patched packages too
+and runs the tests in `tests/<source-package>/` against them (`.gitlab-ci.yml`).
 
 Tests which require a whole desktop, such as windows returning to their workspaces after logging out and in, or the
 logout dialog, run in a GNOME session in a container (`tests/session/`): the real gnome-session and GNOME Shell,
@@ -431,6 +433,21 @@ in `/var/lib/health-benchmark/results.csv`, which everyone can read, and keeps t
 `health-benchmark` without arguments reports the latest measurement as a share of the best one for each value, and
 lists what changed since the measurement with the best performance. `sudo health-benchmark --run --note "..."`
 measures right away, which marks a reference point, for example before and after cleaning the fan.
+
+### FastFlowLM reads a shared history once
+
+FastFlowLM runs language models on the NPU of the Ryzen AI processor. Its server saves the state of a model while it
+reads a prompt, so that a later prompt which starts the same way continues from there instead of reading everything
+again, but only at the end of a system prompt of at least 512 tokens and at the end of each prompt. Prompts which share
+everything but their last message, like the same few-shot examples followed by different inputs, therefore read the
+shared part again every time. FastFlowLM is patched to save the state at the start of the last user message too, once a
+prompt shares everything before it with the prompt before (`patches/fastflowlm/`). With 3,500 tokens of examples, from
+the third prompt on Qwen3.6-35B-A3B reads a prompt in about 5 seconds instead of 18, and Qwen3.8-27B in 4.5 seconds
+instead of 33. A chat, whose turns only continue each other, saves no such state and is as fast as without the patch.
+
+FastFlowLM publishes its releases as `.deb` files on GitHub, but no source package, so `rebuild-patched-packages.sh`
+builds it from the newest release in its git repository, instead of `fetch-vendor-debs.py` downloading its `.deb`. Its
+build downloads the Rust crates and codec sources it needs, so it is the one package built with network access.
 
 ## Fixes
 

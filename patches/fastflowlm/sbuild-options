@@ -1,0 +1,4 @@
+# The build downloads over HTTPS the sources of its image and audio codecs, which CMake checks against their SHA256, and
+# the Rust crates of its tokenizers, whose versions cargo resolves at build time, as no Cargo.lock pins them.
+--enable-network
+--add-depends=ca-certificates

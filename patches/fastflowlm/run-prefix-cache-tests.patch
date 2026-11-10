@@ -1,0 +1,20 @@
+Description: Run the tests of the prefix cache in the build.
+ The tests of the prefix cache are a CMake project of their own, which the build does not run. They need no NPU, so the
+ build runs them, unless DEB_BUILD_OPTIONS has nocheck.
+Author: Mitar
+Forwarded: no
+---
+--- a/debian/rules	2026-11-10 12:24:32.249181110 +0100
++++ b/debian/rules	2026-11-10 12:24:32.250542797 +0100
+@@ -38,3 +38,11 @@
+ 
+ override_dh_gencontrol:
+ 	dh_gencontrol -- -Vflm:RuntimeDepends="$(FLM_RUNTIME_DEPENDS)"
++
++# The tests of the prefix cache need no NPU, so they run in the build.
++override_dh_auto_test:
++ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
++	cmake -S src/test/prefix_slot_cache -B build-tests/prefix_slot_cache -G Ninja
++	cmake --build build-tests/prefix_slot_cache
++	ctest --test-dir build-tests/prefix_slot_cache --output-on-failure
++endif

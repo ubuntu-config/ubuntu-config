@@ -104,19 +104,6 @@ SIGNATURE_MEMBER = '_gpgbuilder'
 SIGNATURE_MAX_BYTES = 64 * 1024
 REQUIRED_COMMANDS = ['dpkg', 'dpkg-deb', 'gpgv']
 
-
-def os_release(field):
-    """Returns the value of a field of /etc/os-release, or an empty string when it has none."""
-    with open('/etc/os-release') as file:
-        for line in file:
-            key, _, value = line.strip().partition('=')
-            if key == field:
-                return value.strip('"\'')
-    return ''
-
-
-UBUNTU_VERSION = os_release('VERSION_ID')
-
 Offer = collections.namedtuple('Offer', ['url', 'sha256'])
 
 
@@ -355,9 +342,6 @@ def verify_signature(signature, key, url):
 
 # The packages to fetch, keyed by their Debian package name.
 PACKAGES = {
-    # The builds prefixed HRX_ use the HRX runtime of AMD's FastFlow SDK, which FastFlowLM still calls a preview,
-    # instead of XRT from the Ubuntu archive.
-    'fastflowlm': GitHubRelease('ROCm/FastFlowLM', rf'fastflowlm_[^_]+_ubuntu{re.escape(UBUNTU_VERSION)}_amd64\.deb'),
     # FreeTube publishes every release as a pre-release.
     'freetube': GitHubRelease('FreeTubeApp/FreeTube', r'freetube_.+_amd64\.deb', prereleases=True),
     # The key in zoom.asc is 84C3 65D6 CC9A 4886 CA92 6BCC 4F21 9739 9706 AC24, created 2026-01-15. Zoom's download

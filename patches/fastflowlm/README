@@ -1,0 +1,54 @@
+Source package: fastflowlm
+
+FastFlowLM runs language models on the NPU of AMD Ryzen AI processors. It publishes .deb files of its releases on
+GitHub, but no source package, so it is rebuilt from its git repository: source-git names it, and the newest tag
+named like a version is cloned with its submodules (third_party/tokenizers-cpp and third_party/xgrammar). The source
+carries its own debian/, a 3.0 (native) package built with CMake, and a debian/changelog is written for the tag's
+version, because the repository has only a template of it, which FastFlowLM's CI fills in. The version the program
+reports comes from src/CMakePresets.json, not from the changelog, so the rebuild reports the release's version.
+
+The NPU engines are prebuilt libraries in src/lib/xrt and the NPU kernels prebuilt files in src/xclbins, under AMD's
+FastFlowLM NPU Binary License, which allows redistributing them unmodified. The rest is MIT licensed. The patches
+change only the MIT licensed part, which the build compiles and links with the prebuilt libraries.
+
+The build downloads the sources of the image and audio codecs, which CMake checks against their SHA256, and the Rust
+crates of the tokenizers, whose versions cargo resolves at build time, as no Cargo.lock pins them, and whose build
+scripts it runs. So sbuild-options gives the build network access, and ca-certificates for HTTPS. It is the one
+package built with network access. FastFlowLM's own CI builds its packages the same way.
+
+prefix-cache-shared-history.patch
+    The server's prefix cache saves the model's state while it reads a prompt, so that a later prompt which starts
+    the same way continues from that state instead of reading everything again. It saved a snapshot at the end of
+    the system prompt and tools, only when that is at least 512 tokens long, and one at the end of every prompt. The
+    recurrent state of Qwen3.5, Qwen3.6 and Qwen3.8 cannot be rewound to an earlier position, so a prompt continues
+    only from a snapshot whose tokens begin it. Prompts which share everything but their last user message, like the
+    same few-shot examples followed by different inputs, therefore read the examples again every time.
+
+    The patch saves a snapshot at the start of the last user message too, as a boundary snapshot, when the prompt before
+    shared everything up to it and went on with another last message. Reading up to that point is a prefill pass of its
+    own, which on qwen3.6-moe:35b-a3b costs about 3.5 seconds whatever its length. A chat turn only continues the turn
+    before and never reuses that point, and would pay for the pass every turn, so it is saved only when another prompt
+    went on from it. It is saved when it is at least 512 tokens into the prompt and at least --prefix-min-gain tokens
+    (128 by default) past the end of the system prompt and tools and past what the prompt resumed from. The end
+    snapshots saved after it hold only the rows after it. Qwen3.8, which keeps only the shared start of a conversation,
+    keeps this one as well.
+
+    The patch adds two tests to src/test/prefix_slot_cache, and updates the documentation of the prefix cache in
+    docs/. It is meant to be proposed upstream as it is, and has not been yet.
+
+keep-prebuilt-libraries.patch (debian-series)
+    dpkg-source leaves files named like build output, *.so and *.a among them, out of a source package of format 3.0
+    by default, so a source package built from the tree lacked the prebuilt NPU engines in src/lib, and its build
+    failed to link. debian/source/options with an explicit tar-ignore replaces that default list. FastFlowLM's own
+    CI builds only binary packages, straight from a checkout, and never a source package.
+
+cargo-home-in-build-tree.patch (debian-series)
+    Cargo keeps the crates it downloads in its home, which defaults to .cargo in the home directory. sbuild sets HOME
+    to a directory which does not exist, so debian/rules points CARGO_HOME into the build tree.
+
+run-prefix-cache-tests.patch (debian-series)
+    The tests of the prefix cache are a CMake project of their own, which the build does not run. They need no NPU, so
+    debian/rules runs them, unless DEB_BUILD_OPTIONS has nocheck.
+
+After a version bump, check that the tests still exercise _prefix_insert as src/common/AutoModel/automodel.cpp does:
+the prefill() helper of the test mirrors it.

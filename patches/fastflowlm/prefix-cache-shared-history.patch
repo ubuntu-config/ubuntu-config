@@ -1,0 +1,360 @@
+Description: Save a prefix cache snapshot at the start of the last user message too.
+ The prefix cache saved a snapshot at the end of the system prompt and tools, and one at the end of each prompt. A new
+ prompt resumes only from a snapshot whose tokens begin it, because the recurrent state of Qwen3.5, Qwen3.6 and Qwen3.8
+ cannot be rewound to an earlier position. Prompts which share everything but their last user message, like the same
+ few-shot examples followed by different inputs, or the same document followed by different questions, therefore
+ shared only the system prompt, and only when it was at least 512 tokens long, and every prompt read the shared history
+ again.
+ .
+ The history before the last user message is now saved as well, as a boundary snapshot, when the prompt before shared
+ it and went on with another last message, as prompts with the same few-shot examples do. Reading up to it takes a
+ prefill pass of its own, which on qwen3.6-moe:35b-a3b costs about 3.5 seconds whatever its length, so a chat, whose
+ every turn only continues the turn before, does not save it. It is saved when it is at least 512 tokens into the
+ prompt and adds at least --prefix-min-gain tokens to the system prompt and tools and to what the prompt resumed from.
+ The end snapshots saved after it hold only the rows after it. Qwen3.8, which keeps only the shared start of a
+ conversation, keeps it as well.
+ .
+ With a short system prompt and 3,500 tokens of few-shot examples, on a Ryzen AI 9 HX 370, every prompt from the third
+ one on read only its own last message, in about 5 seconds instead of 18 on qwen3.6-moe:35b-a3b and in 4.5 seconds
+ instead of 33 on qwen3.8-dflash2:27b. A chat of four turns took as long as without the patch.
+ .
+ Two tests of the prefix cache cover a shared history and a chat.
+Author: Mitar
+Forwarded: no
+---
+diff --git a/docs/docs/instructions/server/prefix_cache.md b/docs/docs/instructions/server/prefix_cache.md
+index 969168e..f2fd868 100644
+--- a/docs/docs/instructions/server/prefix_cache.md
++++ b/docs/docs/instructions/server/prefix_cache.md
+@@ -37,7 +37,7 @@ The other supported models gain the same way. Measured on shorter prompts (about
+ 
+ | | Prefix cache |
+ |---|---|
+-| Models | **Qwen:** `qwen3.5:0.8b` / `2b` / `4b` / `9b`, `qwen3.6-moe:35b-a3b`, `qwen3:0.6b` / `1.7b` / `4b` / `8b`, `qwen3-it:4b`, `qwen3-tk:4b`, `qwen2.5-it:3b`, `qwen3vl-it:4b`, `qwen2.5vl-it:3b`, `qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b` (the shared system prompt only, see below)<br>**Llama and DeepSeek:** `llama3.2:1b` / `3b`, `llama3.1:8b`, `deepseek-r1:8b`, `deepseek-r1-0528:8b`<br>**Phi and Nanbeige:** `phi4-mini-it:4b`, `nanbeige4.1:3b`<br>**LFM:** `lfm2:1.2b`, `lfm2:2.6b`, `lfm2-trans:2.6b`, `lfm2.5-it:1.2b`, `lfm2.5-tk:1.2b`<br>**gpt-oss:** `gpt-oss:20b`, `gpt-oss-sg:20b`<br>**Gemma:** `gemma3:1b`, `gemma3:4b`, `medgemma:4b`, `medgemma1.5:4b`, `translategemma:4b`, `gemma4-it:e2b` / `e4b` / `12b`, `nemotron3.5-bolt:e4b`<br>**MiniCPM:** `minicpm-v-4.7:1b`, `minicpm-v-4.7-moe:35b-a3b` |
++| Models | **Qwen:** `qwen3.5:0.8b` / `2b` / `4b` / `9b`, `qwen3.6-moe:35b-a3b`, `qwen3:0.6b` / `1.7b` / `4b` / `8b`, `qwen3-it:4b`, `qwen3-tk:4b`, `qwen2.5-it:3b`, `qwen3vl-it:4b`, `qwen2.5vl-it:3b`, `qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b` (the shared start only, see below)<br>**Llama and DeepSeek:** `llama3.2:1b` / `3b`, `llama3.1:8b`, `deepseek-r1:8b`, `deepseek-r1-0528:8b`<br>**Phi and Nanbeige:** `phi4-mini-it:4b`, `nanbeige4.1:3b`<br>**LFM:** `lfm2:1.2b`, `lfm2:2.6b`, `lfm2-trans:2.6b`, `lfm2.5-it:1.2b`, `lfm2.5-tk:1.2b`<br>**gpt-oss:** `gpt-oss:20b`, `gpt-oss-sg:20b`<br>**Gemma:** `gemma3:1b`, `gemma3:4b`, `medgemma:4b`, `medgemma1.5:4b`, `translategemma:4b`, `gemma4-it:e2b` / `e4b` / `12b`, `nemotron3.5-bolt:e4b`<br>**MiniCPM:** `minicpm-v-4.7:1b`, `minicpm-v-4.7-moe:35b-a3b` |
+ | Endpoint | `POST /v1/chat/completions` of `flm serve` (what Hermes, Open WebUI and most agents use), streaming or not |
+ | Not covered | `flm run` (CLI mode) and the Ollama endpoints `/api/chat` and `/api/generate`, which keep the older single-checkpoint reuse. A request on an Ollama endpoint also empties the prefix cache, so a client that mixes both APIs loses its cached prompts. |
+ 
+@@ -173,7 +173,7 @@ The server log shows each decision:
+ 
+ ## 🧠 How it works
+ 
+-1. While FLM reads a prompt it saves a **snapshot** of the model's state at the end of the system prompt and tools, and another one at the end of the prompt.
++1. While FLM reads a prompt it saves a **snapshot** of the model's state at the end of the system prompt and tools, and another one at the end of the prompt. When the prompt before shared everything up to the last user message and went on with another one, it also saves one at the start of that message, which serves prompts that share everything but their last message, like the same few-shot examples or the same document followed by different questions. A chat, whose every turn only continues the turn before, does not save it, since reading up to it takes a pass of its own. Each of the first two is saved when it is at least 512 tokens into the prompt, and the one at the last user message only when it adds at least `--prefix-min-gain` tokens to the first and to what the prompt resumed from.
+ 2. For a new request, FLM looks for the **longest saved snapshot whose text is exactly the beginning of the new prompt**. It restores that snapshot and reads only the rest.
+ 3. Snapshots are matched on the exact tokens, so two different conversations that start with the same system prompt reuse the same snapshot of it. Images are matched by their content: the same picture is reused, a different picture is read again (the text before it is still reused).
+ 4. A short request with its own system prompt (for example the title call some agents send after each turn) does not erase the snapshots of the main conversation.
+@@ -199,7 +199,7 @@ In the multi-agent runs the first sub-agent reads the shared system prompt and i
+ - **Qwen3.6 after a tool loop.** Qwen3.6's chat template rewrites the earlier assistant messages (their reasoning blocks) as soon as a newer user message arrives. After a tool-using turn, a new user message can therefore only reuse the system prompt and the first user message, not the whole history. No prompt cache can do better with this template; without the prefix cache nothing is reused.
+ - **Answers are not bit-for-bit identical to a cold run.** Resuming from a snapshot gives the same quality, but with greedy decoding some answers differ in wording (for example the order of a list) from what the same prompt gives when read from scratch: about 1 in 5 on Qwen3.5 and about 1 in 3 on Qwen3.6 in our replay tests. The cache that came before it behaves the same way.
+ - **Hermes sub-agents.** Sub-agents reuse the parent's system-prompt snapshot only when every task's `context` field is empty. A per-task context is placed in the sub-agent's system prompt, which makes each sub-agent a different prompt that is read from scratch. Larger models (4B and up) leave it empty in practice; `qwen3.5:2b` sometimes fills it in.
+-- **Qwen3.8-27B keeps the shared system prompt only.** A saved prompt of this model is large (about 150 MiB plus 84 KiB per token), so it saves the shared start of a conversation (system prompt + tools) and nothing after it, for text prompts. A conversation that keeps going is still continued from the end of its last turn with the older single-checkpoint reuse, as before; the saved system prompt is used when another conversation ran in between, so several agents that share one system prompt do not read it again each time.
++- **Qwen3.8-27B keeps the shared start only.** A saved prompt of this model is large (about 150 MiB plus 84 KiB per token), so it saves the shared start of a conversation (system prompt + tools, and the history before the last user message) and nothing after it, for text prompts. A conversation that keeps going is still continued from the end of its last turn with the older single-checkpoint reuse, as before; the saved system prompt is used when another conversation ran in between, so several agents that share one system prompt do not read it again each time.
+ - **Gemma 3 has no shared system-prompt snapshot.** Its chat template puts the system prompt inside the first user turn, so two conversations that differ in their first message have no text in common to save as a shared start. Each conversation still reuses its own earlier turns.
+ - **Models with a sliding window or a convolution state** (Gemma 3 and 4, gpt-oss, the LFM2 family) save a state that cannot be rewound, so a saved prompt is resumed only when the new prompt starts with all of it, and a prompt that shares just the first part of a saved one resumes at the saved system-prompt start instead.
+ - **Pictures and audio.** The Qwen-VL models, Qwen3.5 and MiniCPM-V reuse prompts that contain pictures. The Gemma 4 models (and the `nemotron3.5-bolt` model built on them) reuse text prompts through the prefix cache; a prompt with a picture or audio keeps the older single-checkpoint reuse. `qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b` are text only.
+diff --git a/docs/docs/models/qwen.md b/docs/docs/models/qwen.md
+index 9ddc04c..b304e54 100644
+--- a/docs/docs/models/qwen.md
++++ b/docs/docs/models/qwen.md
+@@ -643,7 +643,7 @@ The `-r` option determines the image's height:
+ - **Type:** Image-Text-to-Text
+ - **Think:** Yes
+ - **Tool Calling Support:** Yes  
+-- **Prefix cache (server mode):** Partly: the shared system prompt of text conversations is saved; a conversation that keeps going uses the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
++- **Prefix cache (server mode):** Partly: the shared start of text conversations (the system prompt, and the history before the last user message) is saved; a conversation that keeps going uses the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
+ - **Speculative Decoding:** Yes — built-in MTP draft head (see note below)
+ - **Base Model:** [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
+ - **Quantization:** Q4_K
+diff --git a/src/common/AutoModel/automodel.cpp b/src/common/AutoModel/automodel.cpp
+index 179ef25..7a8e080 100644
+--- a/src/common/AutoModel/automodel.cpp
++++ b/src/common/AutoModel/automodel.cpp
+@@ -462,32 +462,51 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
+                                std::optional<int> requested_max_new_tokens) {
+     bool success = true;
+     uint64_t head_prefill_ns = 0;
+-    // Save the end of system + tools while prefilling, so a prompt that shares only that part
+-    // (another conversation, a side request) can resume there.
++    // Save up to two shared heads while prefilling, each where a user turn starts:
++    //   - the end of system + tools (the first user turn), so a prompt that shares only that part
++    //     (another conversation, a side request) can resume there;
++    //   - the history before the last user turn, so prompts that share everything but their last
++    //     message (few-shot examples, a document followed by different questions) can resume there.
+     size_t boundary = 0;
++    size_t history = 0;
++    bool save_history = false;
+     {
+         const std::vector<int> marker = this->tokenizer->encode(boundary_marker);
++        size_t first = 0;
+         for (size_t i = 1; i + marker.size() <= full_tokens.size() && !marker.empty(); i++) {
+             if (std::equal(marker.begin(), marker.end(), full_tokens.begin() + i)) {
+-                boundary = i;
+-                break;
++                if (first == 0) first = i;
++                history = i;
+             }
+         }
+-        if (boundary < cache.min_boundary) boundary = 0;
+-    }
+-    if (payload == nullptr && boundary > match_len && boundary < full_tokens.size()) {
+-        std::vector<int> head(full_tokens.begin(), full_tokens.begin() + boundary);
++        boundary = first >= cache.min_boundary ? first : 0;
++        if (history == first || history < cache.min_boundary) history = 0;
++        // Saving the history costs a prefill pass of its own, so it is saved only when the prompt before this one
++        // shared it and went on with another last message, as prompts with the same few-shot examples do. A chat turn
++        // only continues the turn before, and would pay for the pass every turn. It also has to add enough over the
++        // boundary slot and over what this prompt resumed from to be worth a slot.
++        save_history = history > 0 && history >= boundary + cache.min_end_gain && history >= match_len + cache.min_end_gain &&
++                       cache.forked(full_tokens, history);
++    }
++    auto save_head = [&](size_t length, bool is_boundary) {
++        std::vector<int> head(full_tokens.begin(), full_tokens.begin() + length);
+         chat_meta_info_t head_meta;
+         head_meta.max_prefill_len = meta_info.max_prefill_len;
+-        success = this->_shared_insert(head_meta, head, is_cancelled, nullptr, 0, std::nullopt, false);
+-        if (success) {
+-            head_prefill_ns = head_meta.prefill_duration;
+-            const std::vector<int> head_tokens(full_tokens.begin(), full_tokens.begin() + boundary);
+-            cache.set_live(head_tokens);
+-            cache.save(head_tokens, {}, true, 0);
+-        } else {
++        if (!this->_shared_insert(head_meta, head, is_cancelled, nullptr, 0, std::nullopt, false)) {
+             meta_info.stop_reason = head_meta.stop_reason;
++            return false;
+         }
++        head_prefill_ns += head_meta.prefill_duration;
++        const std::vector<int> head_tokens(full_tokens.begin(), full_tokens.begin() + length);
++        cache.set_live(head_tokens);
++        cache.save(head_tokens, {}, is_boundary, 0);
++        return true;
++    };
++    if (payload == nullptr && boundary > match_len && boundary < full_tokens.size()) {
++        success = save_head(boundary, true);
++    }
++    if (success && payload == nullptr && save_history && history < full_tokens.size()) {
++        success = save_head(history, true);
+     }
+     if (success) {
+         success = payload != nullptr
+@@ -502,9 +521,12 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
+     meta_info.cached_prompt_tokens = static_cast<int>(match_len);
+     meta_info.prefill_duration += head_prefill_ns;
+     cache.set_live(full_tokens);
+-    // the end of this prompt keeps only what follows the shared head, when a slot holds that head
++    cache.set_last_prompt(full_tokens);
++    // the end of this prompt keeps only what follows the longest shared head a slot holds
+     if (!cache.boundary_only) {
+-        cache.save(full_tokens, image_hashes, false, cache.end_kv_from(full_tokens, boundary));
++        int kv_from = cache.end_kv_from(full_tokens, history);
++        if (kv_from == 0) kv_from = cache.end_kv_from(full_tokens, boundary);
++        cache.save(full_tokens, image_hashes, false, kv_from);
+     }
+     meta_info.prefix_cache = cache.report();
+     return true;
+diff --git a/src/common/prefix_slot_cache.cpp b/src/common/prefix_slot_cache.cpp
+index 2dd3141..60483ba 100644
+--- a/src/common/prefix_slot_cache.cpp
++++ b/src/common/prefix_slot_cache.cpp
+@@ -92,6 +92,12 @@ void PrefixSlotCache::attach(void* engine, const flm_state_api* api) {
+ void PrefixSlotCache::forget_all() {
+     slots_table_.clear(); // the states are ours: their memory goes with them
+     live_tokens_.clear();
++    last_prompt_.clear();
++}
++
++bool PrefixSlotCache::forked(const std::vector<int>& tokens, size_t length) const {
++    return length <= tokens.size() && last_prompt_.size() > length && lcp_len(last_prompt_, tokens) >= length &&
++           !has_prefix(tokens, last_prompt_);
+ }
+ 
+ int PrefixSlotCache::end_kv_from(const std::vector<int>& tokens, size_t boundary) const {
+diff --git a/src/include/AutoModel/automodel.hpp b/src/include/AutoModel/automodel.hpp
+index f06f890..2239b4d 100644
+--- a/src/include/AutoModel/automodel.hpp
++++ b/src/include/AutoModel/automodel.hpp
+@@ -326,9 +326,10 @@ protected:
+ 	/// \param tokens the prompt without its last generation-prompt tokens (what is prefilled)
+ 	/// \param full_tokens the same tokens, kept intact: _shared_insert erases the part the engine already holds from `tokens`
+ 	/// \param match_len what _prefix_resume returned
+-	/// \param boundary_marker the text that opens the first user turn, e.g. "<|im_start|>user": everything before it is
+-	///        the shared head (system + tools), saved as its own slot while prefilling when it is long enough
+-	/// \param payload image payload or nullptr; a prompt with images is not split at the boundary
++	/// \param boundary_marker the text that opens a user turn, e.g. "<|im_start|>user": everything before the first one is
++	///        the shared head (system + tools), saved as its own slot while prefilling when it is long enough, and everything
++	///        before the last one the history, saved as well when the prompt before this one shared it
++	/// \param payload image payload or nullptr; a prompt with images is not split at the boundary or the history
+ 	/// \param last_image_token_index as _shared_insert's first_len_run
+ 	bool _prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_info, std::vector<int>& tokens, const std::vector<int>& full_tokens,
+ 	                    const std::vector<uint64_t>& image_hashes, size_t match_len, const std::string& boundary_marker,
+@@ -356,7 +357,7 @@ protected:
+ 
+ 	/// \brief insert a text-only prompt through the slots (use when _prefix_slot_mode() said yes)
+ 	/// \param tokens the whole rendered prompt; its last `trim` tokens are left out of the prefill
+-	/// \param boundary_marker the text that opens the first user turn (see _prefix_insert)
++	/// \param boundary_marker the text that opens a user turn (see _prefix_insert)
+ 	bool _prefix_text_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, size_t trim, const std::string& boundary_marker,
+ 	                         std::function<bool()> is_cancelled, std::optional<int> requested_max_new_tokens = std::nullopt);
+ 
+diff --git a/src/include/prefix_slot_cache.hpp b/src/include/prefix_slot_cache.hpp
+index c1fc2db..6b99e68 100644
+--- a/src/include/prefix_slot_cache.hpp
++++ b/src/include/prefix_slot_cache.hpp
+@@ -62,7 +62,7 @@ struct prefix_cache_report_t {
+     bool hit = false;             ///< the request resumed from a slot
+     std::string miss_reason;      ///< why not, when it did not
+     int slot = -1;                ///< id of the slot resumed from (ids are never reused)
+-    bool slot_boundary = false;   ///< that slot is a boundary slot (system + tools head) rather than an end slot
++    bool slot_boundary = false;   ///< that slot is a boundary slot (a shared head) rather than an end slot
+     int matched_tokens = 0;       ///< tokens of the prompt it covered
+     int prompt_tokens = 0;        ///< tokens the cache considered (the prompt without its generation prompt)
+     struct saved_t {
+@@ -95,9 +95,10 @@ public:
+     ///       28% / 44% fewer snapshots. 0 saves every end snapshot.
+     static constexpr size_t kDefaultMinEndGain = 128;
+     size_t min_end_gain = kDefaultMinEndGain;
+-    /// \brief save boundary slots (the shared system + tools head) only, no end-of-prompt snapshots
++    /// \brief save the shared heads only (the system + tools head, and the history before the last user turn), no
++    ///        end-of-prompt snapshots
+     /// \note For a model whose snapshot is too big to keep one per conversation turn (qwen3.8-mtp: ~160 MB of recurrent state
+-    ///       and 64 KB per token): it keeps its own checkpoint for a conversation that continues and uses the head slot
++    ///       and 64 KB per token): it keeps its own checkpoint for a conversation that continues and uses a head slot
+     ///       when another conversation ran in between.
+     bool boundary_only = false;
+     /// \brief limits while --prefix-cache-mb / --prefix-slots stay at their defaults (0 = the global defaults)
+@@ -130,7 +131,8 @@ public:
+     resume_t resume(const std::vector<int>& full_tokens, const std::vector<uint64_t>& image_hashes, std::vector<int>& matched_tokens);
+ 
+     /// \brief read the engine's current context into a new slot; `tokens` is what the engine holds
+-    /// \param boundary true for the end of system + tools (kv_from 0, evicted last)
++    /// \param boundary true for a shared head: the end of system + tools, or the history before the last user turn (kv_from 0,
++    ///        evicted last)
+     /// \param kv_from first position whose K/V rows the slot saves (0 = self-contained)
+     void save(const std::vector<int>& tokens, const std::vector<uint64_t>& image_hashes, bool boundary, int kv_from);
+ 
+@@ -140,6 +142,11 @@ public:
+ 
+     /// \brief tokens whose K/V rows the engine's cache holds now (what the last request left in it)
+     void set_live(const std::vector<int>& tokens) { live_tokens_ = tokens; }
++    /// \brief remember the whole prompt of a request, for forked()
++    void set_last_prompt(const std::vector<int>& tokens) { last_prompt_ = tokens; }
++    /// \brief whether the prompt before this one shared the first `length` tokens of `tokens` and then went on differently
++    /// \note A prompt which `tokens` only continues, like the previous turn of a chat, is no fork.
++    bool forked(const std::vector<int>& tokens, size_t length) const;
+     /// \param announce log that the engine's context was dropped while the slots were kept (a clear or a cancel, not a cold start)
+     void clear_live(bool announce = false);
+ 
+@@ -159,7 +166,7 @@ private:
+         std::vector<uint64_t> image_hashes;  // content of the images inside `tokens`
+         uint64_t last_used = 0;
+         int id = 0;                          // told apart in logs and usage; never reused
+-        bool boundary = false;               // end of system + tools; evicted last
++        bool boundary = false;               // a shared head; evicted last
+         /// first position whose K/V rows the slot holds
+         int kv_from() const { return state->kv_from(); }
+     };
+@@ -173,6 +180,7 @@ private:
+     const flm_state_api* api_ = nullptr;
+     std::vector<slot_t> slots_table_;
+     std::vector<int> live_tokens_;
++    std::vector<int> last_prompt_;
+     uint64_t clock_ = 0;
+     int cache_mb_ = -1;
+     int slots_ = -1;
+diff --git a/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp b/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
+index 66e5e6b..85b4e95 100644
+--- a/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
++++ b/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
+@@ -90,17 +90,30 @@ std::vector<int> cat(std::vector<int> a, const std::vector<int>& b) {
+     return a;
+ }
+ 
+-/// \brief what AutoModel::_prefix_insert does after a prefill: boundary snapshot at `head`, end snapshot at the end
+-void prefill(PrefixSlotCache& cache, fake_engine& e, const std::vector<int>& prompt, size_t head) {
++/// \brief what AutoModel::_prefix_insert does after a prefill: boundary snapshot at `head`, boundary snapshot at `history`
++///        (the start of the last user turn) when the prompt before forked there, end snapshot at the end
++/// \param match what the prompt resumed from
++void prefill(PrefixSlotCache& cache, fake_engine& e, const std::vector<int>& prompt, size_t head, size_t history = 0,
++             size_t match = 0) {
+     if (head > 0) {
+         std::vector<int> h(prompt.begin(), prompt.begin() + head);
+         e.length = static_cast<int>(head);
+         cache.set_live(h);
+         cache.save(h, {}, true, 0);
+     }
++    if (history > 0 && history >= head + cache.min_end_gain && history >= match + cache.min_end_gain &&
++        cache.forked(prompt, history)) {
++        std::vector<int> h(prompt.begin(), prompt.begin() + history);
++        e.length = static_cast<int>(history);
++        cache.set_live(h);
++        cache.save(h, {}, true, 0);
++    }
+     e.length = static_cast<int>(prompt.size());
+     cache.set_live(prompt);
+-    cache.save(prompt, {}, false, cache.end_kv_from(prompt, head));
++    cache.set_last_prompt(prompt);
++    int kv_from = cache.end_kv_from(prompt, history);
++    if (kv_from == 0) kv_from = cache.end_kv_from(prompt, head);
++    cache.save(prompt, {}, false, kv_from);
+ }
+ 
+ size_t resume(PrefixSlotCache& cache, const std::vector<int>& prompt, const std::vector<uint64_t>& images = {}) {
+@@ -212,6 +225,49 @@ void test_boundary_kept_for_dependents() {
+     CHECK(resume(cache, cat(sys, seq(8000, 5))) == sys.size());
+ }
+ 
++void test_shared_history() {
++    std::printf("prompts sharing everything before their last user turn resume there from the second one on, and that slot outlives the end slots\n");
++    fake_engine e;
++    PrefixSlotCache cache = make(e, 100000, 4);
++    // a system prompt too short for a boundary slot, followed by few-shot examples
++    const auto history = seq(1, 1500);
++    prefill(cache, e, cat(history, seq(5000, 100)), 0, history.size());    // no prompt before it: only E1
++    CHECK(cache.slot_count() == 1);
++    const auto q2 = cat(history, seq(6000, 100));
++    CHECK(resume(cache, q2) == 0);
++    prefill(cache, e, q2, 0, history.size());                              // forked from the first: H, E2 (kv_from 1500)
++    CHECK(cache.slot_count() == 3);
++    for (int i = 0; i < 6; i++) {
++        const auto q = cat(history, seq(7000 + 1000 * i, 100));
++        CHECK(resume(cache, q) == history.size());
++        prefill(cache, e, q, 0, history.size(), history.size());          // resumed at H: only an end slot is added
++    }
++    // the end slots were evicted, least recently used first, and H, which they need, stayed
++    CHECK(cache.slot_count() == 4);
++    cache.clear_live();
++    CHECK(resume(cache, cat(history, seq(20000, 100))) == history.size());
++}
++
++void test_chat_saves_no_history() {
++    std::printf("a chat turn, which only continues the turn before, saves no slot before its last user turn\n");
++    fake_engine e;
++    PrefixSlotCache cache = make(e, 100000, 8);
++    const auto sys = seq(1, 600);
++    const auto turn1 = cat(sys, seq(5000, 200));
++    prefill(cache, e, turn1, 600);                                  // one user turn: B, E1
++    const auto history2 = cat(turn1, seq(6000, 300));               // turn 1 with its reply, and the start of turn 2
++    const auto turn2 = cat(history2, seq(7000, 200));
++    CHECK(resume(cache, turn2) == turn1.size());
++    prefill(cache, e, turn2, 600, history2.size(), turn1.size());  // continues turn 1: E2 only
++    CHECK(cache.slot_count() == 3);
++    CHECK(resume(cache, cat(history2, seq(8000, 30))) == turn1.size());
++    // a prompt which shares the history of turn 2 but asks something else is a fork: it saves the history slot
++    const auto other = cat(history2, seq(9000, 200));
++    CHECK(resume(cache, other) == turn1.size());
++    prefill(cache, e, other, 600, history2.size(), turn1.size());
++    CHECK(resume(cache, cat(history2, seq(10000, 30))) == history2.size());
++}
++
+ void test_small_tail_not_saved() {
+     std::printf("a side call a few tokens past the shared head is not saved, so it cannot push out the main conversation\n");
+     fake_engine e;
+@@ -391,6 +447,8 @@ int main() {
+     test_head_restored_after_cold_request();
+     test_eviction_order();
+     test_boundary_kept_for_dependents();
++    test_shared_history();
++    test_chat_saves_no_history();
+     test_small_tail_not_saved();
+     test_min_end_gain();
+     test_budget();

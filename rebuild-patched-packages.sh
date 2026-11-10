@@ -65,10 +65,15 @@
 # Building
 # --------
 # Packages are built with sbuild in its unshare mode, which needs no root: as the unprivileged sbuild system user
-# the sbuild package creates, in a throwaway chroot unpacked from a tarball, without network access. The build
-# dependencies are installed only inside that chroot, so nothing is installed on the system for a build, and the
-# package's own build scripts and test suite can change neither the system nor anything outside the chroot. Root
-# only fetches the source, applies the patches and publishes the result, none of which runs code from the package.
+# the sbuild package creates, in a throwaway chroot unpacked from a tarball, without network access unless the
+# package's sbuild-options enable it. The build dependencies are installed only inside that chroot, so nothing is
+# installed on the system for a build, and the package's own build scripts and test suite can change neither the
+# system nor anything outside the chroot. Root only fetches the source, applies the patches and publishes the result,
+# none of which runs code from the package.
+#
+# Each package is rebuilt in a subshell of its own. A failed rebuild is reported like any failure and makes the run
+# exit with a failure, but the packages after it are still rebuilt, and the index of the local repository is still
+# regenerated for the packages rebuilt.
 #
 # Builds run in /tmp, a tmpfs, both the work directory and sbuild's chroot. The source package is built in the work
 # directory and the unpacked source removed before sbuild starts, so that the build holds only sbuild's own copy of
@@ -110,10 +115,17 @@
 #                        ppa.launchpadcontent.net/mozillateam/ppa. The repository has to offer deb-src, which this
 #                        script does not enable for it (see ensure_deb_src). Without the file, the highest version
 #                        any deb-src entry offers is rebuilt, which in practice is Ubuntu's.
+#   source-git           the URL of a git repository the source comes from instead of apt, for software which
+#                        publishes no source package, like FastFlowLM. Its newest tag named like a version, 1.2.3 or
+#                        v1.2.3, is rebuilt, cloned with its submodules, and the version is the tag's without the v.
+#                        The repository has to carry its own debian/, for a source package named like the patch
+#                        directory, and when it has no debian/changelog, one is written for that version. A tag which
+#                        moved to another commit since its version was built is refused.
 #   extra-repositories   repositories added to the build chroot, for build dependencies the Ubuntu archive does not
 #                        have, one per line as "<key file> deb <URL> <suite> <components>", with the key file in
 #                        the same directory.
-#   sbuild-options       further sbuild options, one per line.
+#   sbuild-options       further sbuild options, one per line, like --enable-network for a build which downloads what
+#                        it needs.
 #
 # A patch that applies is not a patch that works, and the build itself shows whether it works. Two things catch a patch
 # that has gone stale, and neither needs any machinery here:
@@ -134,6 +146,7 @@
 #   devscripts        provides dch, used to append the local version suffix.
 #   sbuild, mmdebstrap and uidmap
 #                     build in a throwaway chroot as an unprivileged user, see Building above.
+#   git               clones the source of a package with a source-git file.
 #
 #
 # Versioning
@@ -256,7 +269,9 @@ check_prereqs() {
   MISSING_PACKAGES=""
   local entry cmd pkg
 
-  for entry in $REQUIRED_COMMANDS; do
+  local required=$REQUIRED_COMMANDS
+  compgen -G "$PATCH_DIR/*/source-git" >/dev/null && required="$required git:git"
+  for entry in $required; do
     cmd=${entry%%:*}; pkg=${entry##*:}
     command -v "$cmd" >/dev/null 2>&1 && continue
     echo "  missing command $cmd, provided by the $pkg package"
@@ -471,11 +486,37 @@ source_from() {
   package_setting "$1" source-from | head -1
 }
 
-# The version currently offered for a source package, from the repository source-from names, or else from every
+# The URL of the git repository a package's source comes from instead of apt, or nothing.
+source_git() {
+  package_setting "$1" source-git | head -1
+}
+
+# What to check when official_version finds no version of a package, for the messages saying so.
+no_version_hint() {
+  local git
+  git=$(source_git "$1")
+  if [ -n "$git" ]; then
+    echo "can $git be reached, and does it have a tag named like a version?"
+  else
+    echo "is deb-src enabled for its repository?"
+  fi
+}
+
+# The version currently offered for a source package: for a package with a source-git file the newest tag of that
+# repository named like a version, without its v, and else from the repository source-from names, or from every
 # deb-src entry. Versions carrying our suffix are left out, so that our own rebuild is never mistaken for the
-# upstream version and cannot suppress a rebuild.
+# upstream version and cannot suppress a rebuild. Prints nothing when no version is offered or the repository cannot
+# be reached.
 official_version() {
-  local from
+  local from git
+  git=$(source_git "$1")
+  if [ -n "$git" ]; then
+    git ls-remote --tags --refs "$git" 2>/dev/null \
+      | sed -n 's|^[0-9a-f]*[[:space:]]*refs/tags/v\{0,1\}\([0-9][0-9.]*\)$|\1|p' \
+      | grep -E '^[0-9]+(\.[0-9]+)*$' \
+      | sort -V | tail -1 || true
+    return 0
+  fi
   from=$(source_from "$1")
   if [ -n "$from" ]; then
     # madison lists the source package's versions as lines ending in "Sources", each naming its repository URL.
@@ -512,7 +553,7 @@ patches_digest() {
       echo "=== debian-series $p"
       cat "$dir/$p" 2>/dev/null || true
     done < <(package_setting "$src" debian-series)
-    for f in build-options debian-series source-from extra-repositories sbuild-options; do
+    for f in build-options debian-series source-from source-git extra-repositories sbuild-options; do
       if [ -r "$dir/$f" ]; then
         echo "=== $f"
         cat "$dir/$f"
@@ -663,17 +704,55 @@ stage_patches() {
 }
 
 # Fetches the source of a version of a source package into an empty directory and applies its patches there, see
-# stage_patches. Leaves the path of the unpacked source tree in TREE.
+# stage_patches. Leaves the path of the unpacked source tree in TREE, and for a package with a source-git file the
+# commit it was cloned at in SOURCE_COMMIT.
 TREE=""
+SOURCE_COMMIT=""
 fetch_patched_source() {
   local src=$1 version=$2 dir=$3
-  ( cd "$dir" && apt-get source --only-source "$src=$version" ) >/dev/null 2>&1 \
-    || fail "$src: apt-get source failed for $version (is deb-src enabled?)"
+  if [ -n "$(source_git "$src")" ]; then
+    clone_source "$src" "$version" "$dir"
+  else
+    ( cd "$dir" && apt-get source --only-source "$src=$version" ) >/dev/null 2>&1 \
+      || fail "$src: apt-get source failed for $version (is deb-src enabled?)"
 
-  TREE=$(find "$dir" -maxdepth 1 -mindepth 1 -type d | head -1)
-  [ -n "$TREE" ] || fail "$src: apt-get source produced no source tree"
+    TREE=$(find "$dir" -maxdepth 1 -mindepth 1 -type d | head -1)
+    [ -n "$TREE" ] || fail "$src: apt-get source produced no source tree"
+  fi
 
   stage_patches "$src" "$TREE"
+}
+
+# Clones the tag of a version of the repository a package's source-git file names, with its submodules, into
+# DIR/<source-package>, and leaves the path in TREE and the commit in SOURCE_COMMIT. Git runs no code of the
+# repository while cloning. The tree is named without the version, which dch would otherwise rename.
+clone_source() {
+  local src=$1 version=$2 dir=$3 git tag was name email
+  git=$(source_git "$src")
+  tag=$(git ls-remote --tags --refs "$git" "v$version" "$version" 2>/dev/null | head -1 | sed 's|.*refs/tags/||')
+  [ -n "$tag" ] || fail "$src: $git has no tag v$version or $version"
+  TREE=$dir/$src
+  git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$tag" --recurse-submodules \
+    --shallow-submodules "$git" "$TREE" >/dev/null 2>&1 \
+    || fail "$src: cloning $tag of $git failed"
+  SOURCE_COMMIT=$(git -C "$TREE" rev-parse HEAD) || fail "$src: cannot read the commit of $tag"
+
+  # A tag which moved means the same version now names other code, which is refused rather than built unnoticed.
+  was=$(cat "$STATE_DIR/$src.commit" 2>/dev/null || true)
+  if [ "$(built_version "$src")" = "$version" ] && [ -n "$was" ] && [ "$was" != "$SOURCE_COMMIT" ]; then
+    fail "$src: tag $tag of $git moved from commit $was, which $version was built from, to $SOURCE_COMMIT"
+  fi
+
+  # The source package carries no repository, and dpkg-source would leave .git out of it anyway.
+  find "$TREE" -name .git -prune -exec rm -rf {} +
+
+  name=$(awk '/^Source:/ { print $2; exit }' "$TREE/debian/control" 2>/dev/null || true)
+  [ "$name" = "$src" ] || fail "$src: debian/control of $tag names the source package \"$name\" instead"
+  if [ ! -e "$TREE/debian/changelog" ]; then
+    email=${DEBEMAIL:-root@$(hostname -f 2>/dev/null || hostname)}
+    printf '%s (%s) %s; urgency=medium\n\n  * Release %s of %s.\n\n -- %s <%s>  %s\n' "$src" "$version" "$CODENAME" \
+      "$tag" "$git" "${DEBFULLNAME:-Local patched build}" "$email" "$(date -R)" > "$TREE/debian/changelog"
+  fi
 }
 
 # Drop any older build of the binary packages we just produced, so the local repository holds one version of each
@@ -726,7 +805,7 @@ rebuild() {
   echo "$src: rebuilding $version as $local_version ($reason) in $work"
 
   fetch_patched_source "$src" "$version" "$work"
-  local tree=$TREE
+  local tree=$TREE commit=$SOURCE_COMMIT
 
   local opts="" email status=0
   [ -r "$PATCH_DIR/$src/build-options" ] && opts=$(cat "$PATCH_DIR/$src/build-options")
@@ -760,11 +839,12 @@ rebuild() {
   # The source package is built here with the same dpkg-source steps sbuild runs on a source tree, so that the tree
   # can be removed before the build. sbuild unpacks the source package again inside its chroot, and without the
   # tree only that copy is in /tmp during the build, which for Firefox is about 5 GiB and half a million files less.
-  # The .dsc is named after the version without its epoch.
+  # The .dsc is named after the version without its epoch. dch keeps the name of the tree, which it would rename for a
+  # native package, whose upstream version the suffix changes.
   local dsc=$work/${src}_${local_version#*:}.dsc
   ( cd "$tree" \
       && as_builder "$work" DEBEMAIL="$email" DEBFULLNAME="${DEBFULLNAME:-Local patched build}" \
-           dch --newversion "$local_version" "Rebuilt with local patches from $PATCH_DIR/$src." \
+           dch --preserve --newversion "$local_version" "Rebuilt with local patches from $PATCH_DIR/$src." \
       && as_builder "$work" dpkg-source --before-build . \
       && as_builder "$work" dpkg-source -b . \
       && as_builder "$work" dpkg-source --after-build . \
@@ -812,6 +892,11 @@ rebuild() {
   mkdir -p "$STATE_DIR"
   echo "$version" > "$STATE_DIR/$src.built"
   echo "$digest" > "$STATE_DIR/$src.patches"
+  if [ -n "$commit" ]; then
+    echo "$commit" > "$STATE_DIR/$src.commit"
+  else
+    rm -f "$STATE_DIR/$src.commit"
+  fi
   rm -f "$LOG_DIR/$src.failed.build"
 
   echo "$src: rebuilt as $local_version ($reason) with $(wc -l < "$produced") binary package(s)"
@@ -980,7 +1065,7 @@ case "$MODE" in
     printf -- '-%.0s' {1..92}; echo
     for src in $(selected_packages); do
       off=$(official_version "$src"); blt=$(built_version "$src")
-      if [ -z "$off" ]; then st="NO SOURCE (deb-src missing?)"
+      if [ -z "$off" ]; then st="NO SOURCE ($(no_version_hint "$src"))"
       else st=$(rebuild_reason "$src" "$off" "$blt"); st=${st:-current}; fi
       unattended=$(awk -F'\t' -v src="$src" '$1 == src { print ($3 == "unattended" ? "yes" : "held") }' \
         <<< "$verdicts" | sort -u | head -1)
@@ -998,7 +1083,7 @@ case "$MODE" in
     n=0
     for src in $(selected_packages); do
       off=$(official_version "$src"); blt=$(built_version "$src")
-      [ -n "$off" ] || { echo "$src: cannot determine the version to rebuild, is deb-src enabled for its repository?"; n=$((n+1)); continue; }
+      [ -n "$off" ] || { echo "$src: cannot determine the version to rebuild, $(no_version_hint "$src")"; n=$((n+1)); continue; }
       reason=$(rebuild_reason "$src" "$off" "$blt")
       [ -z "$reason" ] && [ "$FORCE" = yes ] && reason="forced"
       if [ -n "$reason" ]; then
@@ -1040,7 +1125,14 @@ case "$MODE" in
     rebuilt=()
     for src in $(selected_packages); do
       off=$(official_version "$src")
-      [ -n "$off" ] || fail "$src: cannot determine the version to rebuild, is deb-src enabled for its repository?"
+      if [ -z "$off" ]; then
+        # A git repository which cannot be reached concerns only its own package, while a missing source index
+        # concerns every package.
+        msg="$src: cannot determine the version to rebuild, $(no_version_hint "$src")"
+        [ -n "$(source_git "$src")" ] || fail "$msg"
+        error "$msg"
+        continue
+      fi
       blt=$(built_version "$src")
       newer=$(unfetchable_update "$src" "$off")
       [ -n "$newer" ] && warn "$src: binary $newer is available but its source is not, so the rebuild is made" \
@@ -1048,8 +1140,18 @@ case "$MODE" in
       reason=$(rebuild_reason "$src" "$off" "$blt")
       [ -z "$reason" ] && [ "$FORCE" = yes ] && reason="forced"
       if [ -n "$reason" ]; then
-        rebuild "$src" "$off" "$reason"
-        rebuilt+=("$src")
+        # A subshell of its own, so that a failed rebuild, which fail reports, ends only it, and its work directory is
+        # removed when it ends. errexit is disabled around it, so that its failure does not end the run, and enabled in
+        # it again.
+        set +e
+        ( set -e; trap cleanup EXIT; rebuild "$src" "$off" "$reason" )
+        status=$?
+        set -e
+        if [ "$status" -eq 0 ]; then
+          rebuilt+=("$src")
+        else
+          FAILED=1
+        fi
       fi
     done
 
@@ -1081,7 +1183,7 @@ case "$MODE" in
     mkdir -p "$PREPARE_DIR"
     for src in $(selected_packages); do
       off=$(official_version "$src")
-      [ -n "$off" ] || fail "$src: cannot determine the version to fetch, is deb-src enabled for its repository?"
+      [ -n "$off" ] || fail "$src: cannot determine the version to fetch, $(no_version_hint "$src")"
       mkdir "$PREPARE_DIR/$src" || fail "$src: could not create $PREPARE_DIR/$src, which has to be new"
       fetch_patched_source "$src" "$off" "$PREPARE_DIR/$src"
       echo "$src: $off with its patches applied in $TREE"

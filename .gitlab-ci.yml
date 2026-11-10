@@ -48,7 +48,7 @@ variables:
     - rm -f /etc/dpkg/dpkg.cfg.d/excludes /usr/bin/man
     - dpkg-divert --local --rename --remove /usr/bin/man
     - apt-get update -q
-    - apt-get install -y -q --no-install-recommends ca-certificates dpkg-dev fakeroot patch python3
+    - apt-get install -y -q --no-install-recommends ca-certificates dpkg-dev fakeroot git patch python3
     # Firefox's source comes from the Mozilla Team PPA, see patches/firefox/source-from. The PPA publishes only Firefox,
     # Firefox ESR and Thunderbird, which no other package builds with, so it is added for every build.
     - cp sources.list.d/mozillateam-ubuntu-ppa-resolute.sources /etc/apt/sources.list.d/
@@ -91,6 +91,7 @@ build:
   parallel:
     matrix:
       - PACKAGE:
+          - fastflowlm
           - glib2.0
           - gnome-session
           - gnome-settings-daemon

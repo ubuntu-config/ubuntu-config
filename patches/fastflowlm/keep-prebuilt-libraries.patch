@@ -1,0 +1,12 @@
+Description: Keep the prebuilt libraries in the source package.
+ The NPU engines are prebuilt libraries in src/lib, which the build links. dpkg-source leaves files named like build
+ output, *.so and *.a among them, out of a source package of format 3.0 by default, so the source package built from
+ the source tree lacked them and its build failed to link. An explicit tar-ignore replaces that default list, and leaves
+ out only the directories of git, which a checkout has.
+Author: Mitar
+Forwarded: no
+---
+--- /dev/null
++++ b/debian/source/options
+@@ -0,0 +1 @@
++tar-ignore = .git

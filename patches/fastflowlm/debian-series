@@ -1,0 +1,3 @@
+keep-prebuilt-libraries.patch
+cargo-home-in-build-tree.patch
+run-prefix-cache-tests.patch

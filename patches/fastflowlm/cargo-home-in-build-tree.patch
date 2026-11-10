@@ -1,0 +1,19 @@
+Description: Keep cargo's downloads in the build tree.
+ Cargo keeps the crates it downloads in its home, which defaults to .cargo in the home directory. sbuild sets HOME to a
+ directory which does not exist, so cargo failed to create it, and the build of the tokenizers failed.
+Author: Mitar
+Forwarded: no
+---
+--- a/debian/rules	2026-11-10 13:03:18.821925226 +0100
++++ b/debian/rules	2026-11-10 13:03:18.835163954 +0100
+@@ -5,6 +5,10 @@
+ FLM_USE_HRX ?= OFF
+ FLM_CMAKE_ARGS ?=
+ 
++# Cargo keeps the crates it downloads in its home, which defaults to one in the home directory, and sbuild sets HOME
++# to a directory which does not exist.
++export CARGO_HOME := $(CURDIR)/debian/cargo-home
++
+ # The XRT package needs the system XRT runtime; the HRX one bundles libhrx.
+ ifeq ($(FLM_USE_HRX),ON)
+ FLM_RUNTIME_DEPENDS :=
