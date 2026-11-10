@@ -261,11 +261,15 @@ fail() {
   exit 1
 }
 
-# Collect everything standing between the current system and a successful rebuild. Prints a human readable
-# reason per item and leaves the packages to install in MISSING_PACKAGES, so callers can decide whether a given
-# gap is fatal. Only cheap checks belong here, since this runs in every mode.
+# Collect everything standing between the current system and a successful rebuild. Leaves a human readable reason
+# per item in PREREQ_REPORT, one or more lines each, and the packages to install in MISSING_PACKAGES, so callers can
+# decide whether a given gap is fatal. It must run in the current shell, not in a command substitution, which would
+# discard both. Only cheap checks belong here, since this runs in every mode.
+PREREQ_REPORT=""
 MISSING_PACKAGES=""
+prereq() { PREREQ_REPORT=${PREREQ_REPORT:+$PREREQ_REPORT$'\n'}$1; }
 check_prereqs() {
+  PREREQ_REPORT=""
   MISSING_PACKAGES=""
   local entry cmd pkg
 
@@ -274,7 +278,7 @@ check_prereqs() {
   for entry in $required; do
     cmd=${entry%%:*}; pkg=${entry##*:}
     command -v "$cmd" >/dev/null 2>&1 && continue
-    echo "  missing command $cmd, provided by the $pkg package"
+    prereq "  missing command $cmd, provided by the $pkg package"
     case " $MISSING_PACKAGES " in *" $pkg "*) ;; *) MISSING_PACKAGES="$MISSING_PACKAGES $pkg" ;; esac
   done
 
@@ -283,26 +287,27 @@ check_prereqs() {
   local targets
   targets=$(apt-get indextargets --format '$(CREATED_BY)' 2>/dev/null || true)
   if ! grep -qx Sources <<<"$targets"; then
-    echo "  deb-src is not enabled, so apt-get source cannot fetch anything"
-    echo "      in deb822 format that is a Types: edit, so Types: deb becomes Types: deb deb-src"
-    echo "      in /etc/apt/sources.list.d/ubuntu.sources, followed by apt update"
+    prereq "  deb-src is not enabled, so apt-get source cannot fetch anything"
+    prereq "      in deb822 format that is a Types: edit, so Types: deb becomes Types: deb deb-src"
+    prereq "      in /etc/apt/sources.list.d/ubuntu.sources, followed by apt update"
   fi
 
   # Not fatal. Failures still reach syslog, they just will not reach an inbox.
   if ! command -v sendmail >/dev/null 2>&1 && [ ! -x /usr/sbin/sendmail ]; then
-    echo "  no mail transport, so cron cannot mail anything and failures reach syslog only"
-    echo "      install one, for example nullmailer, which relays through a mail server and queues mail while offline,"
-    echo "      and assign MAILTO in /etc/anacrontab to choose the recipient, since anacron runs cron.daily"
+    prereq "  no mail transport, so cron cannot mail anything and failures reach syslog only"
+    prereq "      install one, for example nullmailer, which relays through a mail server and queues mail while offline,"
+    prereq "      and assign MAILTO in /etc/anacrontab to choose the recipient, since anacron runs cron.daily"
   fi
 
-  [ -d "$LOCAL_REPO" ] || echo "  local repository $LOCAL_REPO does not exist"
-  [ -d "$PATCH_DIR" ] || echo "  patch directory $PATCH_DIR does not exist, install it with install-rebuild-patched-packages.sh"
+  [ -d "$LOCAL_REPO" ] || prereq "  local repository $LOCAL_REPO does not exist"
+  [ -d "$PATCH_DIR" ] || prereq "  patch directory $PATCH_DIR does not exist, install it with install-rebuild-patched-packages.sh"
   if ! getent passwd "$BUILD_USER" >/dev/null; then
-    echo "  build user $BUILD_USER does not exist, it comes with the sbuild package"
+    prereq "  build user $BUILD_USER does not exist, it comes with the sbuild package"
   elif ! grep -q "^$BUILD_USER:" /etc/subuid || ! grep -q "^$BUILD_USER:" /etc/subgid; then
-    echo "  build user $BUILD_USER has no subordinate ids, add them with install-rebuild-patched-packages.sh"
+    prereq "  build user $BUILD_USER has no subordinate ids, add them with install-rebuild-patched-packages.sh"
   fi
-  [ -r "$SOURCES_DIR/ubuntu.sources" ] || echo "  $SOURCES_DIR/ubuntu.sources does not exist, so no build chroot can be made"
+  [ -r "$SOURCES_DIR/ubuntu.sources" ] || prereq "  $SOURCES_DIR/ubuntu.sources does not exist, so no build chroot can be made"
+  return 0
 }
 
 # Reports each installed copy that differs from the repository this runs from. Prints nothing when run as an
@@ -1038,14 +1043,14 @@ wait_for_lock() {
   fi
 }
 
-prereq_report=$(check_prereqs)
+check_prereqs
 
 case "$MODE" in
   prereqs)
     echo "=== prerequisites ==="
     ensure_deb_src report
-    if [ -n "$prereq_report" ]; then
-      echo "$prereq_report"
+    if [ -n "$PREREQ_REPORT" ]; then
+      echo "$PREREQ_REPORT"
       [ -n "$MISSING_PACKAGES" ] && { echo; echo "  install with:"; echo "      sudo apt install$MISSING_PACKAGES"; }
     else
       echo "  everything needed is present"
@@ -1078,7 +1083,7 @@ case "$MODE" in
     drift=$(report_install_drift)
     [ -n "$drift" ] && { echo "=== installed copies differ from the repository, update them with install-rebuild-patched-packages.sh ==="; \
       echo "$drift"; echo; }
-    [ -n "$prereq_report" ] && { echo "=== prerequisites missing ==="; echo "$prereq_report"; \
+    [ -n "$PREREQ_REPORT" ] && { echo "=== prerequisites missing ==="; echo "$PREREQ_REPORT"; \
       [ -n "$MISSING_PACKAGES" ] && echo "      sudo apt install$MISSING_PACKAGES"; echo; }
     n=0
     for src in $(selected_packages); do
@@ -1109,10 +1114,10 @@ case "$MODE" in
 
     # Before any version is read, because a missing source index makes every package look current.
     ensure_deb_src apply
-    prereq_report=$(check_prereqs)
+    check_prereqs
 
     if [ -n "$MISSING_PACKAGES" ]; then
-      echo "$prereq_report" >&2
+      echo "$PREREQ_REPORT" >&2
       fail "cannot rebuild until these are installed: sudo apt install$MISSING_PACKAGES"
     fi
     [ -d "$LOCAL_REPO" ] || fail "local repository $LOCAL_REPO does not exist"
