@@ -4,18 +4,24 @@ Description: Export the request of an inhibition only once the backend has handl
  forwarded to the backend before the backend had created its request, and failed. The backend then still asked
  gnome-session for the inhibition, which stayed until the application disconnected from the bus. GTK closes the
  request as soon as an application uninhibits, so an application which inhibits and uninhibits right away, as Text
- Editor does while it loads a file, left an inhibitor behind, which GNOME Shell lists in its logout dialog.
+ Editor does while it loads a file, left an inhibitor behind, which GNOME Shell lists in its logout dialog. An
+ application which inhibits when the session is about to end, and calls QueryEndResponse once Inhibit returned, also
+ often had the backend receive QueryEndResponse first, so the session could end without the inhibition
+ (https://github.com/flatpak/xdg-desktop-portal/issues/1881).
  .
  The handler, which runs in a thread of its own, now calls the backend synchronously, and exports the request and
  answers only once the backend has returned, which it does after it has exported its own request. In the tests, the
  mock backend, when it expects a Close, now returns from Inhibit and keeps its request until the request is closed, as
  xdg-desktop-portal-gtk does, instead of returning only on Close. A new test closes a request right after Inhibit
- returned, while the mock backend takes 200 ms to handle the call.
+ returned, while the mock backend takes 200 ms to handle the call, and another one calls QueryEndResponse right after
+ Inhibit returned and checks that the backend receives Inhibit first.
 Author: Mitar
 Bug: https://github.com/flatpak/xdg-desktop-portal/issues/854
 Forwarded: https://github.com/flatpak/xdg-desktop-portal/pull/2199
-Last-Update: 2026-11-07
+Last-Update: 2026-11-11
 ---
+diff --git a/src/inhibit.c b/src/inhibit.c
+index e6822a0..514d2a9 100644
 --- a/src/inhibit.c
 +++ b/src/inhibit.c
 @@ -70,36 +70,6 @@ G_DEFINE_TYPE_WITH_CODE (Inhibit, inhibit, XDP_DBUS_TYPE_INHIBIT_SKELETON,
@@ -176,6 +182,8 @@ Last-Update: 2026-11-07
    return G_DBUS_METHOD_INVOCATION_HANDLED;
  }
  
+diff --git a/tests/templates/inhibit.py b/tests/templates/inhibit.py
+index 0e77bcb..0512f5d 100644
 --- a/tests/templates/inhibit.py
 +++ b/tests/templates/inhibit.py
 @@ -77,7 +77,11 @@ def Inhibit(self, handle, app_id, window, flags, options, cb_success, cb_error):
@@ -235,7 +243,7 @@ index 57a0786..1072193 100644
          # In the future we can pass a class extending
          # dbusmock.mockobject.DBusMockObject as mock_class to avoid going
 diff --git a/tests/test_inhibit.py b/tests/test_inhibit.py
-index 20266a2..7ebeabb 100644
+index 20266a2..1ed07c2 100644
 --- a/tests/test_inhibit.py
 +++ b/tests/test_inhibit.py
 @@ -132,19 +132,22 @@ class TestInhibit:
@@ -264,17 +272,21 @@ index 20266a2..7ebeabb 100644
  
          # Check the impl portal was called with the right args
          method_calls = mock_intf.GetMethodCalls("Inhibit")
-@@ -155,6 +158,27 @@ class TestInhibit:
+@@ -155,6 +158,91 @@ class TestInhibit:
          assert args[3] == flags.value
          assert args[4]["reason"] == reason
  
-+    @pytest.mark.parametrize("template_params", ({"inhibit": {"expect-close": True}},))
++    @pytest.mark.parametrize(
++        "template_params", ({"inhibit": {"expect-close": True, "delay": 200}},)
++    )
 +    def test_close_right_after_inhibit(self, portals, dbus_con):
 +        """
 +        A Close() right after Inhibit() returned closes the request of the
-+        backend too, also when the backend takes a while to handle the call, as
-+        GTK does when it uninhibits at once. The inhibition would stay
-+        otherwise.
++        backend too, as GTK does when it uninhibits at once. The inhibition
++        would stay otherwise.
++
++        The delay simulates a slow backend, so that a Close() which reaches
++        the backend before it finished handling Inhibit() makes the test fail.
 +        """
 +        inhibit_intf = xdp.get_portal_iface(dbus_con, "Inhibit")
 +
@@ -288,6 +300,66 @@ index 20266a2..7ebeabb 100644
 +
 +        request.close()
 +        xdp.wait_for(lambda: request.closed)
++
++    def test_inhibit_before_query_end_response(self, portals, dbus_con):
++        """
++        A client which inhibits when the session is about to end, and calls
++        QueryEndResponse() once Inhibit() returned, without waiting for the
++        Response signal, has the backend receive the Inhibit() call before the
++        QueryEndResponse() call, so the session cannot end without the
++        inhibition. The order is checked in several rounds, as it is random
++        when the frontend answers Inhibit() before it calls the backend.
++        """
++        inhibit_intf = xdp.get_portal_iface(dbus_con, "Inhibit")
++        mock_intf = xdp.get_mock_iface(dbus_con)
++
++        request = xdp.Request(dbus_con, inhibit_intf)
++        response = request.call(
++            "CreateMonitor",
++            window="",
++            options={"session_handle_token": "session_token0"},
++        )
++        assert response
++        assert response.response == 0
++        session = xdp.Session.from_response(dbus_con, response)
++
++        query_end_count = 0
++
++        def state_changed_cb(session_handle, state):
++            nonlocal query_end_count
++
++            if state["session-state"] == SessionState.QUERY_END.value:
++                query_end_count += 1
++
++        inhibit_intf.connect_to_signal("StateChanged", state_changed_cb)
++
++        def calls():
++            return [
++                name
++                for _, name, _ in mock_intf.GetCalls()
++                if name in ("Inhibit", "QueryEndResponse")
++            ]
++
++        def wait_for_query_end(count):
++            xdp.wait_for(lambda: query_end_count == count)
++
++        def wait_for_calls(count):
++            xdp.wait_for(lambda: len(calls()) == count)
++
++        # The backend enters Query End again after every QueryEndResponse().
++        for i in range(5):
++            wait_for_query_end(i + 1)
++
++            inhibit_request = xdp.Request(dbus_con, inhibit_intf)
++            inhibit_intf.Inhibit(
++                "",
++                InhibitFlags.LOGOUT.value,
++                {"handle_token": inhibit_request.handle_token},
++            )
++            inhibit_intf.QueryEndResponse(session.handle)
++
++            wait_for_calls(2 * (i + 1))
++            assert calls()[-2:] == ["Inhibit", "QueryEndResponse"]
 +
      def test_permission(self, portals, dbus_con, xdp_app_info):
          app_id = xdp_app_info.app_id

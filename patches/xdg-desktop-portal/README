@@ -12,18 +12,23 @@ inhibit-export-request-after-backend.patch
     modified and unmodified again, so opening a file inhibited and withdrew right away, and GNOME Shell's logout dialog
     listed Text Editor once more as having unsaved work.
 
-    The handler of Inhibit runs in a thread of its own, and now calls the backend synchronously, and exports the
-    request and answers only once the backend has returned, which it does after it has exported its own request. A
-    Close then always finds the backend's request. The handler holds the request's lock meanwhile, so an application
-    which disconnects in between has its request closed in the backend once the handler is done.
+    The handler of Inhibit runs in a thread of its own, and now calls the backend synchronously, and exports the request
+    and answers only once the backend has returned, which it does after it has exported its own request. A Close then
+    always finds the backend's request. The handler holds the request's lock meanwhile, so an application which
+    disconnects in between has its request closed in the backend once the handler is done. The application also receives
+    the reply to Inhibit only once the backend has the inhibition, so an application which inhibits when the session is
+    about to end, and calls QueryEndResponse once Inhibit returned, has the backend receive the two calls in that order,
+    and the session cannot end without the inhibition.
 
     Reported upstream as https://github.com/flatpak/xdg-desktop-portal/issues/854, where a maintainer suggested this
-    fix. https://gitlab.gnome.org/GNOME/gnome-session/-/work_items/174 reports the same symptom with Nautilus. The
-    patch also changes the test suite, which the build runs: the mock backend now returns from Inhibit when it expects
-    a Close, as xdg-desktop-portal-gtk does, instead of returning only on Close, and a new test closes a request right
-    after Inhibit returned, while the mock backend takes 200 ms to handle the call. The new test fails without the fix.
-    Proposed upstream as https://github.com/flatpak/xdg-desktop-portal/pull/2199. Drop the patch once Ubuntu's
-    xdg-desktop-portal contains the fix.
+    fix, and the order of Inhibit and QueryEndResponse as https://github.com/flatpak/xdg-desktop-portal/issues/1881.
+    https://gitlab.gnome.org/GNOME/gnome-session/-/work_items/174 reports the same symptom with Nautilus. The patch also
+    changes the test suite, which the build runs: the mock backend now returns from Inhibit when it expects a Close, as
+    xdg-desktop-portal-gtk does, instead of returning only on Close. A new test closes a request right after Inhibit
+    returned, with the mock backend's delay set to 200 ms, so that it handles the call slowly, and another one, in 5
+    rounds, calls QueryEndResponse right after Inhibit returned and checks that the backend received Inhibit first. Both
+    fail without the fix. Proposed upstream as https://github.com/flatpak/xdg-desktop-portal/pull/2199. Drop the patch
+    once Ubuntu's xdg-desktop-portal contains the fix.
 
     The fix is in handle_inhibit in src/inhibit.c. The session test portal-inhibit in tests/session/ checks it in a
     GNOME session: 200 requests closed right after Inhibit have to leave no inhibitor behind. Without the patch, 116 of
