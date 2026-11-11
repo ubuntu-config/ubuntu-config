@@ -1,17 +1,18 @@
 # Installed by install-health-benchmark.sh, which overwrites edits made here.
 #
-# Measures cooling and processor performance. health-benchmark --scheduled exits at once unless it started between
-# 04:00 and 04:05, the laptop is on AC power and the screen is locked, and records nothing when other processes used
-# the CPU during the measurement. It exits successfully then, so that the service fails only when the measurement
-# does. A measurement holds the fan at a full duty cycle and returns it to the EC's automatic control when it ends.
-# The stop command does that too, for a measurement which could not do it itself, for example because it was killed.
+# Measures cooling, processor performance and battery ageing. health-benchmark --scheduled exits at once unless it
+# started between 04:00 and 04:05, the laptop is on AC power and the screen is locked, and records nothing when other
+# processes used the CPU during the measurement. It exits successfully then, so that the service fails only when the
+# measurement does. A measurement holds the fan at a full duty cycle and twice makes the battery power the laptop for
+# 90 seconds, and returns both to automatic control when it ends. The stop command does that too, for a measurement
+# which could not do it itself, for example because it was killed.
 
 [Unit]
-Description=Measure cooling and processor performance
+Description=Measure cooling, processor performance and battery ageing
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/health-benchmark --scheduled
-ExecStopPost=/usr/local/bin/health-benchmark --restore-fan
+ExecStopPost=/usr/local/bin/health-benchmark --restore
 # A measurement lasts about 25 minutes.
 TimeoutStartSec=1h

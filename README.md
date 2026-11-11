@@ -48,8 +48,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     from the journals of the system and of every user.
   - [Processor throttling](#processor-throttling): a top bar indicator naming the limit which holds the processor
     back, and a warning when the fan stops following the heat.
-  - [Cooling and performance tracked over time](#cooling-and-performance-tracked-over-time): a measurement at night,
-    to follow dust in the fan and slowdowns from updates over the years.
+  - [Cooling, performance and battery tracked over time](#cooling-performance-and-battery-tracked-over-time): a
+    measurement at night, to follow dust in the fan, slowdowns from updates and the battery's ageing over the years.
   - [FastFlowLM reads a shared history once](#fastflowlm-reads-a-shared-history-once): language models on the NPU
     continue prompts which share all but their last message from a saved state.
 - [Fixes](#fixes): bugs fixed here, most of them reported or proposed upstream too.
@@ -407,10 +407,11 @@ same for minutes, and a reading which stopped changing there leaves the fan clos
 ask for anyway. The warning stays until the sign which raised it is gone, so until a fan spins again or a board
 reading changes.
 
-### Cooling and performance tracked over time
+### Cooling, performance and battery tracked over time
 
 Every day at 04:00, if the laptop is on AC power, its screen is locked and its load is low, a measurement records
-how well it cools itself and how fast its processor is, so that both can be followed over months and years
+how well it cools itself, how fast its processor is and how its battery ages, so that all three can be followed over
+months and years
 (`health-benchmark.py`, `install-health-benchmark.sh`, `systemd/health-benchmark.*`). Dust builds up in the fan and
 in the fins it blows through, and firmware, microcode and kernel updates, with the mitigations they bring, can make
 the processor slower without anything else showing it. A day on which the laptop is suspended, in use or busy at
@@ -431,6 +432,20 @@ the screen is unlocked, AC power is disconnected or the laptop suspends during t
 skipped, while a measurement which fails, for example because the EC stopped reading its sensors (see
 [Processor throttling](#processor-throttling)), leaves `health-benchmark.service` failed, which the
 [daily mail](#daily-mail-of-failures-and-errors) then reports.
+
+For the battery, each measurement records the values the battery's fuel gauge reports: the full capacity it
+estimates, the design capacity and the charge cycles. The gauge recalculates the full capacity only after the battery
+has discharged far enough between two rests, which a battery kept between 40% and 60% rarely does, so the estimate
+can stay the same for weeks and then jump. The measurement also determines the battery's internal resistance, which
+grows steadily as the battery ages. For the first 90 seconds of the idle phase and of the steady load, the battery
+powers the laptop although AC power is connected (`charge_behaviour` set to `force-discharge`), and the resistance is
+the drop of the battery's voltage from idle to load divided by the rise of its current. The battery reports its
+current averaged over tens of seconds, which is why each hold lasts 90 seconds and only its last 15 seconds count.
+Both holds together draw about 1.4 Wh, about 2% of the battery. The resistance also rises when the battery is cold,
+and the battery reports no temperature, so it is best compared between measurements made in similar rooms. The
+battery returns to automatic charging after each hold, and if a crash interrupts a measurement,
+`health-benchmark-restore.service` returns it at the next boot, because the EC can keep the battery discharging
+across a reboot.
 
 7-Zip is a static build of a pinned release, verified by its checksum, so that its scores stay comparable across
 years and only the hardware, firmware, microcode and kernel can move them. Each measurement records those as well,

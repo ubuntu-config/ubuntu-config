@@ -1,0 +1,18 @@
+# Installed by install-health-benchmark.sh, which overwrites edits made here.
+#
+# Returns the battery and the fan to automatic control at boot, after the system crashed or lost power during a
+# measurement which had forced the battery to power the laptop although AC power is connected, which would run the
+# battery down while the laptop looks plugged in, or held the fan at a fixed duty cycle. The EC can keep both across a
+# reboot. cros_charge_control in Linux 7.0 sets the battery to automatic charging when it loads, but newer versions
+# adopt the charge mode the EC reports instead. health-benchmark --restore acts only on the battery and the fan which
+# have a marker in /var/lib/health-benchmark, so it does nothing after measurements which ended normally.
+
+[Unit]
+Description=Return the battery and the fan to automatic control after an interrupted health benchmark
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/health-benchmark --restore
+
+[Install]
+WantedBy=multi-user.target

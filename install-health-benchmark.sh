@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 #
-# Install health-benchmark.py, the pinned 7-Zip build it benchmarks with, and the systemd timer which runs it once a
-# day, as root-owned copies that root runs. Only a file which differs from its installed copy is replaced.
+# Install health-benchmark.py, the pinned 7-Zip build it benchmarks with, the systemd timer which runs it once a day
+# and the unit which returns the battery and the fan to automatic control at boot after an interrupted measurement, as
+# root-owned copies that root runs. Only a file which differs from its installed copy is replaced.
 #
-#   health-benchmark.py                 ->  /usr/local/bin/health-benchmark
-#   7-Zip 26.05, static build (7zzs)    ->  /usr/local/lib/health-benchmark/7zzs
-#   systemd/health-benchmark.service    ->  /etc/systemd/system/health-benchmark.service
-#   systemd/health-benchmark.timer      ->  /etc/systemd/system/health-benchmark.timer
+#   health-benchmark.py                         ->  /usr/local/bin/health-benchmark
+#   7-Zip 26.05, static build (7zzs)            ->  /usr/local/lib/health-benchmark/7zzs
+#   systemd/health-benchmark.service            ->  /etc/systemd/system/health-benchmark.service
+#   systemd/health-benchmark.timer              ->  /etc/systemd/system/health-benchmark.timer
+#   systemd/health-benchmark-restore.service    ->  /etc/systemd/system/health-benchmark-restore.service
 #
 # 7-Zip is downloaded from its release on GitHub and installed only when both the archive and the binary in it have
 # the checksums recorded below. The report compares only measurements made with the same binary, so changing the
@@ -103,10 +105,16 @@ echo "=== health-benchmark ==="
 install_file "$REPO_DIR/health-benchmark.py" /usr/local/bin/health-benchmark 755
 install_unit health-benchmark.service
 install_unit health-benchmark.timer
+install_unit health-benchmark-restore.service
 if ! systemctl is-enabled --quiet health-benchmark.timer 2>/dev/null; then
   echo "  enable health-benchmark.timer"
   CHANGED=$((CHANGED+1))
   [ "$MODE" = apply ] && sudo systemctl enable --now --quiet health-benchmark.timer
+fi
+if ! systemctl is-enabled --quiet health-benchmark-restore.service 2>/dev/null; then
+  echo "  enable health-benchmark-restore.service"
+  CHANGED=$((CHANGED+1))
+  [ "$MODE" = apply ] && sudo systemctl enable --quiet health-benchmark-restore.service
 fi
 
 echo

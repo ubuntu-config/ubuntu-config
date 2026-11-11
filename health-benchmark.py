@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Track how well this laptop cools itself and how fast its processor is, over months and years.
+"""Track how well this laptop cools itself, how fast its processor is and how its battery ages, over months and years.
 
 A measurement holds the fan at a full duty cycle and the power profile at performance for about 25 minutes, and
 appends a row to /var/lib/health-benchmark/results.csv with its findings in each of its phases:
@@ -11,6 +11,11 @@ appends a row to /var/lib/health-benchmark/results.csv with its findings in each
 - steady load: the temperature and the power once the heatsink has warmed up, which compared with those at idle give
   the thermal resistance of the cooling in degrees per watt,
 - cooldown: how fast the temperature falls after the load stops, given as the time constant of its decay.
+
+For the battery, the row records the values its fuel gauge reports (the full capacity it estimates, the design capacity
+and the charge cycles) and the battery's internal resistance, which grows as the battery ages. The resistance comes from
+the battery's voltage and current at the start of the idle phase and at the start of the steady load, for each of which
+the measurement makes the battery power the laptop for 90 seconds although AC power is connected.
 
 The row also records the firmware, microcode, kernel and its mitigations, so that a change in the scores can be
 traced to the system change which came with it. The samples read every second during the measurement are kept next
@@ -26,8 +31,10 @@ Usage
   health-benchmark --scheduled           measure if started between 04:00 and 04:05, with the laptop on AC power
                                          and the screen locked, and skip otherwise (root, run once a day at 04:00
                                          by health-benchmark.timer)
-  health-benchmark --restore-fan         return the fan to the EC's automatic control if a measurement which ended
-                                         abnormally left it at a fixed duty cycle (root)
+  health-benchmark --restore             return the battery to automatic charging and the fan to the EC's automatic
+                                         control, when a measurement which ended abnormally left the battery
+                                         discharging or the fan at a fixed duty cycle (root, run at every boot by
+                                         health-benchmark-restore.service)
 
 A note marks a measurement in the report, for example "after cleaning the fan". A manual measurement first waits for
 the load to drop. A measurement is not recorded when other processes used more than 1% of the CPU time during any of
@@ -72,8 +79,10 @@ STATE_DIR = '/var/lib/health-benchmark'
 RESULTS_FILE = f'{STATE_DIR}/results.csv'
 TRACES_DIR = f'{STATE_DIR}/traces'
 LOCK_FILE = '/run/health-benchmark.lock'
-# Exists while a measurement holds the fan at a fixed duty cycle.
-FAN_MARKER = '/run/health-benchmark.fan-fixed'
+# Exist while a measurement holds the fan at a fixed duty cycle, and while it forces the battery to discharge. They are
+# kept where they survive a crash, so that the boot after it undoes both, whichever the EC keeps across the reboot.
+FAN_MARKER = f'{STATE_DIR}/fan-fixed'
+BATTERY_MARKER = f'{STATE_DIR}/battery-discharging'
 SEVENZIP = '/usr/local/lib/health-benchmark/7zzs'
 
 PROFILE = 'performance'
@@ -124,6 +133,19 @@ APU_SENSOR_FAILURES_MAX = 5
 # A gap between the boot clock and the monotonic clock which grows by more than this means the system was suspended.
 SUSPEND_GAP_S = 5
 
+# The battery's internal resistance comes from its voltage and current at idle and under the steady load, each while
+# the battery powers the laptop for BATTERY_HOLD_S although AC power is connected. The battery reports its current
+# averaged over tens of seconds (after a load step it was still rising 25 seconds later), so each hold lasts until
+# that average has settled, and only its last BATTERY_WINDOW_S count.
+BATTERY_HOLD_S = 90
+BATTERY_WINDOW_S = 15
+# Below this charge level the battery is not discharged further.
+BATTERY_MIN_PERCENT = 25
+# With a smaller difference between the currents of the two holds, the noise of the readings would dominate.
+BATTERY_MIN_STEP_A = 1
+# At boot, the longest wait for the battery's charge_behaviour attribute, which appears once its driver has loaded.
+BATTERY_ATTRIBUTE_WAIT_S = 60
+
 # struct gpu_metrics_v3_0 in drivers/gpu/drm/amd/include/kgd_pp_interface.h, at the offsets the kernel compiles it to.
 # The table is identified by its size and revision, because amdgpu publishes it without describing its fields.
 METRICS_SIZE = 264
@@ -172,7 +194,7 @@ TEMPERATURES = ('tctl', 'core_max', 'soc', 'skin', 'ec_local', 'ec_cpu', 'ec_ddr
 GRAPHICS = ('gfx_power_w', 'gfx_activity_pct')
 TRACE_FIELDS = (
     ('t', 'phase', 'busy_pct', 'power_w', 'fan_rpm', 'fan_target') + TEMPERATURES + GRAPHICS +
-    ('vcn_activity_pct', 'npu_active', 'npu_clock_mhz'))
+    ('vcn_activity_pct', 'npu_active', 'npu_clock_mhz', 'battery_status', 'battery_v', 'battery_a'))
 
 FIELDS = [
     'timestamp', 'trigger', 'note', 'duration_s', 'foreign_cpu_pct', 'platform_profile',
@@ -186,6 +208,9 @@ FIELDS = [
     'steady_power_w', *(f'steady_{name}' for name in TEMPERATURES + GRAPHICS), 'steady_fan_rpm',
     'steady_thermal_pct', 'steady_power_limit_pct', 'steady_prochot_pct',
     'cooldown_tau_tctl_s', 'cooldown_tau_soc_s', 'cooldown_tau_ec_cpu_s', 'cooldown_end_tctl', 'cooldown_end_ec_cpu',
+    'battery_manufacturer', 'battery_model', 'battery_serial', 'battery_level_pct', 'battery_full_mah',
+    'battery_design_mah', 'battery_design_voltage_v', 'battery_cycles',
+    'battery_idle_v', 'battery_idle_a', 'battery_load_v', 'battery_load_a', 'battery_resistance_mohm',
 ]
 
 
@@ -262,6 +287,16 @@ def on_ac_power():
     return False
 
 
+def find_battery():
+    """Returns the sysfs directory of the laptop's battery, when it can be made to discharge, or None."""
+    for supply in sorted(glob.glob('/sys/class/power_supply/*')):
+        # Batteries of peripherals, such as a headset's, have the Device scope.
+        if (read_text(f'{supply}/type') == 'Battery' and read_text(f'{supply}/scope') != 'Device' and
+                os.path.exists(f'{supply}/charge_behaviour')):
+            return supply
+    return None
+
+
 def unlocked_session():
     """Returns whether a graphical user session is active and not locked, so whether someone may be using the laptop."""
     result = subprocess.run(['loginctl', 'list-sessions', '--no-legend'], capture_output=True, text=True)
@@ -326,13 +361,15 @@ class Sensors:
         # Without the amdxdna driver loaded the NPU stays powered down, so finding no device leaves nothing to check.
         self.npu_files = sorted(glob.glob(NPU_STATUS_FILES))
 
+        self.battery = find_battery()
+
         self.cpu_times = read_cpu_times()
 
     def read(self):
         """Returns one sample: temperatures in degrees Celsius (None for a sensor which failed to read), the package
         power and the graphics power in watts, the graphics and video activity in percent, the fan speed and target in
         RPM, the share of CPU time busy since the previous sample, whether the NPU is powered and its clock in MHz,
-        and the throttle residency counters."""
+        the battery's status, voltage in volts and current in amperes, and the throttle residency counters."""
         with open(self.metrics_file, 'rb') as file:
             metrics = decode_metrics(file.read())
         if metrics is None:
@@ -359,6 +396,12 @@ class Sensors:
         }
         for name, path in self.ec_files.items():
             sample[name] = read_number(path, 1000)
+        if self.battery:
+            sample['battery_status'] = read_text(f'{self.battery}/status')
+            sample['battery_v'] = read_number(f'{self.battery}/voltage_now', 1e6)
+            # The current is given without a sign, with the status telling its direction.
+            current = read_number(f'{self.battery}/current_now', 1e6)
+            sample['battery_a'] = abs(current) if current is not None else None
         return sample
 
 
@@ -580,6 +623,7 @@ def framework_tool(*arguments):
 def fix_fan():
     """Holds the fan at a full duty cycle. The marker is created first, so that it exists whenever the fan might be
     fixed."""
+    os.makedirs(STATE_DIR, mode=0o755, exist_ok=True)
     with open(FAN_MARKER, 'w'):
         pass
     framework_tool('--fansetduty', '100')
@@ -590,6 +634,110 @@ def restore_fan():
     framework_tool('--autofanctrl')
     with contextlib.suppress(FileNotFoundError):
         os.remove(FAN_MARKER)
+
+
+def write_attribute(path, value):
+    """Writes a value to a sysfs attribute, raising Failure when it cannot be written."""
+    try:
+        with open(path, 'w') as file:
+            file.write(value)
+    except OSError as error:
+        raise Failure(f'cannot write {value} to {path}: {error}') from error
+
+
+def discharge_battery(battery):
+    """Makes the battery power the laptop although AC power is connected. The marker is created first, so that it
+    exists whenever the battery might be discharging."""
+    os.makedirs(STATE_DIR, mode=0o755, exist_ok=True)
+    with open(BATTERY_MARKER, 'w') as file:
+        file.write(f'{battery}\n')
+    write_attribute(f'{battery}/charge_behaviour', 'force-discharge')
+
+
+def restore_battery():
+    """Returns the battery the marker names to automatic charging and removes the marker. Automatic charging also
+    applies the battery's charge thresholds again, which the driver keeps while the battery discharges.
+
+    Waits up to BATTERY_ATTRIBUTE_WAIT_S for the battery's driver to appear, and raises Failure when it does not or the
+    battery cannot be set, keeping the marker then.
+    """
+    battery = read_text(BATTERY_MARKER)
+    attribute = f'{battery}/charge_behaviour'
+    deadline = time.monotonic() + BATTERY_ATTRIBUTE_WAIT_S
+    while not os.path.exists(attribute):
+        if time.monotonic() >= deadline:
+            raise Failure(f'{attribute} did not appear, so the battery may still be discharging')
+        time.sleep(1)
+    write_attribute(attribute, 'auto')
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(BATTERY_MARKER)
+
+
+def restore_changes(announce):
+    """Returns the battery to automatic charging and the fan to the EC's automatic control, when their markers say a
+    measurement changed them. With announce, prints each restoration, for changes a measurement which ended abnormally
+    left. Reports a restoration which fails and goes on, so that one failure does not keep the other from being undone.
+    """
+    for marker, restore, what in ((BATTERY_MARKER, restore_battery, 'the battery to automatic charging'),
+                                  (FAN_MARKER, restore_fan, 'the fan to automatic control')):
+        if not os.path.exists(marker):
+            continue
+        if announce:
+            print(f'returning {what}, which a measurement which ended abnormally left changed', flush=True)
+        try:
+            restore()
+        except Failure as error:
+            print(f'health-benchmark: {error}', file=sys.stderr, flush=True)
+
+
+def battery_description(battery):
+    """Returns the values the battery's fuel gauge reports, as columns. The capacities are the gauge's estimates, and
+    the full capacity is updated only after the battery has discharged far enough between two rests."""
+    def value(name, scale=1):
+        return read_number(f'{battery}/{name}', scale)
+
+    def count(name):
+        number = value(name)
+        return None if number is None else int(number)
+
+    return {
+        'battery_manufacturer': read_text(f'{battery}/manufacturer'),
+        'battery_model': read_text(f'{battery}/model_name'),
+        'battery_serial': read_text(f'{battery}/serial_number'),
+        'battery_level_pct': count('capacity'),
+        'battery_full_mah': value('charge_full', 1000),
+        'battery_design_mah': value('charge_full_design', 1000),
+        'battery_design_voltage_v': value('voltage_min_design', 1e6),
+        'battery_cycles': count('cycle_count'),
+    }
+
+
+def battery_resistance(idle_hold, load_hold):
+    """Returns the battery's internal resistance in milliohms, from the samples of a hold at idle and of one under load,
+    together with the voltages and currents it comes from, as columns.
+
+    Leaves the resistance out, printing why, when the battery did not discharge throughout the windows averaged or the
+    two currents differ by less than BATTERY_MIN_STEP_A.
+    """
+    idle, load = tail(idle_hold, BATTERY_WINDOW_S), tail(load_hold, BATTERY_WINDOW_S)
+    columns = {
+        'battery_idle_v': mean(idle, 'battery_v'),
+        'battery_idle_a': mean(idle, 'battery_a'),
+        'battery_load_v': mean(load, 'battery_v'),
+        'battery_load_a': mean(load, 'battery_a'),
+    }
+    if any(sample.get('battery_status') != 'Discharging' for sample in idle + load):
+        print('no battery resistance: the battery did not discharge throughout both holds', flush=True)
+        return columns
+    if None in columns.values() or columns['battery_load_a'] - columns['battery_idle_a'] < BATTERY_MIN_STEP_A:
+        print('no battery resistance: the currents at idle and under load are too close', flush=True)
+        return columns
+    # The voltage falls under load by the current times the internal resistance, so the ratio of the two differences
+    # is the resistance, with the open-circuit voltage canceling out.
+    columns['battery_resistance_mohm'] = 1000 * (
+        (columns['battery_idle_v'] - columns['battery_load_v']) /
+        (columns['battery_load_a'] - columns['battery_idle_a']))
+    return columns
 
 
 def sevenzip(measurement, prefix, threads, passes):
@@ -733,7 +881,7 @@ def measure(trigger, note):
     """Makes one measurement with the fan at a full duty cycle and appends its result.
 
     The caller holds the power profile at performance. Raises Failure when the measurement cannot be made or is
-    abandoned, and always returns the fan to the EC's automatic control.
+    abandoned, and always returns the battery to automatic charging and the fan to the EC's automatic control.
     """
     profile = read_text('/sys/firmware/acpi/platform_profile')
     if profile != PROFILE:
@@ -746,6 +894,12 @@ def measure(trigger, note):
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
     row = {'timestamp': timestamp, 'trigger': trigger, 'note': note, 'platform_profile': profile}
     row.update(system_description())
+    battery = sensors.battery
+    if battery:
+        row.update(battery_description(battery))
+    measure_battery = bool(battery) and (row['battery_level_pct'] or 0) >= BATTERY_MIN_PERCENT
+    if battery and not measure_battery:
+        print(f'no battery resistance: the battery is below {BATTERY_MIN_PERCENT}%', flush=True)
 
     stop_signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
@@ -765,7 +919,14 @@ def measure(trigger, note):
 
         print('idle: fan at full speed, measuring the temperatures at rest', flush=True)
         with measurement.accounted('idle'):
-            samples = measurement.observe('idle', IDLE_PHASE_S)
+            # The battery powers the laptop for the first part of the phase, so that the window the temperatures and
+            # the fan's speed are averaged over runs on AC power, as the other phases do.
+            if measure_battery:
+                discharge_battery(battery)
+            idle_hold = measurement.observe('idle', BATTERY_HOLD_S)
+            if measure_battery:
+                restore_battery()
+            samples = idle_hold + measurement.observe('idle', IDLE_PHASE_S - BATTERY_HOLD_S)
         row['idle_busy_pct'] = mean(samples, 'busy_pct')
         # The other phases are checked at the end, but a system which is busy already is better left alone now than
         # after running the fan at full speed for another 20 minutes.
@@ -786,13 +947,23 @@ def measure(trigger, note):
         # stays the same as long as the pinned binary does.
         print('steady load: 7-Zip on all threads until the heatsink has warmed up', flush=True)
         with measurement.accounted('steady'):
+            # The battery powers the laptop for the first part of the phase, ahead of the window the temperatures are
+            # averaged over.
+            if measure_battery:
+                discharge_battery(battery)
             load = subprocess.Popen(
                 [SEVENZIP, 'b', '1000000', f'-mmt{os.cpu_count()}', f'-md{SEVENZIP_DICTIONARY}'],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            window = tail(measurement.observe('steady', STEADY_S), STEADY_WINDOW_S)
+            load_hold = measurement.observe('steady', BATTERY_HOLD_S)
+            if measure_battery:
+                restore_battery()
+            samples = load_hold + measurement.observe('steady', STEADY_S - BATTERY_HOLD_S)
             load.kill()
             load.wait()
             load = None
+        window = tail(samples, STEADY_WINDOW_S)
+        if measure_battery:
+            row.update(battery_resistance(idle_hold, load_hold))
         row.update(averages('steady', window))
         row['steady_fan_rpm'] = mean(window, 'fan_rpm')
         row['steady_thermal_pct'] = residency_percent(window[0], window[-1], THERMAL_LIMITS)
@@ -818,12 +989,9 @@ def measure(trigger, note):
         if load is not None:
             load.kill()
             load.wait()
-        # A failure here must not hide the one which ended the measurement. The marker stays, so that the next
-        # scheduled attempt and the service's stop command try again.
-        try:
-            restore_fan()
-        except Failure as error:
-            print(f'health-benchmark: {error}', file=sys.stderr, flush=True)
+        # A failure here must not hide the one which ended the measurement. A marker stays when its restoration fails,
+        # so that the service's stop command, the next scheduled measurement and the next boot try again.
+        restore_changes(announce=False)
 
     row['duration_s'] = time.monotonic() - measurement.start
     row['foreign_cpu_pct'] = max(measurement.foreign.values())
@@ -875,7 +1043,7 @@ def wait_for_idle():
 
 def launch(trigger, note):
     """Runs a measurement in a child process which holds the power profile at performance while it runs, and returns
-    its exit code. The fan is restored here too, in case the child could not do it itself."""
+    its exit code. The battery and the fan are restored here too, in case the child could not do it itself."""
     command = [
         'powerprofilesctl', 'launch', '--profile', PROFILE, '--reason', 'Measuring cooling and performance',
         '--appid', 'health-benchmark', '--',
@@ -888,14 +1056,10 @@ def launch(trigger, note):
         return process.wait()
     finally:
         # powerprofilesctl passes SIGINT and SIGTERM on to the child, which then cleans up, so waiting for it here
-        # avoids restoring the fan while the child still holds it.
+        # avoids restoring the battery and the fan while the child still holds them.
         with contextlib.suppress(subprocess.TimeoutExpired):
             process.wait(timeout=60)
-        if os.path.exists(FAN_MARKER):
-            try:
-                restore_fan()
-            except Failure as error:
-                print(f'health-benchmark: {error}', file=sys.stderr, flush=True)
+        restore_changes(announce=True)
 
 
 def require_root():
@@ -930,9 +1094,7 @@ def run_scheduled():
         if not acquired:
             print('not measuring: another measurement is running', flush=True)
             return
-        if os.path.exists(FAN_MARKER):
-            print('returning the fan to automatic control, which an earlier measurement left fixed', flush=True)
-            restore_fan()
+        restore_changes(announce=True)
         now = datetime.datetime.now()
         start = datetime.datetime.combine(now.date(), SCHEDULED_AT)
         end = start + datetime.timedelta(seconds=SCHEDULED_LATE_S)
@@ -948,12 +1110,13 @@ def run_scheduled():
         sys.exit(launch('scheduled', None))
 
 
-def run_restore_fan():
-    """Returns the fan to automatic control if a measurement left it fixed and none is running."""
+def run_restore():
+    """Returns the battery to automatic charging and the fan to automatic control, when a measurement left them
+    changed and none is running."""
     require_root()
     with measurement_lock() as acquired:
-        if acquired and os.path.exists(FAN_MARKER):
-            restore_fan()
+        if acquired:
+            restore_changes(announce=True)
 
 
 def read_results():
@@ -986,6 +1149,12 @@ def thermal_resistance(row):
     return (steady_tctl - idle_tctl) / (steady_power - idle_power)
 
 
+def battery_capacity_wh(row):
+    """Returns the battery's full capacity as its gauge estimates it, in watt-hours, or None when the row lacks it."""
+    full, voltage = number(row, 'battery_full_mah'), number(row, 'battery_design_voltage_v')
+    return None if None in (full, voltage) else full * voltage / 1000
+
+
 # label, how to read the value from a row, unit, format, and whether higher is better
 COOLING = [
     ('Thermal resistance', thermal_resistance, 'C/W', '.3f', False),
@@ -996,6 +1165,10 @@ PERFORMANCE = [
     ('7-Zip, one thread', lambda row: number(row, 'sevenzip_one_mips'), 'MIPS', '.0f', True),
     ('Context switches', lambda row: number(row, 'perf_pipe_ops'), 'ops/s', '.0f', True),
     ('System calls', lambda row: number(row, 'perf_syscall_ops'), 'ops/s', '.0f', True),
+]
+BATTERY = [
+    ('Full capacity (gauge)', battery_capacity_wh, 'Wh', '.1f', True),
+    ('Internal resistance', lambda row: number(row, 'battery_resistance_mohm'), 'mOhm', '.0f', False),
 ]
 # Columns which can explain a change in the scores, shown when they differ between two measurements.
 ATTRIBUTION = ['bios_version', 'ec_version', 'microcode', 'kernel', 'cmdline', 'amd_pstate', 'epp', 'mem_total_kb',
@@ -1049,23 +1222,27 @@ def describe_changes(old, new):
 
 def report():
     """Prints the latest measurement as a share of the best ones made under the same conditions."""
-    rows = read_results()
-    if not rows:
+    all_rows = read_results()
+    if not all_rows:
         print(f'No measurements in {RESULTS_FILE} yet.')
         return
-    latest = rows[-1]
-    # Only measurements with the same 7-Zip binary and power profile compare.
-    rows = [row for row in rows if row.get('sevenzip_sha256') == latest.get('sevenzip_sha256') and
+    latest = all_rows[-1]
+    # Only measurements with the same 7-Zip binary and power profile compare, and for the battery only those of the
+    # same battery.
+    rows = [row for row in all_rows if row.get('sevenzip_sha256') == latest.get('sevenzip_sha256') and
             row.get('platform_profile') == latest.get('platform_profile')]
+    battery_rows = [row for row in all_rows if row.get('battery_serial') and
+                    (row.get('battery_model'), row.get('battery_serial')) ==
+                    (latest.get('battery_model'), latest.get('battery_serial'))]
     print(f'{len(rows)} comparable measurements from {local_date(rows[0])} to {local_date(rows[-1])}, the latest '
           f'{latest["trigger"]}' + (f', note: {latest["note"]}' if latest.get('note') else ''))
 
-    def section(title, metrics):
+    def section(title, metrics, candidates):
         print()
         print(f'{title:<28}{"latest":>16}{"best":>16}  {"date":<10}{"share":>7}')
         bests = {}
         for label, read, unit, spec, higher in metrics:
-            best_value, best_row = best(rows, read, higher)
+            best_value, best_row = best(candidates, read, higher)
             bests[label] = best_value
             value = read(latest)
             if best_value is None:
@@ -1076,7 +1253,7 @@ def report():
                   (f'{ratio:6.1f}%' if ratio is not None else '-'.rjust(7)))
         return bests
 
-    cooling_bests = section('Cooling', COOLING)
+    cooling_bests = section('Cooling', COOLING, rows)
 
     print()
     fan = [(number(row, 'fan_rpm_full'), row) for row in rows if number(row, 'fan_rpm_full')]
@@ -1086,7 +1263,7 @@ def report():
         print(f'{"Fan at a full duty cycle":<28}' + (f'{value:.0f} RPM' if value else '-').rjust(16) +
               f'{highest:.0f} RPM'.rjust(16) + '  highest, ' + f'{first:.0f} RPM first')
 
-    performance_bests = section('Performance', PERFORMANCE)
+    performance_bests = section('Performance', PERFORMANCE, rows)
     shares = [(performance_share(row, performance_bests), row) for row in rows]
     shares = [(value, row) for value, row in shares if value]
     if shares:
@@ -1100,16 +1277,31 @@ def report():
             print(f'Changed since the measurement with the best overall performance ({local_date(top_row)}):')
             print('\n'.join(changes))
 
+    if battery_rows:
+        section('Battery', BATTERY, battery_rows)
+        capacity = battery_capacity_wh(latest)
+        design_mah, voltage = number(latest, 'battery_design_mah'), number(latest, 'battery_design_voltage_v')
+        if capacity is not None and design_mah and voltage:
+            design = design_mah * voltage / 1000
+            print(f'  {"Design capacity":<26}' + f'{design:.1f}    Wh'.rjust(16) +
+                  f'  the gauge estimates {100 * capacity / design:.0f}% of it')
+        cycles = [(number(row, 'battery_cycles'), row) for row in battery_rows
+                  if number(row, 'battery_cycles') is not None]
+        if cycles:
+            print(f'  {"Charge cycles":<26}' + f'{cycles[-1][0]:.0f}'.rjust(10) +
+                  f'        {cycles[-1][0] - cycles[0][0]:.0f} more than on {local_date(cycles[0][1])}')
+
     print()
-    print(f'{"Recent":<12}{"trigger":<11}{"cooling":>8}{"fan RPM":>9}{"perf":>8}  note')
+    print(f'{"Recent":<12}{"trigger":<11}{"cooling":>8}{"fan RPM":>9}{"perf":>8}{"battery":>9}  note')
     best_resistance = cooling_bests.get('Thermal resistance')
     for row in rows[-10:]:
         cooling = share(thermal_resistance(row), best_resistance, False)
         perf = performance_share(row, performance_bests)
         rpm = number(row, 'fan_rpm_full')
+        resistance = number(row, 'battery_resistance_mohm')
         print(f'{local_date(row):<12}{row["trigger"]:<11}' + (f'{cooling:7.1f}%' if cooling else '-'.rjust(8)) +
               (f'{rpm:9.0f}' if rpm else '-'.rjust(9)) + (f'{perf:7.1f}%' if perf else '-'.rjust(8)) +
-              f'  {row.get("note") or ""}')
+              (f'{resistance:4.0f} mOhm' if resistance else '-'.rjust(9)) + f'  {row.get("note") or ""}')
 
 
 def main():
@@ -1123,8 +1315,9 @@ def main():
     mode.add_argument('--scheduled', action='store_true',
                       help=f'measure if started between {SCHEDULED_AT:%H:%M} and {latest:%H:%M}, with the laptop on AC '
                            'power and the screen locked, and skip otherwise (root)')
-    mode.add_argument('--restore-fan', action='store_true',
-                      help='return the fan to automatic control if a measurement left it fixed (root)')
+    mode.add_argument('--restore', action='store_true',
+                      help='return the battery to automatic charging and the fan to automatic control, when a '
+                           'measurement left them changed (root)')
     mode.add_argument('--measure', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--note', help='a note to record with a measurement, such as "after cleaning the fan"')
     parser.add_argument('--trigger', default='manual', help=argparse.SUPPRESS)
@@ -1137,8 +1330,8 @@ def main():
             run_manual(args.note)
         elif args.scheduled:
             run_scheduled()
-        elif args.restore_fan:
-            run_restore_fan()
+        elif args.restore:
+            run_restore()
         elif args.measure:
             require_root()
             os.umask(0o022)
