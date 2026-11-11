@@ -17,9 +17,11 @@ and the charge cycles) and the battery's internal resistance, which grows as the
 the battery's voltage and current at the start of the idle phase and at the start of the steady load, for each of which
 the measurement makes the battery power the laptop for 90 seconds although AC power is connected.
 
-The row also records the firmware, microcode, kernel and its mitigations, so that a change in the scores can be
-traced to the system change which came with it. The samples read every second during the measurement are kept next
-to the results, in traces/, so that they can be analyzed again later.
+The row also records the firmware, microcode, kernel and its mitigations, so that a change in the scores can be traced
+to the system change which came with it, and the external displays, the wired network and the USB-C power source, which
+tell whether the laptop stood docked at its desk. The cooling depends on the laptop's surroundings, so the report uses
+only docked measurements for its best values. The samples read every second during the measurement are kept next to the
+results, in traces/, so that they can be analyzed again later.
 
 Without arguments it reports the latest measurement as a share of the best one recorded, which needs no root.
 
@@ -198,6 +200,7 @@ TRACE_FIELDS = (
 
 FIELDS = [
     'timestamp', 'trigger', 'note', 'duration_s', 'foreign_cpu_pct', 'platform_profile',
+    'external_displays', 'ethernet', 'power_source', 'power_source_v', 'power_source_max_a',
     'bios_version', 'bios_date', 'ec_version', 'kernel', 'kernel_build', 'cmdline', 'microcode', 'cpu_model',
     'mem_total_kb', 'uptime_s', 'amd_pstate', 'governor', 'epp', 'vulnerabilities',
     'sevenzip_version', 'sevenzip_sha256', 'perf_version',
@@ -787,6 +790,43 @@ def averages(prefix, samples):
     return columns
 
 
+def surroundings():
+    """Returns the number of connected external displays, whether a wired network link is up (1 or 0), and the USB-C
+    power source with its voltage in volts and its maximum current in amperes, as columns, which together tell a dock
+    from a plain charger."""
+    displays = 0
+    for status in glob.glob('/sys/class/drm/card*-*/status'):
+        connector = os.path.basename(os.path.dirname(status))
+        # eDP is the laptop's own panel and Writeback a virtual connector of the display engine.
+        if '-eDP-' in connector or '-Writeback-' in connector:
+            continue
+        if read_text(status) == 'connected':
+            displays += 1
+    ethernet = 0
+    for interface in glob.glob('/sys/class/net/*'):
+        # A wired adapter is a device of the Ethernet type without wireless extensions. Bridges, veth pairs and other
+        # virtual interfaces have no device, and reading the carrier of an interface which is down fails.
+        if (read_text(f'{interface}/type') == '1' and os.path.exists(f'{interface}/device') and
+                not os.path.exists(f'{interface}/wireless') and not os.path.exists(f'{interface}/phy80211') and
+                read_text(f'{interface}/carrier') == '1'):
+            ethernet = 1
+    columns = {'external_displays': displays, 'ethernet': ethernet, 'power_source': None, 'power_source_v': None,
+               'power_source_max_a': None}
+    # A source which offers more than one contract lists the active one, and with several sources connected the
+    # strongest one counts.
+    best_power = -1
+    for supply in sorted(glob.glob('/sys/class/power_supply/ucsi-source-psy-*')):
+        if read_text(f'{supply}/online') != '1':
+            continue
+        voltage, current = read_number(f'{supply}/voltage_now', 1e6), read_number(f'{supply}/current_max', 1e6)
+        power = (voltage or 0) * (current or 0)
+        if power > best_power:
+            best_power = power
+            columns.update(power_source=os.path.basename(supply).removeprefix('ucsi-source-psy-'),
+                           power_source_v=voltage, power_source_max_a=current)
+    return columns
+
+
 def system_description():
     """Returns a description of the system a measurement ran on: firmware, microcode, kernel, mitigations and tools."""
     cpuinfo = read_text('/proc/cpuinfo') or ''
@@ -894,6 +934,7 @@ def measure(trigger, note):
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
     row = {'timestamp': timestamp, 'trigger': trigger, 'note': note, 'platform_profile': profile}
     row.update(system_description())
+    row.update(surroundings())
     battery = sensors.battery
     if battery:
         row.update(battery_description(battery))
@@ -1197,6 +1238,15 @@ def performance_share(row, bests):
     return math.exp(statistics.fmean(math.log(value) for value in shares)) if shares else None
 
 
+def docked(row):
+    """Returns whether the laptop was docked during a measurement, told by an external display being connected and a
+    wired network link being up, or None when the row does not record both."""
+    displays, ethernet = number(row, 'external_displays'), number(row, 'ethernet')
+    if displays is None or ethernet is None:
+        return None
+    return displays > 0 and ethernet > 0
+
+
 def local_date(row):
     """Returns the local date of a row's measurement."""
     return datetime.datetime.fromisoformat(row['timestamp']).astimezone().strftime('%Y-%m-%d')
@@ -1234,8 +1284,17 @@ def report():
     battery_rows = [row for row in all_rows if row.get('battery_serial') and
                     (row.get('battery_model'), row.get('battery_serial')) ==
                     (latest.get('battery_model'), latest.get('battery_serial'))]
-    print(f'{len(rows)} comparable measurements from {local_date(rows[0])} to {local_date(rows[-1])}, the latest '
-          f'{latest["trigger"]}' + (f', note: {latest["note"]}' if latest.get('note') else ''))
+    # The best values come from measurements recorded as docked, because away from its desk the laptop may stand where
+    # less air reaches it, which can make the cooling measure a quarter worse. Without any docked measurement, all
+    # count.
+    docked_rows = [row for row in rows if docked(row) is True]
+    best_rows = docked_rows or rows
+    best_battery_rows = [row for row in battery_rows if docked(row) is True] or battery_rows
+    left_out = len(rows) - len(docked_rows) if docked_rows else 0
+    print(f'{len(rows)} comparable measurements from {local_date(rows[0])} to {local_date(rows[-1])}'
+          + (f', {left_out} of them not recorded as docked and left out of the best values' if left_out else '')
+          + f', the latest {latest["trigger"]}' + (', not recorded as docked' if docked(latest) is not True else '')
+          + (f', note: {latest["note"]}' if latest.get('note') else ''))
 
     def section(title, metrics, candidates):
         print()
@@ -1253,18 +1312,18 @@ def report():
                   (f'{ratio:6.1f}%' if ratio is not None else '-'.rjust(7)))
         return bests
 
-    cooling_bests = section('Cooling', COOLING, rows)
+    cooling_bests = section('Cooling', COOLING, best_rows)
 
     print()
-    fan = [(number(row, 'fan_rpm_full'), row) for row in rows if number(row, 'fan_rpm_full')]
+    fan = [(number(row, 'fan_rpm_full'), row) for row in best_rows if number(row, 'fan_rpm_full')]
     if fan:
         value = number(latest, 'fan_rpm_full')
         first, highest = fan[0][0], max(rpm for rpm, _ in fan)
         print(f'{"Fan at a full duty cycle":<28}' + (f'{value:.0f} RPM' if value else '-').rjust(16) +
               f'{highest:.0f} RPM'.rjust(16) + '  highest, ' + f'{first:.0f} RPM first')
 
-    performance_bests = section('Performance', PERFORMANCE, rows)
-    shares = [(performance_share(row, performance_bests), row) for row in rows]
+    performance_bests = section('Performance', PERFORMANCE, best_rows)
+    shares = [(performance_share(row, performance_bests), row) for row in best_rows]
     shares = [(value, row) for value, row in shares if value]
     if shares:
         top_value, top_row = max(shares, key=lambda pair: pair[0])
@@ -1278,7 +1337,7 @@ def report():
             print('\n'.join(changes))
 
     if battery_rows:
-        section('Battery', BATTERY, battery_rows)
+        section('Battery', BATTERY, best_battery_rows)
         capacity = battery_capacity_wh(latest)
         design_mah, voltage = number(latest, 'battery_design_mah'), number(latest, 'battery_design_voltage_v')
         if capacity is not None and design_mah and voltage:
@@ -1292,16 +1351,18 @@ def report():
                   f'        {cycles[-1][0] - cycles[0][0]:.0f} more than on {local_date(cycles[0][1])}')
 
     print()
-    print(f'{"Recent":<12}{"trigger":<11}{"cooling":>8}{"fan RPM":>9}{"perf":>8}{"battery":>9}  note')
+    print(f'{"Recent":<12}{"trigger":<11}{"docked":<8}{"cooling":>8}{"fan RPM":>9}{"perf":>8}{"battery":>10}  note')
     best_resistance = cooling_bests.get('Thermal resistance')
     for row in rows[-10:]:
         cooling = share(thermal_resistance(row), best_resistance, False)
         perf = performance_share(row, performance_bests)
         rpm = number(row, 'fan_rpm_full')
         resistance = number(row, 'battery_resistance_mohm')
-        print(f'{local_date(row):<12}{row["trigger"]:<11}' + (f'{cooling:7.1f}%' if cooling else '-'.rjust(8)) +
-              (f'{rpm:9.0f}' if rpm else '-'.rjust(9)) + (f'{perf:7.1f}%' if perf else '-'.rjust(8)) +
-              (f'{resistance:4.0f} mOhm' if resistance else '-'.rjust(9)) + f'  {row.get("note") or ""}')
+        dock = {True: 'yes', False: 'no', None: '-'}[docked(row)]
+        print(f'{local_date(row):<12}{row["trigger"]:<11}{dock:<8}' +
+              (f'{cooling:7.1f}%' if cooling else '-'.rjust(8)) + (f'{rpm:9.0f}' if rpm else '-'.rjust(9)) +
+              (f'{perf:7.1f}%' if perf else '-'.rjust(8)) +
+              (f'{resistance:5.0f} mOhm' if resistance else '-'.rjust(10)) + f'  {row.get("note") or ""}')
 
 
 def main():

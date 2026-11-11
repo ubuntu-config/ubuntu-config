@@ -448,9 +448,13 @@ battery returns to automatic charging after each hold, and if a crash interrupts
 across a reboot.
 
 7-Zip is a static build of a pinned release, verified by its checksum, so that its scores stay comparable across
-years and only the hardware, firmware, microcode and kernel can move them. Each measurement records those as well,
-in `/var/lib/health-benchmark/results.csv`, which everyone can read, and keeps the samples it read every second in
-`traces/` next to it.
+years and only the hardware, firmware, microcode and kernel can move them. Each measurement records those as well, in
+`/var/lib/health-benchmark/results.csv`, which everyone can read, and keeps the samples it read every second in
+`traces/` next to it. Each measurement also records the connected external displays, whether a wired network link is
+up, and the USB-C power source, which together tell a dock from a plain charger. The cooling depends on where the
+laptop stands, and away from its desk it may stand where less air reaches it, which can make the cooling measure a
+quarter worse. The report therefore uses only docked measurements, those with an external display connected and a
+wired network link up, for its best values, and marks the undocked ones.
 
 `health-benchmark` without arguments reports the latest measurement as a share of the best one for each value, and
 lists what changed since the measurement with the best performance. `sudo health-benchmark --run --note "..."`
