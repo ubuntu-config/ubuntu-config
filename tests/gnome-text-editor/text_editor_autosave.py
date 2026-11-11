@@ -592,7 +592,7 @@ def run_last_tab_scenario(text_editor, out):
                 pass
             check(proc.returncode == 0, "%s: closing the tab of the first file closed the last window, and Text Editor "
                   "exited with status %s" % (name, proc.returncode))
-            check(saved_windows(path) == [[]], "%s: quitting saved the session without pages (saved %s)" % (
+            check(saved_windows(path) == [], "%s: quitting saved the session without the closed window (saved %s)" % (
                 name, saved_windows(path)))
         if proc.poll() is None:
             quit_text_editor(proc)

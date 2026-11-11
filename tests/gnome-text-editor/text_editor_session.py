@@ -1,4 +1,4 @@
-"""Run Text Editor four times to test that GTK names its windows to the compositor and restores them. See README.
+"""Run Text Editor seven times to test that GTK names its windows to the compositor and restores them. See README.
 
 Usage: text_editor_session.py TEXT_EDITOR OUT_DIR SCENARIO
 
@@ -6,7 +6,10 @@ TEXT_EDITOR is the gnome-text-editor binary to run, with the GTK it is to use al
 first run opens two files, each in a window of its own, and quits. The second run starts without files, which
 restores the last session. The third run does the same while two more launches arrive before Text Editor loaded
 its session. The fourth run starts with --ignore-session, so that Text Editor has to discard the windows GTK
-restores. Text Editor's output, with its Wayland requests and events, goes to OUT_DIR/runN.log.
+restores. The fifth run opens both files again and closes both windows, after which nothing is restored. The sixth
+run opens both files again, types into each, and ends with SIGTERM, and the seventh run restores both windows with
+the text typed into them. Text Editor's output, with its Wayland requests and events, goes to
+OUT_DIR/runN.log.
 SCENARIO says which session manager the private D-Bus session has, which run-text-editor-session.sh sets up:
 none, unsupported (RestoreSupported is false) or supported (RestoreSupported is true), and so whether GTK has to
 register with it. The exit status is 0 when every check passed.
@@ -14,6 +17,7 @@ register with it. The exit status is 0 when every check passed.
 
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -38,6 +42,12 @@ PATTERNS = {
 # know it and ignores it, but the WAYLAND_DEBUG output shows the window Text Editor presents it with.
 TOKEN = "text-editor-session-test-token"
 
+# Text typed into the documents, in run 6 into the first and the second file, and in run 7 after the restore.
+TYPED = ("typed into the first file", "typed into the second file", "typed after the restore")
+
+# Keysyms pressed through mutter's remote desktop API.
+ALT, F4, RETURN = 0xffe9, 0xffc1, 0xff0d
+
 failures = []
 
 
@@ -58,6 +68,18 @@ def wait_for(log_path, name, count, timeout=30):
     while time.time() < deadline:
         if len(scan(log_path)[name]) >= count:
             return True
+        time.sleep(0.2)
+    return False
+
+
+def wait_until(predicate, timeout=30):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if predicate():
+                return True
+        except (OSError, GLib.Error):
+            pass
         time.sleep(0.2)
     return False
 
@@ -112,6 +134,39 @@ def focused(log_path):
     return kinds[-1] if kinds else None
 
 
+def last_window_focused(log_path):
+    """Whether the window which received the keyboard focus last is the window created last."""
+    xdg_surfaces, toplevels, created, last = {}, {}, [], None
+    with open(log_path, errors="replace") as log:
+        for line in log:
+            if match := re.search(r"-> xdg_wm_base#\d+\.get_xdg_surface\(new id xdg_surface#(\d+), wl_surface#(\d+)\)", line):
+                xdg_surfaces[match[1]] = match[2]
+            elif match := re.search(r"-> xdg_surface#(\d+)\.get_toplevel\(new id xdg_toplevel#(\d+)\)", line):
+                toplevels[xdg_surfaces.get(match[1])] = match[2]
+                created.append(match[2])
+            elif match := re.search(r"wl_keyboard#\d+\.enter\(\d+, wl_surface#(\d+),", line):
+                last = toplevels.get(match[1])
+    return last is not None and created and last == created[-1]
+
+
+def press(keyboard, keysym, modifier=None):
+    def key(sym, pressed):
+        keyboard.call_sync("NotifyKeyboardKeysym", GLib.Variant("(ub)", (sym, pressed)), Gio.DBusCallFlags.NONE, -1, None)
+    if modifier:
+        key(modifier, True)
+    key(keysym, True)
+    key(keysym, False)
+    if modifier:
+        key(modifier, False)
+
+
+def type_text(keyboard, text):
+    """Types ASCII text, whose keysyms are the codes of its characters, followed by Return."""
+    for char in text:
+        press(keyboard, ord(char))
+    press(keyboard, RETURN)
+
+
 def add_keyboard():
     """Adds a keyboard to mutter's seat through its remote desktop API, by pressing Shift, so that mutter gives the
     keyboard focus to windows. Returns the remote desktop session, which keeps the keyboard until it is stopped."""
@@ -157,6 +212,20 @@ def editor_windows():
     state = load_variant(session_path(), "a{sv}")
     return [(w.get("window-id"), sorted(p.get("uri", "") for p in w.get("pages", [])))
             for w in state.get("windows", []) if w.get("pages")]
+
+
+def draft_texts():
+    """The drafts of the pages of Text Editor's session state, as {URI of the page: text of its draft}."""
+    state = load_variant(session_path(), "a{sv}")
+    drafts_dir = os.path.join(GLib.get_user_data_dir(), APP_ID, "drafts")
+    texts = {}
+    for window in state.get("windows", []):
+        for page in window.get("pages", []):
+            path = os.path.join(drafts_dir, page.get("draft-id", ""))
+            if page.get("draft-id") and os.path.exists(path):
+                with open(path, errors="replace") as f:
+                    texts[page.get("uri", "")] = f.read()
+    return texts
 
 
 def gtk_windows(path):
@@ -324,8 +393,111 @@ def main():
     print("GTK state: windows %s" % gtk4)
     check(len(gtk4) == 1 and gtk4[0][0] not in [i for i, _ in gtk3] and gtk4[0][1] == run4["restore_toplevel"][0],
           "run 4: GTK saved only the new window")
-    for run, p in ((1, proc1), (2, proc2), (3, proc3), (4, proc)):
+    proc4 = proc
+    for run, p in ((1, proc1), (2, proc2), (3, proc3), (4, proc4)):
         check(p.returncode == 0, "run %d: Text Editor exited with 0, not %s" % (run, p.returncode))
+
+    # Run 5: both files open again, each in a window of its own, and the windows are closed one after the other with
+    # Alt+F4. Each window leaves the session, the last one too, so Text Editor quits with no window to restore.
+    keyboard = add_keyboard()
+    log5 = os.path.join(out, "run5.log")
+    proc5 = start(text_editor, [files[0]], log5)
+    check(wait_for(log5, "restore_toplevel", 1), "run 5: the first window was named to the compositor")
+    with open(os.path.join(out, "run5-new-window.log"), "w") as log:
+        subprocess.run([text_editor, "--new-window", files[1]], stdout=log, stderr=subprocess.STDOUT, check=True)
+    check(wait_for(log5, "restore_toplevel", 2), "run 5: the second window was named to the compositor")
+    check(wait_until(lambda: sorted(u for _, pages in editor_windows() for u in pages) == uris),
+          "run 5: the session saved both windows with their files")
+    check(wait_until(lambda: last_window_focused(log5)), "run 5: the second window has the keyboard focus")
+    press(keyboard, F4, ALT)
+    check(wait_until(lambda: len(editor_windows()) == 1), "run 5: the session saved closing the second window")
+    # Mutter gives the keyboard focus to the first window once the second is gone.
+    time.sleep(1)
+    press(keyboard, F4, ALT)
+    try:
+        proc5.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc5.kill()
+        proc5.wait()
+    check(proc5.returncode == 0, "run 5: Text Editor quit once its last window was closed (status %s)" % proc5.returncode)
+    keyboard.call_sync("Stop", None, Gio.DBusCallFlags.NONE, -1, None)
+    run5 = scan(log5)
+    summary(5, run5)
+    check(not run5["error"], "run 5: no protocol error")
+    check(not editor_windows(), "run 5: the session saved no window to restore")
+
+    # Run 6: each of the two files has text typed into it, which Text Editor keeps as a draft, and once it autosaved
+    # its session with both drafts and GTK saved its window state, Text Editor is ended with SIGTERM, which it does
+    # not handle, so it closes no window and saves nothing more.
+    keyboard = add_keyboard()
+    log6 = os.path.join(out, "run6.log")
+    proc6 = start(text_editor, [files[0]], log6)
+    check(wait_for(log6, "restore_toplevel", 1), "run 6: the first window was named to the compositor")
+    check(not scan(log6)["restored_toplevel"], "run 6: no window closed in run 5 was restored")
+    check(wait_until(lambda: last_window_focused(log6)), "run 6: the first window has the keyboard focus")
+    type_text(keyboard, TYPED[0])
+    with open(os.path.join(out, "run6-new-window.log"), "w") as log:
+        subprocess.run([text_editor, "--new-window", files[1]], stdout=log, stderr=subprocess.STDOUT, check=True)
+    check(wait_for(log6, "restore_toplevel", 2), "run 6: the second window was named to the compositor")
+    check(wait_until(lambda: last_window_focused(log6)), "run 6: the second window has the keyboard focus")
+    type_text(keyboard, TYPED[1])
+    file_uris = [GLib.filename_to_uri(path, None) for path in files]
+    check(wait_until(lambda: all(typed in draft_texts().get(uri, "") for typed, uri in zip(TYPED, file_uris))),
+          "run 6: the session saved a draft of each file with the text typed into it")
+    run6_names = scan(log6)["restore_toplevel"]
+    check(wait_until(lambda: sorted(n for _, n in gtk_windows(state_path)[1]) == sorted(run6_names), timeout=60),
+          "run 6: GTK saved the names of both windows")
+    editor6 = editor_windows()
+    proc6.send_signal(signal.SIGTERM)
+    try:
+        proc6.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc6.kill()
+        proc6.wait()
+    check(proc6.returncode == -signal.SIGTERM, "run 6: SIGTERM ended Text Editor (status %s)" % proc6.returncode)
+    keyboard.call_sync("Stop", None, Gio.DBusCallFlags.NONE, -1, None)
+    run6 = scan(log6)
+    summary(6, run6)
+    print("Text Editor session: windows %s" % editor6)
+    check(not run6["error"], "run 6: no protocol error")
+    check(sorted(u for _, pages in editor6 for u in pages) == uris, "run 6: the session has both files")
+    check(editor_windows() == editor6, "run 6: the session kept both windows after SIGTERM")
+
+    # Run 7: restores both windows under their names of run 6, and opens a new window beside them. Closing the new
+    # window, which has only an empty draft, gives the keyboard focus to a restored window, and text typed into it
+    # is autosaved to its draft. The draft holds the text typed in run 6 only if the restored document has it.
+    keyboard = add_keyboard()
+    log7 = os.path.join(out, "run7.log")
+    proc7 = start(text_editor, [], log7)
+    check(wait_for(log7, "restored_toplevel", 2), "run 7: the compositor restored both windows")
+    check(wait_for(log7, "restore_toplevel", 3), "run 7: a new window was named to the compositor beside them")
+    run7 = scan(log7)
+    check(set(run6_names) <= set(run7["restore_toplevel"]), "run 7: the restored windows used their names of run 6")
+    check(wait_until(lambda: focused(log7) == "new"), "run 7: the new window has the keyboard focus")
+    press(keyboard, F4, ALT)
+    check(wait_until(lambda: focused(log7) == "restored"), "run 7: closing the new window focused a restored window")
+    type_text(keyboard, TYPED[2])
+    check(wait_until(lambda: any(TYPED[2] in text for text in draft_texts().values())),
+          "run 7: the session saved the text typed after the restore")
+    check(all(w in editor_windows() for w in editor6), "run 7: each restored window has the file it had in run 6")
+    texts = draft_texts()
+    print("Text Editor drafts: %s" % texts)
+    check(any(TYPED[2] in texts.get(uri, "") and typed in texts.get(uri, "") for typed, uri in zip(TYPED, file_uris)),
+          "run 7: the restored document has the text typed into it in run 6")
+    check(all(typed in texts.get(uri, "") for typed, uri in zip(TYPED, file_uris)),
+          "run 7: the session kept the draft of each file")
+    keyboard.call_sync("Stop", None, Gio.DBusCallFlags.NONE, -1, None)
+    # Quitting would ask whether to save the changes, so Text Editor is ended with SIGTERM again.
+    proc7.send_signal(signal.SIGTERM)
+    try:
+        proc7.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc7.kill()
+        proc7.wait()
+    check(proc7.returncode == -signal.SIGTERM, "run 7: SIGTERM ended Text Editor (status %s)" % proc7.returncode)
+    run7 = scan(log7)
+    summary(7, run7)
+    check(not run7["error"], "run 7: no protocol error")
 
     calls = []
     calls_path = os.path.join(out, "session-manager.log")
@@ -334,7 +506,7 @@ def main():
             calls = [line.split(" ", 1)[0] for line in f]
     print("session manager calls: %s" % (calls or "none"))
     if scenario == "supported":
-        check(calls.count("RegisterRestore") == 4, "GTK registered with the session manager in every run")
+        check(calls.count("RegisterRestore") == 7, "GTK registered with the session manager in every run")
     else:
         check("RegisterRestore" not in calls, "GTK did not register with the session manager")
 

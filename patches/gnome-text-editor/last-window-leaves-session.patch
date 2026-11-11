@@ -1,0 +1,126 @@
+Description: Leave a window the user closes out of the session, the last one too.
+ Text Editor removes a window the user closes from its session, with its documents, except the last one: closing the
+ last window saves the session with that window, which the next start restores, so after closing every window one
+ by one the last of them returns. The window the user closes last now leaves the session as well, before the save
+ Text Editor quits after, and the next start opens a new window instead. A document with unsaved changes is still
+ offered for saving or discarding before its window closes.
+ .
+ Every window still returns when Text Editor ends without the user closing its windows: the quit action, Ctrl+Q,
+ saves the session with every window before quitting, so does the end of the desktop session, and the session
+ autosaved last stays when Text Editor ends on SIGTERM or in a crash. A window destroyed without the user closing it
+ stays in the session as before.
+Author: Mitar
+Forwarded: not-needed
+Last-Update: 2026-11-11
+diff --git a/src/editor-session-private.h b/src/editor-session-private.h
+index 1c91959..458d100 100644
+--- a/src/editor-session-private.h
++++ b/src/editor-session-private.h
+@@ -84,7 +84,8 @@ void           _editor_session_add_draft              (EditorSession  *self,
+                                                        const gchar    *title,
+                                                        const gchar    *uri);
+ void           _editor_session_remove_window          (EditorSession  *self,
+-                                                       EditorWindow   *window);
++                                                       EditorWindow   *window,
++                                                       gboolean        closed);
+ void           _editor_session_remove_draft           (EditorSession  *self,
+                                                        const gchar    *draft_id);
+ EditorPage    *_editor_session_open_draft             (EditorSession  *self,
+diff --git a/src/editor-session.c b/src/editor-session.c
+index 387a270..abe99b5 100644
+--- a/src/editor-session.c
++++ b/src/editor-session.c
+@@ -1395,18 +1395,32 @@ editor_session_save_for_shutdown_cb (GObject      *object,
+   g_application_quit (g_application_get_default ());
+ }
+ 
++/**
++ * _editor_session_remove_window:
++ * @self: an #EditorSession
++ * @window: the #EditorWindow to remove
++ * @closed: whether the user closed @window
++ *
++ * Removes @window from the session. Removing the last window saves the
++ * session and quits once the save finished. A window the user closed leaves
++ * the session with its pages, the last one too, so that the next start
++ * restores only the windows which were open when Text Editor quit or ended.
++ * The quit action saves the session with every window before any is removed.
++ */
+ void
+ _editor_session_remove_window (EditorSession *self,
+-                               EditorWindow  *window)
++                               EditorWindow  *window,
++                               gboolean       closed)
+ {
++  gboolean is_last;
++
+   g_return_if_fail (EDITOR_IS_SESSION (self));
+   g_return_if_fail (EDITOR_IS_WINDOW (window));
+ 
+-  /* If this is the last window, then we want to save the session
+-   * so that we can restore it next time we start.
+-   */
+-  if (self->windows->len == 1 &&
+-      EDITOR_WINDOW (g_ptr_array_index (self->windows, 0)) == window)
++  is_last = self->windows->len == 1 &&
++            EDITOR_WINDOW (g_ptr_array_index (self->windows, 0)) == window;
++
++  if (is_last)
+     {
+       int width, height;
+ 
+@@ -1417,7 +1431,13 @@ _editor_session_remove_window (EditorSession *self,
+           default_width = width;
+           default_height = height;
+         }
++    }
+ 
++  /* The last window destroyed without being closed by the user stays in the
++   * session, so that the next start restores it.
++   */
++  if (is_last && !closed)
++    {
+       editor_session_save_async (self,
+                                  TRUE,
+                                  NULL,
+@@ -1447,7 +1467,17 @@ _editor_session_remove_window (EditorSession *self,
+ 
+   g_object_unref (window);
+ 
+-  _editor_session_mark_dirty (self);
++  /* A save captures the session when it is requested, so the closed last
++   * window and its pages are left out of it.
++   */
++  if (is_last)
++    editor_session_save_async (self,
++                               TRUE,
++                               NULL,
++                               editor_session_save_for_shutdown_cb,
++                               NULL);
++  else
++    _editor_session_mark_dirty (self);
+ }
+ 
+ static int
+diff --git a/src/editor-window.c b/src/editor-window.c
+index b5fb5fc..519bd0a 100644
+--- a/src/editor-window.c
++++ b/src/editor-window.c
+@@ -330,7 +330,7 @@ editor_window_do_close (EditorWindow *self)
+                                         G_CALLBACK (editor_window_notify_selected_page_cb),
+                                         self);
+ 
+-  _editor_session_remove_window (EDITOR_SESSION_DEFAULT, self);
++  _editor_session_remove_window (EDITOR_SESSION_DEFAULT, self, TRUE);
+ 
+   self->visible_page = NULL;
+ }
+@@ -844,7 +844,7 @@ editor_window_dispose (GObject *object)
+ 
+   g_clear_handle_id (&self->close_empty_source, g_source_remove);
+ 
+-  _editor_session_remove_window (EDITOR_SESSION_DEFAULT, self);
++  _editor_session_remove_window (EDITOR_SESSION_DEFAULT, self, FALSE);
+ 
+   g_clear_object (&self->settings);
+ 

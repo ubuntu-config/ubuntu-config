@@ -8,3 +8,4 @@ auto-save-on-state-changes.patch
 launch-opens-new-window.patch
 restored-documents-hold-no-logout.patch
 last-tab-closes-window.patch
+last-window-leaves-session.patch

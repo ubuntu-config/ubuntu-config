@@ -29,7 +29,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
   - [Text Editor keeps unsaved documents without warnings](#text-editor-keeps-unsaved-documents-without-warnings): no
     entry in the logout dialog and no banner for them.
   - [Text Editor closes a window with its last tab](#text-editor-closes-a-window-with-its-last-tab): Ctrl+W on the
-    last tab closes the window, and in the last window quits Text Editor.
+    last tab closes the window, and in the last window quits Text Editor. A closed window does not come back, while
+    Ctrl+Q keeps every window.
   - [No screenshots on the lock screen](#no-screenshots-on-the-lock-screen): the button and the keys do nothing while
     the screen is locked.
   - [Power and lid sounds follow the System Sounds switch](#power-and-lid-sounds-follow-the-system-sounds-switch): no
@@ -262,6 +263,12 @@ Closing the last tab of a Text Editor window, with Ctrl+W, closes the window as 
 to a new window with Ctrl+Shift+N. In the last window, Text Editor quits, and since the document was closed, the next
 start restores no window for it and opens a new window with an empty document
 (`patches/gnome-text-editor/last-tab-closes-window.patch`).
+
+A window you close does not come back at the next start, the last one neither, so after you close every Text Editor
+window one after the other, the next start opens just a new window with an empty document. Unpatched, Text Editor
+brings back the window closed last. Quitting with Ctrl+Q brings every window back, and so do logging out, SIGTERM and
+a crash (`patches/gnome-text-editor/last-window-leaves-session.patch`). Before a window with unsaved changes closes,
+Text Editor still asks whether to save or discard them.
 
 ### No screenshots on the lock screen
 
@@ -639,10 +646,10 @@ time, so that a save of a large document cannot replace newer saved state with o
 It is also patched to save when the cursor moves, a window is resized or maximized, a tab is selected or moved, or the
 language or encoding of a document changes, so that a crash restores all of them as they were a few seconds before.
 
-When the terminal starts after a crash, a reset of the machine or a logout with terminal windows open, its windows
-return to their workspaces and places, each tab in the directory it had, with the last screen it showed dimmed above
-the prompt of a new shell, as Terminal on macOS does. Ptyxis saves its tabs only when its last window is closed, so
-it would bring back the tabs of the last time that happened
+When the terminal starts after a crash, SIGTERM, a reset of the machine or a logout with terminal windows open, its
+windows return to their workspaces and places, each tab in the directory it had, with the last screen it showed dimmed
+above the prompt of a new shell, as Terminal on macOS does. Ptyxis saves its tabs only when its last window is closed,
+so it would bring back the tabs of the last time that happened
 ([Ptyxis issue 603](https://gitlab.gnome.org/chergert/ptyxis/-/work_items/603)). It is patched to save its session a
 few seconds after every change, including the screens, which are kept in a file readable only by you
 (`patches/ptyxis/`). A window you close is not brought back, the last one neither, so after you close every terminal

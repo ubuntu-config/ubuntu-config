@@ -180,6 +180,24 @@ last-tab-closes-window.patch
     of the tab view, and that editor_session_open_stream in src/editor-session.c still adds the page of standard input
     in the same main loop iteration in which it removes the draft.
 
+last-window-leaves-session.patch
+    Leaves a window you close out of the session, the last one too. Text Editor removes a window you close from its
+    session with its documents, except the last one, which it saves with the session before it quits, so after closing
+    every window one after the other, its next start restores the window closed last. With the patch, the window
+    closed last leaves the session before that save, and the next start opens a new window with an empty document.
+    Before a window with unsaved changes closes, Text Editor still asks whether to save or discard them.
+
+    Every window still returns when Text Editor ends without you closing its windows. The quit action, Ctrl+Q, saves
+    the session with every window before it quits, and so does the end of the desktop session, see
+    restored-documents-hold-no-logout.patch, while SIGTERM, which Text Editor does not handle, and a crash leave the
+    session autosaved last. _editor_session_remove_window receives whether you closed the window, which
+    editor_window_do_close passes, while editor_window_dispose keeps a window destroyed otherwise in the session, as
+    upstream does. The patch is local only, like last-tab-closes-window.patch. It is tested by run 5 of
+    tests/gnome-text-editor/run-text-editor-session.sh, and by the scenario last-tab-closes-window of
+    tests/gnome-text-editor/run-text-editor-autosave.sh, which has to quit with no window in the session. After a
+    version bump, check that editor_window_do_close and editor_window_dispose in src/editor-window.c are still the only
+    callers of _editor_session_remove_window.
+
 Check by hand after an upgrade, in a new login, so that the patched mutter runs, and with no Text Editor of the
 previous version still running in the background:
 
@@ -195,3 +213,6 @@ previous version still running in the background:
   Ctrl+W on the last tab of the other one should quit Text Editor, and its next start should open only a new window
   with an empty document. Type into a new document in a second window, close that window with its close button and
   choose Discard: the window should close, and journalctl --user -b should show no editor-window criticals.
+  open two windows with a document each, close both with their close buttons, and start Text Editor: only a new
+  window with an empty document should open. Open two windows again, quit with Ctrl+Q, and start Text Editor: both
+  windows should return.

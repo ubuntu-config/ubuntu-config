@@ -5,7 +5,7 @@ Text Editor session restore: run-text-editor-session.sh, text_editor_session.py 
     Checks that Text Editor, with GTK's save/restore API, names its windows to mutter and has them restored under the
     same names at the next start, and that a launch opens a new window beside them, also one which arrives while Text
     Editor loads its session. Starts a headless mutter with one virtual monitor in a D-Bus session of its own and runs
-    Text Editor four times in it, with GSettings in memory, so that its defaults apply. The first run opens two files,
+    Text Editor seven times in it, with GSettings in memory, so that its defaults apply. The first run opens two files,
     each in a window of its own, and quits through the app.quit action. The second run starts without files and with
     an activation token in XDG_ACTIVATION_TOKEN and DESKTOP_STARTUP_ID, as a launcher passes it, which restores the
     session and opens a new window with a draft beside the restored ones. The new window has to receive the token and
@@ -25,6 +25,20 @@ Text Editor session restore: run-text-editor-session.sh, text_editor_session.py 
 
     The fourth run starts with --ignore-session, which opens one new window instead, so Text Editor has to destroy the
     five windows it created for GTK's restored window state without showing them, and must keep running.
+
+    The fifth run opens both files again, each in a window of its own, and closes the windows one after the other
+    with Alt+F4. Each window leaves the session, the last one too, so Text Editor quits with no window in its session
+    and the sixth run restores none. Without patches/gnome-text-editor/last-window-leaves-session.patch, the session
+    keeps the window closed last, and the sixth run restores it. The first run quits through app.quit, as Ctrl+Q does,
+    which keeps every window, and the second run restores both.
+
+    The sixth run opens both files again, each in a window of its own, and types a line into each, which Text Editor
+    keeps as a draft. Once Text Editor autosaved both drafts and GTK saved the names of both windows, it is ended with
+    SIGTERM, which it does not handle, so it closes no window and its session keeps both. The seventh run restores both
+    windows under their names of the sixth run and opens a new window beside them. Alt+F4 closes the new window, which
+    has only an empty draft, so a restored window receives the keyboard focus, and a line typed into it is autosaved
+    to its draft. That draft holds the line of the sixth run only if the restored document has it. Quitting would ask
+    whether to save the changes, so the seventh run ends with SIGTERM too.
 
     The test covers the protocol between GTK and mutter and the link between GTK's window state and Text Editor's
     session state, but not whether windows return to their workspaces, which needs a desktop. It also runs next to
@@ -47,17 +61,18 @@ Text Editor session restore: run-text-editor-session.sh, text_editor_session.py 
     the first time, and names each window with restore_toplevel, which in the second run uses the names of the first
     for the restored windows, answered with restored(), and a new name for the new window, and in the third run the
     same names for the restored windows and new names for the three new windows. The fourth run names only its new
-    window, under a new name. The script prints the messages each run sent and received, the window IDs and names GTK
-    saved, the windows Text Editor saved, one line for each check, and finally "RESULT: OK", and exits with 0. With
-    Ubuntu's GTK, Text Editor sends nothing over the protocol and the checks fail from the first one. Without
+    window, under a new name, and the seventh run uses the names of the sixth for the restored windows. The script
+    prints the messages each run sent and received, the window IDs and names GTK saved, the windows Text Editor saved,
+    one line for each check, and finally "RESULT: OK", and exits with 0. With Ubuntu's GTK, Text Editor sends nothing
+    over the protocol and the checks fail from the first one. Without
     patches/mutter/save-toplevels-on-session-destroy.patch, only the first window is restored in the second run, since
     mutter forgets where the other one was when Text Editor quits with it open. Without launch-opens-new-window.patch,
     the second run opens no new window, and the first restored window receives the token and the focus.
 
-    The full WAYLAND_DEBUG output of each run is in the output directory as run1.log to run4.log, the output of the
-    remote instances of the first and third run in run1-new-window.log and run3-launches.log, and the calls the
-    session manager received in session-manager.log. The D-Bus and portal messages printed on the way are expected in
-    the private session.
+    The full WAYLAND_DEBUG output of each run is in the output directory as run1.log to run7.log, the output of the
+    remote instances of the first, third, fifth and sixth run in run1-new-window.log, run3-launches.log,
+    run5-new-window.log and run6-new-window.log, and the calls the session manager received in session-manager.log.
+    The D-Bus and portal messages printed on the way are expected in the private session.
 
 Text Editor auto-save: run-text-editor-autosave.sh and text_editor_autosave.py
     Checks that Text Editor autosaves its session, with the drafts of unsaved documents, a few seconds after every
@@ -112,15 +127,17 @@ Text Editor auto-save: run-text-editor-autosave.sh and text_editor_autosave.py
     autosave after the start and after opening a second file. When GTK saved no window state, as with Ubuntu's GTK or
     a Text Editor without the patch, the scenario prints a line starting with "skip:" and checks nothing.
 
-    last-tab-closes-window and standard-input-keeps-window test patches/gnome-text-editor/last-tab-closes-window.patch.
-    last-tab-closes-window starts Text Editor with a file and opens a second one from the command line, which opens in
-    a window of its own, with the focus. Ctrl+W, pressed the same way, closes the tab of the second file and has to
-    close its window, which the scenario sees on the session bus, where GtkApplication exports each window below
-    /org/gnome/TextEditor/window, and in the session autosaved after it. Ctrl+W then closes the tab of the first file,
-    in the window mutter gives the focus to, and Text Editor has to quit with the session saved without pages. Without
-    the patch, both windows stay open. standard-input-keeps-window starts Text Editor with gnome-text-editor -, whose
-    window has an empty draft for half a second, until Text Editor reads standard input into a page which replaces it.
-    The window has no pages between removing the draft and adding that page, and has to stay open with the page.
+    last-tab-closes-window and standard-input-keeps-window test
+    patches/gnome-text-editor/last-tab-closes-window.patch. last-tab-closes-window starts Text Editor with a file and
+    opens a second one from the command line, which opens in a window of its own, with the focus. Ctrl+W, pressed the
+    same way, closes the tab of the second file and has to close its window, which the scenario sees on the session
+    bus, where GtkApplication exports each window below /org/gnome/TextEditor/window, and in the session autosaved
+    after it. Ctrl+W then closes the tab of the first file, in the window mutter gives the focus to, and Text Editor
+    has to quit with the session saved without any window, which last-window-leaves-session.patch leaves out. Without
+    last-tab-closes-window.patch, both windows stay open. standard-input-keeps-window starts Text Editor with
+    gnome-text-editor -, whose window has an empty draft for half a second, until Text Editor reads standard input
+    into a page which replaces it. The window has no pages between removing the draft and adding that page, and has to
+    stay open with the page.
 
     ROOT is a directory Text Editor was installed into, for example with meson install --destdir, or its package was
     extracted into, with libgtk-4-1 extracted there too when it is to run with that GTK:
