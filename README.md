@@ -645,7 +645,8 @@ the prompt of a new shell, as Terminal on macOS does. Ptyxis saves its tabs only
 it would bring back the tabs of the last time that happened
 ([Ptyxis issue 603](https://gitlab.gnome.org/chergert/ptyxis/-/work_items/603)). It is patched to save its session a
 few seconds after every change, including the screens, which are kept in a file readable only by you
-(`patches/ptyxis/`). Closing the last window keeps its tabs for the next start, but not their screens.
+(`patches/ptyxis/`). A window you close is not brought back, the last one neither, so after you close every terminal
+window the next start opens just a new one.
 
 ### Firefox runs with its whole sandbox
 

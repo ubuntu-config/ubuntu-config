@@ -1,4 +1,4 @@
-"""Run Ptyxis three times to test that its session survives a crash, and that closing it keeps no screens. See README.
+"""Run Ptyxis four times to test that its session survives a crash, and that closing its windows removes them. See README.
 
 Usage: ptyxis_session.py PTYXIS MUTTER_ROOT OUT_DIR
 
@@ -6,9 +6,10 @@ PTYXIS is the ptyxis binary to run, and MUTTER_ROOT the directory mutter was ext
 on the Wayland display named by WAYLAND_DISPLAY. OUT_DIR is the home directory and XDG base directories
 run-ptyxis-session.sh set up, and receives Ptyxis's output, with its Wayland requests and events, as runN.log, and
 mutter's as mutterN.log. The first run ends with SIGKILL of mutter and Ptyxis, as when the machine crashes, and mutter
-is started again. The second run ends by closing its three windows with Alt+F4. The shells Ptyxis starts read
-OUT_DIR/home/.bashrc, written here, which in the first run moves each shell into a directory of its own and prints a
-line naming it, and in later runs prints the directory it started in. The exit status is 0 when every check passed.
+is started again. The second run ends with SIGTERM of Ptyxis alone, and the third by closing its windows with Alt+F4.
+The shells Ptyxis starts read OUT_DIR/home/.bashrc, written here, which in the first run moves each shell into a
+directory of its own and prints a line naming it, and in later runs prints the number of the run and the directory it
+started in. The exit status is 0 when every check passed.
 """
 
 import os
@@ -37,8 +38,8 @@ PATTERNS = {
 # compositor does not know it and ignores it, but the WAYLAND_DEBUG output shows the window Ptyxis presents it with.
 TOKEN = "ptyxis-session-test-token"
 
-# The first run prints "first run, tab N" in each new shell, later runs "second run in" and the directory. The first
-# tab shows nothing for its first 5 seconds, so that Ptyxis saves its session once while no tab has a screen.
+# The first run prints "first run, tab N" in each new shell, later runs "run N in" and the directory. The first tab
+# shows nothing for its first 5 seconds, so that Ptyxis saves its session once while no tab has a screen.
 BASHRC = r"""# Written by ptyxis_session.py for the shells of the Ptyxis under test.
 PS1='prompt$ '
 PROMPT_COMMAND=
@@ -49,7 +50,7 @@ if [ "$(cat "$HOME/run")" = 1 ]; then
   [ "$n" = 1 ] && sleep 5
   echo "first run, tab $n"
 else
-  echo "second run in $PWD"
+  echo "run $(cat "$HOME/run") in $PWD"
 fi
 # The current directory, which Ptyxis saves with the tab, as vte.sh reports it in a login shell.
 printf '\033]7;file://%s%s\033\\' "$HOSTNAME" "$PWD"
@@ -254,7 +255,8 @@ class Keyboard:
     """A virtual keyboard of mutter's remote desktop interface, which lasts as long as this process or mutter.
 
     Without a keyboard, mutter gives no window keyboard focus, and GTK saves its window state only while one of the
-    application's windows has it. It also presses Alt+F4, mutter's default key binding for closing a window.
+    application's windows has it. It also presses Alt+F4, mutter's default key binding for closing a window, types
+    commands into the terminal and answers dialogs.
     """
 
     BUS_NAME = "org.gnome.Mutter.RemoteDesktop"
@@ -275,12 +277,24 @@ class Keyboard:
     def key(self, keysym, pressed):
         self.session_call("NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym, pressed)))
 
+    def press(self, keysym, modifier=None):
+        if modifier:
+            self.key(modifier, True)
+        self.key(keysym, True)
+        self.key(keysym, False)
+        if modifier:
+            self.key(modifier, False)
+
     def close_window(self):
-        alt, f4 = 0xffe9, 0xffc1
-        self.key(alt, True)
-        self.key(f4, True)
-        self.key(f4, False)
-        self.key(alt, False)
+        self.press(self.F4, self.ALT)
+
+    def type_line(self, text):
+        """Types ASCII text, whose keysyms are the codes of its characters, followed by Return."""
+        for char in text:
+            self.press(ord(char))
+        self.press(self.RETURN)
+
+    ALT, F4, RETURN, ESCAPE, RIGHT = 0xffe9, 0xffc1, 0xff0d, 0xff1b, 0xff53
 
 
 def summary(run, found):
@@ -350,8 +364,7 @@ def main():
     ids1 = [i for i, _ in session1]
     check(wait_until(lambda: len(scan(log2)["restored_toplevel"]) >= 2), "run 2: the compositor restored both windows")
     check(wait_until(lambda: len(session_windows()) == 3), "run 2: a new window opened beside the restored ones")
-    check(wait_until(lambda: all_screens().count("second run in") == 3),
-          "run 2: the session saved the screens of the new shells")
+    check(wait_until(lambda: all_screens().count("run 2 in") == 3), "run 2: the session saved the screens of the new shells")
     check(wait_until(lambda: focused(log2) == "new"), "run 2: the new window has the keyboard focus")
     session2 = session_windows()
     restored2, new2 = split_windows(session2, ids1)
@@ -359,23 +372,23 @@ def main():
           % activated(log2, TOKEN))
     check("restored" not in activated(log2), "run 2: no restored window was activated (%s)" % activated(log2))
 
-    # Then the three windows are closed, the new one, which has the focus, first. The session saves the window closed
-    # last with its tabs, as Ptyxis does without the patches, but removes the screens, so that only a session which
-    # ended with its windows open shows them.
+    # Then the new window, which has the focus, is closed, and the session saves the restored windows without it.
+    # Ptyxis alone is ended with SIGTERM while they are open, which it does not handle, so it closes no window and the
+    # third run restores them with their screens.
     mutter.keyboard.close_window()
     check(wait_until(lambda: len(session_windows()) == 2), "run 2: the session saved closing the new window")
     check(sorted(i for i, _ in session_windows()) == sorted(ids1), "run 2: the restored windows are left")
-    mutter.keyboard.close_window()
-    check(wait_until(lambda: len(session_windows()) == 1), "run 2: the session saved closing the first window")
-    check(os.path.exists(screens_path()), "run 2: the screens are kept while a window is open")
-    last_window = session_windows()
-    mutter.keyboard.close_window()
+    check(wait_until(lambda: all_screens().count("run 2 in") == 2), "run 2: the screen of the new window left with it")
+    session2_end = session_windows()
+    proc.send_signal(signal.SIGTERM)
     try:
         proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
         crash(proc)
-    check(proc.returncode == 0, "run 2: Ptyxis exited with status 0 once its last window was closed (status %s)" % proc.returncode)
+    check(proc.returncode == -signal.SIGTERM, "run 2: SIGTERM ended Ptyxis (status %s)" % proc.returncode)
     end_group(proc)
+    check(window_dirs(session_windows()) == window_dirs(session2_end) and all_screens().count("run 2 in") == 2,
+          "run 2: the session kept both windows with their screens after SIGTERM")
 
     run2 = scan(log2)
     summary(2, run2)
@@ -394,39 +407,103 @@ def main():
         check("first run, tab %d" % n in screens2.get(d, ""), "run 2: tab %d shows its screen of run 1" % n)
     for n in (2, 3):
         screen = screens2.get(tab_dirs[n - 1], "")
-        new = "second run in %s" % tab_dirs[n - 1]
+        new = "run 2 in %s" % tab_dirs[n - 1]
         check(new in screen and screen.index("first run, tab %d" % n) < screen.index(new),
               "run 2: the shell of tab %d started in its directory, below the screen of run 1" % n)
-    check("second run" not in screens2.get(tab_dirs[0], ""), "run 2: the tab not selected has not started its shell")
-    check(not os.path.exists(screens_path()), "run 2: closing the last window removed the screens")
-    session_closed = session_windows()
-    print("Ptyxis session after closing: %s" % session_closed)
-    check(window_dirs(session_closed) == window_dirs(last_window), "run 2: the session kept the window closed last")
+    check("run 2" not in screens2.get(tab_dirs[0], ""), "run 2: the tab not selected has not started its shell")
 
-    # Run 3: with Ptyxis activated without an action and with an activation token, restores the window closed last,
-    # with new shells in the directories of its tabs and without screens, and opens a new window beside it, which
-    # receives the token and the focus.
+    # Run 3: with Ptyxis activated without an action and with an activation token, restores both windows open at the
+    # end of run 2, with their screens, and opens a new window beside them, which receives the token and the focus.
+    with open(os.path.join(home, "run"), "w") as f:
+        f.write("3\n")
     log3 = os.path.join(out, "run3.log")
     proc = start(ptyxis, log3, launch="activate")
-    check(wait_until(lambda: len(scan(log3)["restored_toplevel"]) >= 1), "run 3: the compositor restored the window")
-    check(wait_until(lambda: len(session_windows()) == 2), "run 3: a new window opened beside the restored one")
-    check(wait_until(lambda: os.path.exists(screens_path()) and len(session_windows()) == 2 and
-                     all("second run in" in "".join(screen for _, screen in tabs) for _, tabs in session_windows())),
-          "run 3: the session saved the screens of the new shells of both windows")
+    check(wait_until(lambda: len(scan(log3)["restored_toplevel"]) >= 2), "run 3: the compositor restored both windows")
+    check(wait_until(lambda: len(session_windows()) == 3), "run 3: a new window opened beside the restored ones")
+    check(wait_until(lambda: all_screens().count("run 3 in") == 3), "run 3: the session saved the screens of the new shells")
     check(wait_until(lambda: focused(log3) == "new"), "run 3: the new window has the keyboard focus")
     session3 = session_windows()
-    restored3, new3 = split_windows(session3, [i for i, _ in session_closed])
-    crash(proc)
+    restored3, new3 = split_windows(session3, ids1)
+    check(window_dirs(restored3) == window_dirs(session2_end), "run 3: the windows open at the end of run 2 were restored")
+    check(len(new3) == 1, "run 3: the new window was saved beside them")
+    screens3 = screens_by_dir(restored3)
+    for n in (2, 3):
+        screen = screens3.get(tab_dirs[n - 1], "")
+        old, new = "run 2 in %s" % tab_dirs[n - 1], "run 3 in %s" % tab_dirs[n - 1]
+        check(old in screen and new in screen and screen.index(old) < screen.index(new),
+              "run 3: tab %d shows its screen of run 2 above its new shell" % n)
+    check(activated(log3, TOKEN) == ["new"], "run 3: the activation token was presented with the new window only (%s)"
+          % activated(log3, TOKEN))
+    check("restored" not in activated(log3), "run 3: no restored window was activated (%s)" % activated(log3))
+
+    # Then the windows are closed with Alt+F4, the new one first, and each leaves the session, the last one too. A
+    # command runs in the last one, so Ptyxis asks whether to close it. While it asks, for longer than its save delay,
+    # the window stays in the session with its screen, and after cancelling too. Confirming closes it, which leaves
+    # no window and no screens to restore.
+    mutter.keyboard.close_window()
+    check(wait_until(lambda: len(session_windows()) == 2), "run 3: the session saved closing the new window")
+    mutter.keyboard.close_window()
+    check(wait_until(lambda: len(session_windows()) == 1), "run 3: the session saved closing a restored window")
+    mutter.keyboard.type_line("sleep 600")
+    check(wait_until(lambda: "prompt$ sleep 600" in all_screens()), "run 3: a command runs in the last window")
+    mutter.keyboard.close_window()
+    time.sleep(5)
+    check(proc.poll() is None, "run 3: Ptyxis asks whether to close the last window")
+    check(len(session_windows()) == 1 and "prompt$ sleep 600" in all_screens(),
+          "run 3: the window stays in the session with its screen while Ptyxis asks")
+    mutter.keyboard.press(Keyboard.ESCAPE)
+    time.sleep(5)
+    check(proc.poll() is None and len(session_windows()) == 1 and "prompt$ sleep 600" in all_screens(),
+          "run 3: after cancelling, the window stays in the session with its screen")
+    mutter.keyboard.close_window()
+    # The dialog focuses its Cancel button, and the Close button is right of it. Keys pressed before the dialog is
+    # shown go to the terminal.
+    time.sleep(3)
+    mutter.keyboard.press(Keyboard.RIGHT)
+    mutter.keyboard.press(Keyboard.RETURN)
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        crash(proc)
+    check(proc.returncode == 0, "run 3: Ptyxis exited with status 0 once its last window was closed (status %s)" % proc.returncode)
+    end_group(proc)
     run3 = scan(log3)
     summary(3, run3)
     print("Ptyxis session: %s" % session3)
     check(not run3["error"], "run 3: no protocol error")
-    check(window_dirs(restored3) == window_dirs(last_window), "run 3: the window closed last was restored with its tabs")
-    check(len(new3) == 1, "run 3: the new window was saved beside it")
-    check(activated(log3, TOKEN) == ["new"], "run 3: the activation token was presented with the new window only (%s)"
-          % activated(log3, TOKEN))
-    check("restored" not in activated(log3), "run 3: no restored window was activated (%s)" % activated(log3))
-    check("first run" not in all_screens(), "run 3: no tab shows a screen of an earlier run")
+    check(os.path.exists(session_path()) and not session_windows(), "run 3: the session saved no window to restore")
+    check(not os.path.exists(screens_path()), "run 3: closing the last window removed the screens")
+
+    # Run 4: with Ptyxis activated again, there is nothing to restore, so it opens only a new window, which receives
+    # the token and the focus, and the session is saved again while it runs. Closing that window, in which no command
+    # runs, ends Ptyxis without asking, and leaves no window and no screens to restore.
+    with open(os.path.join(home, "run"), "w") as f:
+        f.write("4\n")
+    log4 = os.path.join(out, "run4.log")
+    proc = start(ptyxis, log4, launch="activate")
+    check(wait_until(lambda: len(session_windows()) == 1 and "run 4 in" in all_screens()),
+          "run 4: the session saved the new window with its screen")
+    check(wait_until(lambda: focused(log4) == "new"), "run 4: the new window has the keyboard focus")
+    session4 = session_windows()
+    mutter.keyboard.close_window()
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        crash(proc)
+    check(proc.returncode == 0, "run 4: Ptyxis exited with status 0 once its window was closed (status %s)" % proc.returncode)
+    end_group(proc)
+    check(os.path.exists(session_path()) and not session_windows(), "run 4: the session saved no window to restore")
+    check(not os.path.exists(screens_path()), "run 4: closing the window removed the screens")
+    run4 = scan(log4)
+    summary(4, run4)
+    print("Ptyxis session: %s" % session4)
+    check(not run4["error"], "run 4: no protocol error")
+    check(not run4["restored_toplevel"], "run 4: no window was restored")
+    check(not any(d in tab_dirs for _, tabs in session4 for d, _ in tabs), "run 4: no tab is in a directory of an earlier tab")
+    check(activated(log4, TOKEN) == ["new"], "run 4: the activation token was presented with the new window (%s)"
+          % activated(log4, TOKEN))
+    screens4 = "".join(screen for _, tabs in session4 for _, screen in tabs)
+    check("first run" not in screens4 and "run 3" not in screens4, "run 4: no tab shows a screen of an earlier run")
 
     check(mutter.running(), "mutter kept running")
     mutter.crash()

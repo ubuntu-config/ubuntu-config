@@ -21,7 +21,7 @@ Author: Mitar
 Forwarded: no
 Last-Update: 2026-11-06
 diff --git a/src/ptyxis-application.c b/src/ptyxis-application.c
-index 9ccc203..d368eec 100644
+index 4111300..aa0e2b9 100644
 --- a/src/ptyxis-application.c
 +++ b/src/ptyxis-application.c
 @@ -75,6 +75,16 @@ struct _PtyxisApplication
@@ -471,7 +471,7 @@ index 9ccc203..d368eec 100644
      }
    else
      {
-@@ -1185,6 +1340,10 @@ ptyxis_application_finalize (GObject *object)
+@@ -1199,6 +1354,10 @@ ptyxis_application_finalize (GObject *object)
    g_clear_object (&self->client);
  
    g_clear_handle_id (&self->save_session_source, g_source_remove);
@@ -482,7 +482,7 @@ index 9ccc203..d368eec 100644
    g_clear_pointer (&self->written_session, g_bytes_unref);
    g_clear_pointer (&self->pending_session, g_bytes_unref);
    g_clear_pointer (&self->screens, g_variant_unref);
-@@ -1614,33 +1773,19 @@ ptyxis_application_new_window_action (GSimpleAction *action,
+@@ -1628,33 +1787,19 @@ ptyxis_application_new_window_action (GSimpleAction *action,
  {
    PtyxisApplication *self = user_data;
    PtyxisWindow *window;
@@ -523,7 +523,7 @@ index 9ccc203..d368eec 100644
  
  static void
 diff --git a/src/ptyxis-session.c b/src/ptyxis-session.c
-index 2252dcd..2801f0b 100644
+index 2252dcd..d7c2c8f 100644
 --- a/src/ptyxis-session.c
 +++ b/src/ptyxis-session.c
 @@ -260,6 +260,14 @@ ptyxis_session_restore (PtyxisApplication *app,

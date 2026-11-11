@@ -43,14 +43,21 @@ restore-session-on-new-window-action.patch
     with the commit.
 
 save-session-on-change.patch
-    Saves the session, the windows with their tabs and the directory of each tab, 3 seconds after
-    it changes. Upstream saves it only when the last window is closed, so after a crash, a reset
-    of the machine or the end of the desktop session, at which Ptyxis exits without closing its
-    windows, the next start restores the tabs of the last time all windows were closed, which
-    can be days old (Ptyxis issue 603). A window created for a single command, such as one
-    started from a .desktop file with Terminal=true, is left out of the session, since it would
-    be restored as a shell without its command. Nothing is saved this way until the saved
-    session is restored, so that a Ptyxis started for something else does not replace it.
+    Saves the session, the windows with their tabs and the directory of each tab, 3 seconds
+    after it changes. Upstream saves it only when the last window is closed, so after a crash,
+    SIGTERM, a reset of the machine or the end of the desktop session, at which Ptyxis exits
+    without closing its windows, the next start restores the tabs of the last time all windows
+    were closed, which can be days old (Ptyxis issue 603). A window created for a single
+    command, such as one started from a .desktop file with Terminal=true, is left out of the
+    session, since it would be restored as a shell without its command. Nothing is saved this
+    way until the saved session is restored, so that a Ptyxis started for something else does
+    not replace it.
+
+    A window leaves the session once it is closed, the last one too, so the next start restores
+    only the windows which were open when Ptyxis ended, and after you closed them all it opens
+    just a new window. Closing the last tab of the last window has the same result. A window in
+    which a program runs stays in the session while Ptyxis asks whether to close it. Pinned tabs,
+    which Ptyxis restores also with restore-session off, leave the session with their window.
 
 restore-window-placement.patch
     Lets Ptyxis's windows return to their workspace, monitor, position and size when it restores
@@ -75,8 +82,9 @@ restore-screens.patch
     dimmed above the prompt of the tab's new shell when the session is restored, as Terminal on
     macOS does, so that it is clear what each terminal was doing. The screens are kept in
     ~/.local/state/org.gnome.Ptyxis/screens.gvariant, readable only by you, and they are shown
-    only after a session which ended with windows open: closing the last window removes them,
-    and the next start restores its tabs without them. A terminal scrolled back keeps the screen
+    only after a session which ended with windows open: a window leaves the session with its
+    screens once it is closed, see save-session-on-change.patch, so closing the last window
+    removes the file. A terminal scrolled back keeps the screen
     it had the last time it was scrolled to the end. The dim style is VTE's, which scales the
     foreground to 2/3: on tango-black it turns the text grey, while on a light palette it would
     darken the text instead.
@@ -136,7 +144,8 @@ by hand after a rebuild.
   ptyxis in a shell while Terminal runs
                                should open a new window, not raise an existing one
   close the last window with its close button, start Terminal
-                               should bring back its tabs without the dimmed screens
+                               should open one new window in the home directory, and bring
+                               back no tabs and no dimmed screens
 
 The first start after installing restore-window-placement.patch has no window names saved yet,
 so the windows are placed from the second start on.

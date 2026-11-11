@@ -1,25 +1,32 @@
 Description: Save the session a few seconds after it changes, not only when the last window closes.
  Ptyxis saves its session, the windows with their tabs and the directory of each tab, only when
  the last window is closed or a window loses its last tab. When it ends any other way, as in a
- crash, a reset of the machine or at the end of the desktop session, where ptyxis-agent ends
- first and Ptyxis exits, the next start restores the session saved the last time all windows
- were closed, which can be days old.
+ crash, on SIGTERM, which it does not handle, or at the end of the desktop session, where GTK
+ quits it once the Inhibit portal reports the session as ending, the next start restores the
+ session saved the last time all windows were closed, which can be days old.
  .
  The session is now saved 3 seconds after a change, with further changes until then included
  in the same save: a tab added, closed, moved, pinned or selected, its directory or title
  changed, a window closed, maximized or zoomed. Writes of the session file run one at a time,
  and a state equal to the one last written is not written again. Nothing is saved this way by a
  standalone instance, while a saved session is still to be restored, as when Ptyxis was started
- for a single command, nor once the last window is closed, which saves the session as before.
+ for a single command, nor once the last window is closed, which saves the session at once.
+ .
+ A window leaves the session once it is closed, for a window in which a program runs once the
+ user confirmed closing it, and the last window does too, so that the next start restores only
+ windows which were open when Ptyxis ended. Upstream leaves no tabs to restore when the last tab of
+ the last window is closed. Ptyxis exits once its last window is gone, before a queued save would
+ run, so the last window saves the session at once when it is gone. Pinned tabs, which upstream
+ restores also with restore-session off, leave the session with their window too.
  .
  A window created for a single command is left out of the session, as it would be restored as
  a shell without its command.
 Author: Mitar
 Bug: https://gitlab.gnome.org/chergert/ptyxis/-/work_items/603
 Forwarded: no
-Last-Update: 2026-11-06
+Last-Update: 2026-11-11
 diff --git a/src/ptyxis-application.c b/src/ptyxis-application.c
-index 07593df..85012b7 100644
+index 07593df..9153ad8 100644
 --- a/src/ptyxis-application.c
 +++ b/src/ptyxis-application.c
 @@ -40,6 +40,11 @@
@@ -50,10 +57,13 @@ index 07593df..85012b7 100644
    guint                has_restored_session : 1;
    guint                overlay_scrollbars : 1;
    guint                client_is_fallback : 1;
-@@ -875,6 +889,17 @@ ptyxis_application_client_process_exited_cb (PtyxisApplication *self,
+@@ -875,6 +889,31 @@ ptyxis_application_client_process_exited_cb (PtyxisApplication *self,
                           GINT_TO_POINTER (exit_code));
  }
  
++static gboolean has_session_window          (PtyxisApplication *self);
++static gboolean may_replace_saved_session   (PtyxisApplication *self);
++
 +static void
 +ptyxis_application_window_removed_cb (PtyxisApplication *self,
 +                                      GtkWindow         *window,
@@ -62,13 +72,24 @@ index 07593df..85012b7 100644
 +  g_assert (PTYXIS_IS_APPLICATION (self));
 +  g_assert (GTK_IS_WINDOW (window));
 +
-+  ptyxis_application_queue_save_session (self);
++  /* Ptyxis exits once the last window of the session is gone, before a
++   * queued save would run, so the session is saved at once, without any
++   * window, and the next start opens a new one.
++   */
++  if (PTYXIS_IS_WINDOW (window) &&
++      !ptyxis_window_get_single_terminal_mode (PTYXIS_WINDOW (window)) &&
++      !has_session_window (self) &&
++      !is_standalone (self) &&
++      may_replace_saved_session (self))
++    ptyxis_application_save_session (self);
++  else
++    ptyxis_application_queue_save_session (self);
 +}
 +
  static void
  ptyxis_application_startup (GApplication *application)
  {
-@@ -912,6 +937,11 @@ ptyxis_application_startup (GApplication *application)
+@@ -912,6 +951,11 @@ ptyxis_application_startup (GApplication *application)
  
    G_APPLICATION_CLASS (ptyxis_application_parent_class)->startup (application);
  
@@ -80,7 +101,7 @@ index 07593df..85012b7 100644
    if ((sandbox_agent = ptyxis_application_should_sandbox_agent (self)))
      timeout_msec = G_MAXINT;
    else
-@@ -1036,6 +1066,10 @@ ptyxis_application_finalize (GObject *object)
+@@ -1036,6 +1080,10 @@ ptyxis_application_finalize (GObject *object)
    g_clear_object (&self->settings);
    g_clear_object (&self->client);
  
@@ -91,7 +112,7 @@ index 07593df..85012b7 100644
    g_clear_pointer (&self->next_title_prefix, g_free);
    g_clear_pointer (&self->exited, g_hash_table_unref);
    g_clear_pointer (&self->system_font_name, g_free);
-@@ -2156,23 +2190,78 @@ ptyxis_application_get_os_name (PtyxisApplication *self)
+@@ -2156,23 +2204,78 @@ ptyxis_application_get_os_name (PtyxisApplication *self)
    return ptyxis_client_get_os_name (self->client);
  }
  
@@ -175,7 +196,7 @@ index 07593df..85012b7 100644
  }
  
  void
-@@ -2183,24 +2272,83 @@ ptyxis_application_save_session (PtyxisApplication *self)
+@@ -2183,24 +2286,89 @@ ptyxis_application_save_session (PtyxisApplication *self)
  
    g_return_if_fail (PTYXIS_IS_APPLICATION (self));
  
@@ -217,6 +238,17 @@ index 07593df..85012b7 100644
 +  return FALSE;
 +}
 +
++/* Until the saved session is restored, saving would replace it with the
++ * windows of this run, such as a single one started for a command.
++ */
++static gboolean
++may_replace_saved_session (PtyxisApplication *self)
++{
++  g_assert (PTYXIS_IS_APPLICATION (self));
++
++  return self->session == NULL || self->has_restored_session;
++}
++
 +static void
 +ptyxis_application_save_session_timeout_cb (gpointer user_data)
 +{
@@ -226,15 +258,10 @@ index 07593df..85012b7 100644
 +
 +  self->save_session_source = 0;
 +
-+  /* Until the saved session is restored, saving would replace it with the
-+   * windows of this run, such as a single one started for a command.
-+   */
-+  if (self->session != NULL && !self->has_restored_session)
++  if (!may_replace_saved_session (self))
 +    return;
 +
-+  /* Once the last window is closed the session is already saved with it, and
-+   * saving now would replace that with an empty one.
-+   */
++  /* The last window of the session saved it when it was closed */
 +  if (!has_session_window (self))
 +    return;
 +
@@ -323,7 +350,7 @@ index b19c212..48cd480 100644
  
  static void
 diff --git a/src/ptyxis-window.c b/src/ptyxis-window.c
-index 58d74b2..66b3fd5 100644
+index 58d74b2..ad32913 100644
 --- a/src/ptyxis-window.c
 +++ b/src/ptyxis-window.c
 @@ -420,6 +420,7 @@ ptyxis_window_page_attached_cb (PtyxisWindow *self,

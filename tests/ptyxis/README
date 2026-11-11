@@ -4,26 +4,34 @@ included, run by hand and in GitLab CI, see .gitlab-ci.yml.
 
 Ptyxis session restore: run-ptyxis-session.sh and ptyxis_session.py
     Checks that Ptyxis keeps its session up to date while it runs, so that after a crash it restores its windows
-    under the names mutter placed them by, each tab in its directory and with its screen, and that closing the last
-    window keeps the tabs but not the screens. Starts a headless mutter with one virtual monitor in a D-Bus session of
-    its own and runs Ptyxis three times in it, with GSettings in memory, so that its defaults apply, and with a home
-    directory and XDG directories of its own, so that it runs next to your own Ptyxis without touching its session.
+    under the names mutter placed them by, each tab in its directory and with its screen, and that a closed window
+    leaves the session, the last one too, so that closing every window leaves nothing to restore. Starts a headless
+    mutter with one virtual monitor in a D-Bus session of its own and runs Ptyxis four times in it, with GSettings in
+    memory, so that its defaults apply, and with a home directory and XDG directories of its own, so that it runs next
+    to your own Ptyxis without touching its session.
 
-    The first run opens a window with two tabs and a second window with one, each tab in a directory of its own,
-    and once Ptyxis saved its session and GTK its window state, mutter and Ptyxis are ended with SIGKILL, as in a
-    crash of the machine, and a new mutter is started. The second run restores both windows, each tab with the
-    screen of the first run above the output of a new shell, and opens a new window beside them, which has to
-    receive the activation token of the launch and the keyboard focus, while no restored window may be activated.
-    It then closes the three windows with Alt+F4, the new one first. The third run restores the window closed last,
-    with new shells and without screens, and again opens a new window, which receives the token and the focus.
-    Without patches/mutter/save-toplevels-on-change.patch the new mutter knows neither the session nor the windows,
-    and the restore checks of the second run fail.
+    The first run opens a window with two tabs and a second window with one, each tab in a directory of its own, and
+    once Ptyxis saved its session and GTK its window state, mutter and Ptyxis are ended with SIGKILL, as in a crash of
+    the machine, and a new mutter is started. The second run restores both windows, each tab with the screen of the
+    first run above the output of a new shell, and opens a new window beside them, which has to receive the activation
+    token of the launch and the keyboard focus, while no restored window may be activated. It then closes the new
+    window with Alt+F4, and Ptyxis alone is ended with SIGTERM, which it does not handle, so it closes no window. The
+    third run restores the two windows left, each tab with its screen of the second run, and again opens a new window,
+    which receives the token and the focus. It then closes the windows with Alt+F4, the new one first, and each leaves
+    the session. A command runs in the last window, so Ptyxis asks whether to close it: while it asks, for longer than
+    its save delay of 3 seconds, and after Escape cancels, the window stays in the session with its screen, and the
+    Close button, reached with Right and Return, ends Ptyxis and leaves no window and no screens to restore. The
+    fourth run has nothing to restore and opens only a new window, which receives the token and the focus, and the
+    session saves it again. Closing it with Alt+F4 ends Ptyxis without asking and leaves nothing to restore. Without
+    the mutter patch patches/mutter/save-toplevels-on-change.patch the new mutter knows neither the session nor the
+    windows, and the restore checks of the second run fail.
 
     Each run starts Ptyxis in another way: the first from its command line, the second as a D-Bus service asked to
     activate its new-window action, as GNOME Shell does for example from the New Window item of the dock's menu,
-    and the third as a D-Bus service asked to activate itself, as GNOME Shell does when Ptyxis is started from the
-    dock or the overview. The later runs pass an activation token in the platform data, as GNOME Shell does, which
-    mutter does not know and ignores, while the WAYLAND_DEBUG output shows the window Ptyxis presents it with.
+    and the third and the fourth as a D-Bus service asked to activate itself, as GNOME Shell does when Ptyxis is
+    started from the dock or the overview. The later runs pass an activation token in the platform data, as GNOME
+    Shell does, which mutter does not know and ignores, while the WAYLAND_DEBUG output shows the window Ptyxis
+    presents it with.
     Without restore-session-on-new-window-action.patch the second run opens a blank window instead of restoring the
     session, and without launch-opens-new-window.patch the launches open no new window and the first restored
     window receives the token.
@@ -41,7 +49,7 @@ Ptyxis session restore: run-ptyxis-session.sh and ptyxis_session.py
       ./run-ptyxis-session.sh /tmp/mutter-root /tmp/ptyxis-root /tmp/ptyxis-session-test
 
     The shells read a .bashrc the test writes, which moves each shell of the first run into a directory of its own and
-    prints "first run, tab N", and in later runs prints "second run in" and the directory it started in. The first tab
+    prints "first run, tab N", and in later runs prints "run N in" and the directory it started in. The first tab
     prints nothing for its first 5 seconds, so that Ptyxis saves its session once while no tab has a screen, which
     once kept all later screens from being saved. ptyxis-agent starts the shells through systemd-run --user when it
     finds systemd-run, which needs the user's systemd manager in the runtime directory the test replaces, so a
@@ -51,6 +59,6 @@ Ptyxis session restore: run-ptyxis-session.sh and ptyxis_session.py
     exits with 0. A tab which is not the selected one of its window starts its shell only once it is shown, so in the
     second run it shows just its screen of the first run.
 
-    The full WAYLAND_DEBUG output of each run is in the output directory as run1.log, run2.log and run3.log, and the
-    output of the two mutters as mutter1.log and mutter2.log. The D-Bus and portal messages printed on the way, and
+    The full WAYLAND_DEBUG output of each run is in the output directory as run1.log to run4.log, and the output of
+    the two mutters as mutter1.log and mutter2.log. The D-Bus and portal messages printed on the way, and
     Ptyxis's lost connection when mutter ends, are expected.

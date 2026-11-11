@@ -22,7 +22,7 @@ Author: Mitar
 Forwarded: not-needed
 Last-Update: 2026-11-06
 diff --git a/src/ptyxis-application.c b/src/ptyxis-application.c
-index 85012b7..ca4fd0e 100644
+index 9153ad8..ac42cee 100644
 --- a/src/ptyxis-application.c
 +++ b/src/ptyxis-application.c
 @@ -227,7 +227,8 @@ ptyxis_application_open (GApplication  *app,
@@ -55,9 +55,9 @@ index 85012b7..ca4fd0e 100644
          return PTYXIS_WINDOW (iter->data);
      }
  
-@@ -889,6 +892,60 @@ ptyxis_application_client_process_exited_cb (PtyxisApplication *self,
-                          GINT_TO_POINTER (exit_code));
- }
+@@ -892,6 +895,60 @@ ptyxis_application_client_process_exited_cb (PtyxisApplication *self,
+ static gboolean has_session_window          (PtyxisApplication *self);
+ static gboolean may_replace_saved_session   (PtyxisApplication *self);
  
 +static void
 +ptyxis_application_restore_window_cb (PtyxisApplication *self,
@@ -116,7 +116,7 @@ index 85012b7..ca4fd0e 100644
  static void
  ptyxis_application_window_removed_cb (PtyxisApplication *self,
                                        GtkWindow         *window,
-@@ -926,6 +983,27 @@ ptyxis_application_startup (GApplication *application)
+@@ -940,6 +997,27 @@ ptyxis_application_startup (GApplication *application)
    self->shortcuts = ptyxis_shortcuts_new (NULL);
    self->xdg_terminals_list_monitor = g_file_monitor (xdg_terminals_list, 0, NULL, NULL);
  
@@ -144,7 +144,7 @@ index 85012b7..ca4fd0e 100644
    /* Load the session state so it's available if we need it */
    if ((session_bytes = g_file_load_bytes (session_file, NULL, NULL, NULL)))
      {
-@@ -1129,6 +1207,7 @@ ptyxis_application_class_init (PtyxisApplicationClass *klass)
+@@ -1143,6 +1221,7 @@ ptyxis_application_class_init (PtyxisApplicationClass *klass)
    app_class->startup = ptyxis_application_startup;
    app_class->command_line = ptyxis_application_command_line;
    app_class->open = ptyxis_application_open;
@@ -152,7 +152,7 @@ index 85012b7..ca4fd0e 100644
  
    properties[PROP_CONTAINERS] =
      g_param_spec_object ("containers", NULL, NULL,
-@@ -1501,7 +1580,8 @@ ptyxis_application_new_window_action (GSimpleAction *action,
+@@ -1515,7 +1594,8 @@ ptyxis_application_new_window_action (GSimpleAction *action,
         windows != NULL;
         windows = windows->next)
      {
@@ -162,7 +162,7 @@ index 85012b7..ca4fd0e 100644
          {
            has_windows = TRUE;
            break;
-@@ -2289,7 +2369,8 @@ has_session_window (PtyxisApplication *self)
+@@ -2303,7 +2383,8 @@ has_session_window (PtyxisApplication *self)
         iter = iter->next)
      {
        if (PTYXIS_IS_WINDOW (iter->data) &&
@@ -276,7 +276,7 @@ index a738beb..d9b5a4a 100644
            the_tab = ptyxis_tab_new (the_profile);
  
 diff --git a/src/ptyxis-window.c b/src/ptyxis-window.c
-index 66b3fd5..5962ba8 100644
+index ad32913..41dd162 100644
 --- a/src/ptyxis-window.c
 +++ b/src/ptyxis-window.c
 @@ -87,12 +87,22 @@ struct _PtyxisWindow
