@@ -495,6 +495,12 @@ def firefox(session, checks, out_dir):
         fourth = shown_window(session, FIREFOX, titled("page-four"), 30)
         checks.check("a link opened from a terminal after restoring opens in a new window on the current workspace, focused",
                      fourth and fourth["workspace"] == 11 and fourth["focused"], str(window_summary(fourth)))
+        # The session monitor of Firefox ends with the portal's process, so Firefox creates a new one when the portal
+        # starts again.
+        subprocess.run(["systemctl", "--user", "restart", "xdg-desktop-portal.service"], check=True)
+        monitor = wait_for(lambda: "firefox_session_monitor" in subprocess.run(
+            ["busctl", "--user", "tree", "--list", "org.freedesktop.portal.Desktop"], capture_output=True, text=True).stdout, 30)
+        checks.check("after a restart of the portal, Firefox monitors the session again", monitor)
         pid = session.windows(FIREFOX)[0]["pid"]
         logout_started = time.time()
         session.logout()

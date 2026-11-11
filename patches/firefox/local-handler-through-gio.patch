@@ -14,21 +14,13 @@ Description: Launch an executable chosen as a handler through GIO, so that it ca
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090791
 Author: Mitar
 Forwarded: https://phabricator.services.mozilla.com/D340772
-Last-Update: 2026-11-08
+Last-Update: 2026-11-12
 ---
 diff --git a/toolkit/system/gnome/nsGIOService.cpp b/toolkit/system/gnome/nsGIOService.cpp
-index 5a684f0554e7..c09cff1da8ef 100644
+index 5a684f0554e7..22755934cfc0 100644
 --- a/toolkit/system/gnome/nsGIOService.cpp
 +++ b/toolkit/system/gnome/nsGIOService.cpp
-@@ -17,6 +17,7 @@
- #include "mozilla/WidgetUtilsGtk.h"
- #include "mozilla/ScopeExit.h"
- #include "mozilla/StaticPrefs_widget.h"
-+#include "mozilla/TextUtils.h"
- #include "mozilla/net/DNS.h"
- #include "prenv.h"
- 
-@@ -1308,3 +1309,82 @@ nsGIOService::CreateAppFromCommand(nsACString const& cmd,
+@@ -1308,3 +1308,75 @@ nsGIOService::CreateAppFromCommand(nsACString const& cmd,
    mozApp.forget(appInfo);
    return NS_OK;
  }
@@ -42,7 +34,8 @@ index 5a684f0554e7..c09cff1da8ef 100644
 + * @param aAppInfo location where created GAppInfo is stored
 + * @return NS_OK when object is created, NS_ERROR_FILE_NOT_FOUND when
 + * aExecutable is not an executable file or its path contains %, which GLib
-+ * does not accept, or NS_ERROR_FAILURE otherwise.
++ * does not accept, NS_ERROR_NOT_IMPLEMENTED on OpenBSD, or NS_ERROR_FAILURE
++ * otherwise.
 + */
 +NS_IMETHODIMP
 +nsGIOService::CreateAppFromExecutable(nsIFile* aExecutable,
@@ -51,6 +44,11 @@ index 5a684f0554e7..c09cff1da8ef 100644
 +  NS_ENSURE_ARG(aExecutable);
 +  *aAppInfo = nullptr;
 +
++#ifdef __OpenBSD__
++  // g_app_info_launch_uris_openbsd() runs g_app_info_get_executable(), the Exec
++  // key up to its first space, with the path of a file URI only.
++  return NS_ERROR_NOT_IMPLEMENTED;
++#else
 +  nsAutoCString path;
 +  nsresult rv = aExecutable->GetNativePath(path);
 +  NS_ENSURE_SUCCESS(rv, rv);
@@ -58,22 +56,8 @@ index 5a684f0554e7..c09cff1da8ef 100644
 +  LOG("nsGIOService::CreateAppFromExecutable() %s : %s",
 +      PromiseFlatCString(aAppName).get(), path.get());
 +
-+  // GLib treats the Exec key up to its first space, quotes included, as the
-+  // executable of the application, so the path is quoted only when needed.
-+  bool needsQuoting = path.IsEmpty();
-+  for (char c : path.View()) {
-+    if (!IsAsciiAlphanumeric(c) && !strchr("/._-+=:,@", c)) {
-+      needsQuoting = true;
-+      break;
-+    }
-+  }
-+  nsAutoCString exec;
-+  if (needsQuoting) {
-+    GUniquePtr<gchar> quoted(g_shell_quote(path.get()));
-+    exec.Assign(quoted.get());
-+  } else {
-+    exec.Assign(path);
-+  }
++  GUniquePtr<gchar> quoted(g_shell_quote(path.get()));
++  nsAutoCString exec(quoted.get());
 +  // In the Exec key, % starts a field code. GLib checks that the Exec key names
 +  // an executable file before it expands field codes, so it refuses a path
 +  // with % (https://gitlab.gnome.org/GNOME/glib/-/work_items/4111).
@@ -110,6 +94,7 @@ index 5a684f0554e7..c09cff1da8ef 100644
 +  RefPtr<nsGIOMimeApp> mozApp = new nsGIOMimeApp(app_info.forget());
 +  mozApp.forget(aAppInfo);
 +  return NS_OK;
++#endif
 +}
 diff --git a/uriloader/exthandler/nsLocalHandlerApp.cpp b/uriloader/exthandler/nsLocalHandlerApp.cpp
 index 5d0ab093e081..90ca1280f208 100644
@@ -250,10 +235,10 @@ index a7a3d0bd0fc8..f054a0cc7a0d 100644
  
  #endif
 diff --git a/xpcom/system/nsIGIOService.idl b/xpcom/system/nsIGIOService.idl
-index 1cbf2a3a9fc7..192ec2dd65b6 100644
+index 1cbf2a3a9fc7..7b2cba336036 100644
 --- a/xpcom/system/nsIGIOService.idl
 +++ b/xpcom/system/nsIGIOService.idl
-@@ -82,6 +82,15 @@ interface nsIGIOService : nsISupports
+@@ -82,6 +82,16 @@ interface nsIGIOService : nsISupports
    /* Find the application info by given command */
    nsIGIOMimeApp      findAppFromCommand(in AUTF8String cmd);
  
@@ -261,7 +246,8 @@ index 1cbf2a3a9fc7..192ec2dd65b6 100644
 +     argument: the URI the application is launched with, unchanged, when
 +     passURI is true, or else the path of the local file which the URI names.
 +     Throws NS_ERROR_FILE_NOT_FOUND when the executable is not an executable
-+     file, and when its path contains %, which GLib does not accept. */
++     file, and when its path contains %, which GLib does not accept, and
++     NS_ERROR_NOT_IMPLEMENTED on OpenBSD. */
 +  nsIGIOMimeApp      createAppFromExecutable(in nsIFile executable,
 +                                             in AUTF8String appName,
 +                                             in boolean passURI);
