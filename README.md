@@ -37,8 +37,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     sound for the power cable, the lid and a low battery.
   - [Battery charge thresholds on Framework laptops](#battery-charge-thresholds-on-framework-laptops): Preserve
     Battery Health keeps the battery between 40% and 60%.
-  - [Hardware tweaks](#hardware-tweaks): the touchscreen and the power button light off, and keys repeating only after
-    a second.
+  - [Hardware tweaks](#hardware-tweaks): the touchscreen and the power button light off, keys repeating only after a
+    second, and disk writes recorded for every unit.
 - [Additions](#additions): tools and features which Ubuntu does not have.
   - [Third-party APT repositories pinned to their packages](#third-party-apt-repositories-pinned-to-their-packages): a
     vendor repository can install and upgrade only the packages in use from it.
@@ -304,8 +304,12 @@ Requirements:
 ### Hardware tweaks
 
 The touchscreen is disabled, the power button light is off, and a held key starts repeating only after a second, in
-the console as well as in GNOME (`udev/`, `systemd/`). A program in the session may lock as much memory as it needs, as
-FastFlowLM does to run a model on the NPU (`systemd/user@.service.d/`).
+the console as well as in GNOME (`udev/`, `systemd/`). A program in the session may lock as much memory as it needs,
+as FastFlowLM does to run a model on the NPU (`systemd/user@.service.d/`). systemd records how much every unit reads
+from and writes to the disk, system services and the units of the session alike, so that the writes to the SSD can be
+traced to the units which cause them (`systemd/system.conf.d/`, `systemd/user.conf.d/`, `systemd/user@.service.d/`).
+Its totals count every write three times, once for each layer it passes: the LVM volume, the LUKS device and the NVMe
+drive.
 
 ## Additions
 

@@ -499,6 +499,20 @@ install_dropin() {
   return 0
 }
 
+# Installs a configuration drop-in of the system or the user service manager, systemd/system.conf.d/NAME or
+# systemd/user.conf.d/NAME in this repository, into the root-owned /etc/systemd through sudo. A manager reads its
+# configuration when it starts, so the system manager applies it from the next boot and a user's manager from the next
+# login after all of the user's sessions have ended.
+install_manager_conf() {
+  local src=$REPO_DIR/systemd/$1 dst=/etc/systemd/$1
+  cmp -s "$src" "$dst" && return 0
+  echo "  install $dst"
+  CHANGED=$((CHANGED+1))
+  [ "$MODE" = apply ] || return 0
+  sudo install -D -m 644 "$src" "$dst"
+  return 0
+}
+
 # Installs a program from this repository into the root-owned /usr/local/libexec through sudo, under the given name.
 install_libexec() {
   local src=$REPO_DIR/$1 dst=/usr/local/libexec/$2
@@ -700,6 +714,14 @@ echo "=== locked memory ==="
 # Programs running models on the NPU need more locked memory than the session allows, see the drop-in. Your service
 # manager receives the new limit when it starts again, at the next login after all your sessions have ended.
 install_dropin user@.service.d/50-memlock.conf
+
+echo "=== disk I/O accounting ==="
+# systemd records the bytes every unit reads and writes, for system services and for the units of your session alike,
+# so that the SSD's writes can be traced to the units which cause them, see the drop-ins. The user's manager needs the
+# io controller handed to it for its own units.
+install_manager_conf system.conf.d/50-io-accounting.conf
+install_dropin user@.service.d/50-delegate-io.conf
+install_manager_conf user.conf.d/50-io-accounting.conf
 
 echo "=== disk encryption ==="
 # Without the option, systemd tries to close the encrypted device holding the root filesystem during the regular
