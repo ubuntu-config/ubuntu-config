@@ -12,7 +12,7 @@ Description: Install the SIGTERM handler once the app shell exists, so that SIGT
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2086801
 Author: Mitar
 Forwarded: https://phabricator.services.mozilla.com/D340638
-Last-Update: 2026-11-09
+Last-Update: 2026-11-11
 ---
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
 index 2893f3d..c125a71 100644
@@ -28,7 +28,7 @@ index 2893f3d..c125a71 100644
  #endif
    }
  
-@@ -6421,6 +6418,14 @@ nsresult XREMain::XRE_mainRun() {
+@@ -6421,6 +6418,12 @@ nsresult XREMain::XRE_mainRun() {
          g_unsetenv(name.get());
        }
        nsAppShell::InitSessionRestore();
@@ -36,8 +36,6 @@ index 2893f3d..c125a71 100644
 +      if (!BackgroundTasks::IsBackgroundTaskMode())
 +#  endif
 +      {
-+        // The app shell handles the signal, and XPCOM creates it only after
-+        // XRE_mainStartup().
 +        nsAppShell::InstallTermSignalHandler();
 +      }
  #endif
@@ -47,11 +45,10 @@ diff --git a/widget/gtk/nsAppShell.cpp b/widget/gtk/nsAppShell.cpp
 index 0103af5..b94d486 100644
 --- a/widget/gtk/nsAppShell.cpp
 +++ b/widget/gtk/nsAppShell.cpp
-@@ -436,12 +436,22 @@ void nsAppShell::TermSignalHandler(int signo) {
+@@ -436,12 +436,19 @@ void nsAppShell::TermSignalHandler(int signo) {
      NS_WARNING("Wrong signal!");
      return;
    }
-+  // The handler stays installed after the app shell is destroyed in shutdown.
 +  if (!sAppShell) {
 +    NS_WARNING("SIGTERM received without an app shell");
 +    return;
@@ -65,8 +62,6 @@ index 0103af5..b94d486 100644
 +  if (!XRE_IsParentProcess() || PR_GetEnv("MOZ_DISABLE_SIG_HANDLER")) {
 +    return;
 +  }
-+  // TermSignalHandler() quits through the app shell, so without one SIGTERM
-+  // keeps its default disposition.
 +  MOZ_DIAGNOSTIC_ASSERT(sAppShell, "Install the handler after the app shell");
 +  if (!sAppShell) {
      return;

@@ -10,21 +10,17 @@ Description: Quit cleanly when the desktop session ends, as the Inhibit portal r
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090663
 Forwarded: https://phabricator.services.mozilla.com/D340640
-Last-Update: 2026-11-09
+Last-Update: 2026-11-11
 ---
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
 index c125a71..44cf4be 100644
 --- a/toolkit/xre/nsAppRunner.cpp
 +++ b/toolkit/xre/nsAppRunner.cpp
-@@ -6422,9 +6422,9 @@ nsresult XREMain::XRE_mainRun() {
+@@ -6422,7 +6422,7 @@ nsresult XREMain::XRE_mainRun() {
        if (!BackgroundTasks::IsBackgroundTaskMode())
  #  endif
        {
--        // The app shell handles the signal, and XPCOM creates it only after
--        // XRE_mainStartup().
 -        nsAppShell::InstallTermSignalHandler();
-+        // The app shell handles SIGTERM and the end of the session, and XPCOM
-+        // creates it only after XRE_mainStartup().
 +        nsAppShell::InstallQuitHandlers();
        }
  #endif
@@ -223,7 +219,7 @@ index b94d486..4cc228e 100644
  }
  #endif
  
-@@ -469,6 +593,13 @@ void nsAppShell::InstallTermSignalHandler() {
+@@ -466,6 +590,13 @@ void nsAppShell::InstallTermSignalHandler() {
    sigaction(SIGTERM, &act, nullptr);
  }
  
