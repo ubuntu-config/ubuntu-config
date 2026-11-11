@@ -183,10 +183,26 @@ index e6822a0..514d2a9 100644
  }
  
 diff --git a/tests/templates/inhibit.py b/tests/templates/inhibit.py
-index 0e77bcb..0512f5d 100644
+index 0e77bcb..94e64d5 100644
 --- a/tests/templates/inhibit.py
 +++ b/tests/templates/inhibit.py
-@@ -77,7 +77,11 @@ def Inhibit(self, handle, app_id, window, flags, options, cb_success, cb_error):
+@@ -33,6 +33,7 @@ class InhibitParameters:
+     delay: int
+     response: int
+     expect_close: bool
++    query_end_timeout: int
+ 
+ 
+ def load(mock, parameters={}):
+@@ -43,6 +44,7 @@ def load(mock, parameters={}):
+         delay=parameters.get("delay", 200),
+         response=parameters.get("response", 0),
+         expect_close=parameters.get("expect-close", False),
++        query_end_timeout=parameters.get("query-end-timeout", 700),
+     )
+ 
+     mock.AddProperties(
+@@ -77,7 +79,11 @@ def Inhibit(self, handle, app_id, window, flags, options, cb_success, cb_error):
      )
  
      if params.expect_close:
@@ -199,6 +215,17 @@ index 0e77bcb..0512f5d 100644
      else:
          request.respond(Response(params.response, {}), delay=params.delay)
  
+@@ -108,7 +114,9 @@ def ArmTimer(self, session_handle):
+ 
+     if session_handle in self.session_timers:
+         GLib.source_remove(self.session_timers[session_handle])
+-    self.session_timers[session_handle] = GLib.timeout_add(700, close_session)
++    self.session_timers[session_handle] = GLib.timeout_add(
++        self.inhibit_params.query_end_timeout, close_session
++    )
+ 
+ 
+ @dbus.service.method(
 diff --git a/tests/templates/xdp_utils.py b/tests/templates/xdp_utils.py
 index 57a0786..1072193 100644
 --- a/tests/templates/xdp_utils.py
@@ -243,7 +270,7 @@ index 57a0786..1072193 100644
          # In the future we can pass a class extending
          # dbusmock.mockobject.DBusMockObject as mock_class to avoid going
 diff --git a/tests/test_inhibit.py b/tests/test_inhibit.py
-index 20266a2..1ed07c2 100644
+index 20266a2..93beff1 100644
 --- a/tests/test_inhibit.py
 +++ b/tests/test_inhibit.py
 @@ -132,19 +132,22 @@ class TestInhibit:
@@ -272,7 +299,7 @@ index 20266a2..1ed07c2 100644
  
          # Check the impl portal was called with the right args
          method_calls = mock_intf.GetMethodCalls("Inhibit")
-@@ -155,6 +158,91 @@ class TestInhibit:
+@@ -155,6 +158,97 @@ class TestInhibit:
          assert args[3] == flags.value
          assert args[4]["reason"] == reason
  
@@ -301,6 +328,9 @@ index 20266a2..1ed07c2 100644
 +        request.close()
 +        xdp.wait_for(lambda: request.closed)
 +
++    @pytest.mark.parametrize(
++        "template_params", ({"inhibit": {"query-end-timeout": 10000}},)
++    )
 +    def test_inhibit_before_query_end_response(self, portals, dbus_con):
 +        """
 +        A client which inhibits when the session is about to end, and calls
@@ -309,6 +339,9 @@ index 20266a2..1ed07c2 100644
 +        QueryEndResponse() call, so the session cannot end without the
 +        inhibition. The order is checked in several rounds, as it is random
 +        when the frontend answers Inhibit() before it calls the backend.
++
++        The long timeout keeps the backend from ending the session while a
++        slow test run is still inhibiting.
 +        """
 +        inhibit_intf = xdp.get_portal_iface(dbus_con, "Inhibit")
 +        mock_intf = xdp.get_mock_iface(dbus_con)
