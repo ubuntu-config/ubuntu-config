@@ -18,7 +18,8 @@ Description: Export the request of an inhibition only once the backend has handl
 Author: Mitar
 Bug: https://github.com/flatpak/xdg-desktop-portal/issues/854
 Forwarded: https://github.com/flatpak/xdg-desktop-portal/pull/2199
-Last-Update: 2026-11-11
+Applied-Upstream: 23.0, https://github.com/flatpak/xdg-desktop-portal/commit/632a43d9d2f421685f409e9d2997c1af9f9fd680
+Last-Update: 2026-11-13
 ---
 diff --git a/src/inhibit.c b/src/inhibit.c
 index e6822a0..514d2a9 100644
