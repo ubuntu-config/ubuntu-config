@@ -79,7 +79,8 @@ run-time-limits-shutdown-first-tests.patch
     closeWithActiveWindows test now and then, and with it the build. The first patch connects the
     handler before the layout manager is created, so the loop runs while the actors still exist,
     and the second adds the shell test signalsDuringShutdown, which emits all those signals from
-    within the loop and fails without the first. GNOME Shell merge request 4491 instead disconnects
-    the handlers of installed-changed, but not the others. The test opens no window, so no client
-    writes to the shader cache, see disable-shader-cache-in-close-test.patch. Drop both once Ubuntu
-    ships a GNOME Shell which runs the time limits manager's shutdown before destroying uiGroup.
+    within the loop and fails without the first. Both are the first commit of GNOME Shell merge
+    request 4491, which also disconnects the app system's handlers when their actors are destroyed,
+    with connectObject(). The test opens no window, so no client writes to the shader cache, see
+    disable-shader-cache-in-close-test.patch. Drop both once Ubuntu ships a GNOME Shell which runs
+    the time limits manager's shutdown before destroying uiGroup.
