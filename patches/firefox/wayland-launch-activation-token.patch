@@ -13,7 +13,7 @@ Description: Activate the window opened for the launch, not a restored one, with
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090734
 Forwarded: https://phabricator.services.mozilla.com/D340739
-Last-Update: 2026-11-06
+Last-Update: 2026-11-12
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
 index 003fc85..513d100 100644
 --- a/toolkit/xre/nsAppRunner.cpp
@@ -72,17 +72,6 @@ index 5c4cfc2..789db98 100644
  // We can't query widget_wayland_session_management_enabled_AtStartup()
  // from nsAppShell::Init() as it's too early and we don't have profile loaded.
  bool nsAppShell::IsSessionRestoreSupported() {
-@@ -682,8 +708,9 @@ nsAppShell::Observe(nsISupports* aSubject, const char* aTopic,
-   } else if (!nsCRT::strcmp(aTopic, "sessionstore-windows-restored")) {
-     if (IsSessionRestoreSupported()) {
-       LOGW("  mSessionRestoreState = eSessionRestoreFinished");
-+      bool restored = mSessionRestoreState == eSessionRestoring;
-       mSessionRestoreState = eSessionRestoreFinished;
--      nsWindow::SessionRestoreFinished();
-+      nsWindow::SessionRestoreFinished(restored);
-     }
-   } else {
-     return nsBaseAppShell::Observe(aSubject, aTopic, aData);
 diff --git a/widget/gtk/nsAppShell.h b/widget/gtk/nsAppShell.h
 index d920178..86d825e 100644
 --- a/widget/gtk/nsAppShell.h
@@ -125,7 +114,7 @@ index 635f376..5b3d0b7 100644
        mPopupTemporaryHidden(false),
 -      mWaitingToSessionRestore(false) {
 +      mWaitingToSessionRestore(false),
-+      mRestoredFromSession(false) {
++      mSessionRestoreRequested(false) {
    SetSafeWindowSize(mSizeConstraints.mMaxSize);
  
    if (!gGlobalsInitialized) {
@@ -137,7 +126,7 @@ index 635f376..5b3d0b7 100644
 +  // Firefox was launched with, meant for a window opened for the launch.
 +  // Activated with it, a restored window would be focused and the compositor
 +  // would switch to its workspace, so a restored window leaves it alone.
-+  if (mRestoredFromSession &&
++  if (mSessionRestoreRequested &&
 +      nsAppShell::UpdateAndGetSessionState() == eSessionRestoring) {
 +    return;
 +  }
@@ -145,29 +134,16 @@ index 635f376..5b3d0b7 100644
    mWindowActivationTokenFromEnv = toolkit->GetActivationToken();
    if (!mWindowActivationTokenFromEnv.IsEmpty()) {
      if (!GdkIsWaylandDisplay()) {
-@@ -7681,7 +7692,7 @@ uint32_t nsWindow::GetMaxTouchPoints() const {
-   return 0;
- }
- 
--void nsWindow::SessionRestoreFinished() {
-+void nsWindow::SessionRestoreFinished(bool aRestored) {
-   LOGW("nsWindow::SessionRestoreFinished() set focus to [%p]",
-        gFocusRequestWindow.get());
- 
-@@ -7709,6 +7720,18 @@ void nsWindow::SessionRestoreFinished() {
+@@ -7709,6 +7720,14 @@ void nsWindow::SessionRestoreFinished() {
      }
    }
  
-+  // After a restore, the windows opened for the launch are shown by now, and
-+  // the first of them used the activation token Firefox was launched with. When
-+  // every window was restored, none used it, and it is dropped so that a window
-+  // opened later does not present it instead of transferring the focus to
-+  // itself. Without a restore, the window opened for the launch may not be
-+  // shown yet and still needs the token.
-+  if (aRestored) {
-+    if (nsGTKToolkit* toolkit = nsGTKToolkit::GetToolkit()) {
-+      toolkit->SetActivationToken(""_ns);
-+    }
++  // The windows opened for the launch are shown by now, and the first of them
++  // used the activation token Firefox was launched with. When every window was
++  // restored, none used it, and it is dropped so that a window opened later
++  // does not present it instead of transferring the focus to itself.
++  if (nsGTKToolkit* toolkit = nsGTKToolkit::GetToolkit()) {
++    toolkit->SetActivationToken(""_ns);
 +  }
 +
    if (!gFocusRequestWindow) {
@@ -177,24 +153,12 @@ diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
 index 8613fdf..adadc56 100644
 --- a/widget/gtk/nsWindow.h
 +++ b/widget/gtk/nsWindow.h
-@@ -536,7 +536,9 @@ class nsWindow : public nsIWidget {
-   void UnlockCursor() { mWidgetCursorLocked = false; };
-   void InsertEmoji(RefPtr<nsWindow> aToplevelWindow = nullptr);
- 
--  static void SessionRestoreFinished();
-+  // aRestored tells whether session restore ran, rather than finishing at once
-+  // because the session is not restored at startup.
-+  static void SessionRestoreFinished(bool aRestored);
- 
-  protected:
-   virtual ~nsWindow();
-@@ -774,6 +776,10 @@ class nsWindow : public nsIWidget {
+@@ -774,6 +774,9 @@ class nsWindow : public nsIWidget {
    // size/focus etc.
    bool mWaitingToSessionRestore : 1;
  
-+  // Whether the compositor places this window as it was in the session, which
-+  // it does for a window restored at startup under its saved ID.
-+  bool mRestoredFromSession : 1;
++  // Set when the compositor is asked to restore this window under its saved ID.
++  bool mSessionRestoreRequested : 1;
 +
    // all of our DND stuff
    void InitDragEvent(mozilla::WidgetDragEvent& aEvent);
@@ -207,7 +171,7 @@ index 9d5b722..30019be 100644
    if (aRestoreWindow) {
      mSessionRestoreToken =
          xdg_session_v1_restore_toplevel(session, toplevel, mWorkspaceID.get());
-+    mRestoredFromSession = true;
++    mSessionRestoreRequested = true;
    } else {
      mSessionRestoreToken =
          xdg_session_v1_add_toplevel(session, toplevel, mWorkspaceID.get());

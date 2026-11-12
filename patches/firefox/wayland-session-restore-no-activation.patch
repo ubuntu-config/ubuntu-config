@@ -12,7 +12,7 @@ Description: Do not ask to activate the windows restored from the session while 
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090734
 Forwarded: https://phabricator.services.mozilla.com/D340740
-Last-Update: 2026-11-07
+Last-Update: 2026-11-12
 ---
 diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
 index 30ed51a..d4cb427 100644
@@ -26,7 +26,7 @@ index 30ed51a..d4cb427 100644
 +      // were. No event of the user is behind that while it runs at startup, so
 +      // a request to activate a window restored from the session would only
 +      // make the compositor mark it as demanding attention.
-+      if (toplevelWindow->mRestoredFromSession &&
++      if (toplevelWindow->mSessionRestoreRequested &&
 +          nsAppShell::UpdateAndGetSessionState() == eSessionRestoring) {
 +        LOG("  toplevel is restored from the session, not activated [%p]",
 +            toplevelWindow.get());
@@ -43,7 +43,7 @@ index 9101c95..96c2b37 100644
      auto token = std::move(mWindowActivationTokenFromEnv);
      if (!token.IsEmpty()) {
        FocusWaylandWindow(token.get());
-+    } else if (mRestoredFromSession &&
++    } else if (mSessionRestoreRequested &&
 +               nsAppShell::UpdateAndGetSessionState() == eSessionRestoring) {
 +      // The compositor places a window restored from the session. No event of
 +      // the user is behind showing it while session restore runs at startup,
