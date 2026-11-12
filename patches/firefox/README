@@ -107,7 +107,9 @@ quit-at-session-end.patch
     startup, and again whenever xdg-desktop-portal restarts, as a monitor ends with the portal's process. It answers
     at once when the session asks whether it may end, and quits when it ends. A monitor does not keep the session
     from ending: patches/xdg-desktop-portal-gtk/ makes the session wait until Firefox has quit, so that GNOME Shell
-    and the processes of Firefox are still there while it quits.
+    and the processes of Firefox are still there while it quits. Firefox uses the portal only where no session
+    manager offers XSMP through SESSION_MANAGER, as on GNOME, and XSMP otherwise, as on KDE Plasma, never both;
+    MOZ_DBUS_SESSION_MANAGEMENT=1 selects the portal also there.
 
     Firefox 122 added a handler which quits Firefox cleanly on SIGTERM (Mozilla bug 1837907). Firefox tries to
     install it before XPCOM creates the app shell, which the handler requires, so the handler is never installed
