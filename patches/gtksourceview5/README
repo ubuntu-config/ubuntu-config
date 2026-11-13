@@ -27,5 +27,6 @@ xvfb-noreset.patch (debian-series)
 
     The patch passes -noreset, with xvfb-run's default screen, as many Debian packages do for Debian bug 981201
     (https://bugs.debian.org/981201), which asks for -noreset to be xvfb-run's default. Debian's packaging, which
-    Ubuntu syncs, still runs the tests without it in 5.22.0-2. Drop the patch once Ubuntu's gtksourceview5 or
-    xvfb-run passes -noreset.
+    Ubuntu syncs, still runs the tests without it in 5.22.0-2, and the same change is proposed there as
+    https://salsa.debian.org/gnome-team/gtksourceview5/-/merge_requests/3. Drop the patch once Ubuntu's
+    gtksourceview5 or xvfb-run passes -noreset.

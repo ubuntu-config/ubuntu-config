@@ -5,8 +5,8 @@ Description: Run the tests with an Xvfb which does not reset when its last clien
  failed 2 of 30 builds of the package in GitLab CI. Of 160 runs of the test target, in 4 loops side by side on one
  CPU each, 8 failed this way with Xvfb's default, and none of 160 with -noreset.
 Author: Mitar
-Forwarded: no
-Last-Update: 2026-11-08
+Forwarded: https://salsa.debian.org/gnome-team/gtksourceview5/-/merge_requests/3
+Last-Update: 2026-11-13
 --- a/debian/rules
 +++ b/debian/rules
 @@ -21,8 +21,10 @@
