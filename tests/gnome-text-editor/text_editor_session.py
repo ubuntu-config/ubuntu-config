@@ -429,19 +429,27 @@ def main():
     # Run 6: each of the two files has text typed into it, which Text Editor keeps as a draft, and once it autosaved
     # its session with both drafts and GTK saved its window state, Text Editor is ended with SIGTERM, which it does
     # not handle, so it closes no window and saves nothing more.
+    file_uris = [GLib.filename_to_uri(path, None) for path in files]
     keyboard = add_keyboard()
     log6 = os.path.join(out, "run6.log")
     proc6 = start(text_editor, [files[0]], log6)
     check(wait_for(log6, "restore_toplevel", 1), "run 6: the first window was named to the compositor")
     check(not scan(log6)["restored_toplevel"], "run 6: no window closed in run 5 was restored")
     check(wait_until(lambda: last_window_focused(log6)), "run 6: the first window has the keyboard focus")
+    # Text Editor lets the text view of a document take the focus only once the document is loaded, and keys pressed
+    # before reach no text view. Text is therefore typed into a window only once the session Text Editor saved lists
+    # its file. Text Editor saves its session when the auto-save delay of 3 seconds has passed since the first change
+    # after its previous save, and opening a file is a change, while loading a file of one line takes milliseconds.
+    check(wait_until(lambda: any(file_uris[0] in pages for _, pages in editor_windows())),
+          "run 6: the session saved the first window with its file")
     type_text(keyboard, TYPED[0])
     with open(os.path.join(out, "run6-new-window.log"), "w") as log:
         subprocess.run([text_editor, "--new-window", files[1]], stdout=log, stderr=subprocess.STDOUT, check=True)
     check(wait_for(log6, "restore_toplevel", 2), "run 6: the second window was named to the compositor")
     check(wait_until(lambda: last_window_focused(log6)), "run 6: the second window has the keyboard focus")
+    check(wait_until(lambda: any(file_uris[1] in pages for _, pages in editor_windows())),
+          "run 6: the session saved the second window with its file")
     type_text(keyboard, TYPED[1])
-    file_uris = [GLib.filename_to_uri(path, None) for path in files]
     check(wait_until(lambda: all(typed in draft_texts().get(uri, "") for typed, uri in zip(TYPED, file_uris))),
           "run 6: the session saved a draft of each file with the text typed into it")
     run6_names = scan(log6)["restore_toplevel"]

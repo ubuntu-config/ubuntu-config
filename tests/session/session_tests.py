@@ -263,6 +263,14 @@ def workspace_attention(session, checks, out_dir):
 PTYXIS = "org.gnome.Ptyxis.desktop"
 
 
+def saved_screens(home):
+    """Returns the screens which Ptyxis saved with its session, as the bytes of their file, or b"" before it saved any."""
+    try:
+        return (home / ".local" / "state" / "org.gnome.Ptyxis" / "screens.gvariant").read_bytes()
+    except FileNotFoundError:
+        return b""
+
+
 def copy_terminal_text(session, window):
     """Activates a Ptyxis window and returns the text of its terminal, as selecting all and copying gives it."""
     session.call("activateWindow", window["id"])
@@ -296,6 +304,11 @@ def ptyxis(session, checks, out_dir):
         return {}
     time.sleep(1)
     session.type_text("cd one\necho first screen\n")
+    # GNOME Shell can deliver the typed keys after type_text() returns, and switching the workspace moves the keyboard
+    # focus away from the window, so the workspace is switched only once Ptyxis saved the screen with the command's
+    # output.
+    checks.check("the first window ran the typed command",
+                 wait_for(lambda: b"\nfirst screen" in saved_screens(home), 15))
 
     session.call("activateWorkspace", 4)
     session.call("clickDockIcon", PTYXIS)
