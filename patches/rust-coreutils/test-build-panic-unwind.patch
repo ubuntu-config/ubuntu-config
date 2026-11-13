@@ -8,6 +8,7 @@ Description: Build the tests with panic=unwind, so that cargo builds libstdbuf o
  runs, as in 2 of 2 builds with 16 and 24 jobs. The test step now sets CARGO_PROFILE_RELEASE_PANIC=unwind, so that only
  one variant exists. The install step builds the binaries it installs afterwards with the release profile, as before.
 Author: Mitar
+Bug: https://github.com/uutils/coreutils/issues/16422
 Forwarded: no
 Last-Update: 2026-11-13
 --- a/debian/rules

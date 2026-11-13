@@ -12,8 +12,12 @@ timeout-no-core-dump-when-reraising.patch
     The patch adds test_child_core_dump_not_repeated to tests/by-util/test_timeout.rs, which fails
     without the fix. The build runs it with the two patches below, but debian/rules ignores the
     result of the tests, so check the build log for "test_timeout::test_child_core_dump_not_repeated
-    ... ok" after a version bump. Drop the patch once Ubuntu ships a uutils release which includes
-    the pull request, the first after 0.12.0.
+    ... ok" after a version bump. From 0.12.0 on, Ubuntu's build runs none of tests/tests.rs,
+    because binary_name_execfn_fallback in tests/test_util_name.rs fails under Ubuntu's
+    require-utility-to-be-invoked-at-matching-path.patch and cargo stops at that test binary, see
+    https://bugs.launchpad.net/ubuntu/+source/rust-coreutils/+bug/2174403. Once 26.04 moves to
+    0.12.0, the line is therefore missing until that bug is fixed. Drop the patch once Ubuntu ships
+    a uutils release which includes the pull request, the first after 0.12.0.
 
 test-skip-list-stray-word.patch (debian-series)
     The --skip options which override_dh_auto_test in debian/rules passes to cargo test include a
@@ -32,9 +36,10 @@ test-build-panic-unwind.patch (debian-series)
     target/release/deps, named after the output, so the two links read and rewrite the same
     objects. With 16 and with 24 jobs one link failed with "file truncated", and no test ran. The
     patch sets CARGO_PROFILE_RELEASE_PANIC=unwind for the test step only, so that one variant
-    exists, and the install step still builds the installed binaries with panic=abort. uutils' main
-    still sets panic = "abort" and has uu_stdbuf depend on uu_stdbuf_libstdbuf, so drop the patch
-    only once the test step of a build no longer warns about the collision without it.
+    exists, and the install step still builds the installed binaries with panic=abort. The collision
+    is reported in https://github.com/uutils/coreutils/issues/16422, and uutils' main still sets
+    panic = "abort" and has uu_stdbuf depend on uu_stdbuf_libstdbuf, so drop the patch only once
+    the test step of a build no longer warns about the collision without it.
 
     With both patches, builds with 24 jobs in a container ran all of tests/tests.rs: 5,424 tests
     passed, 82 were ignored, and 3 failed, in date, head and ls, in one build also one in install.
