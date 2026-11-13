@@ -1,5 +1,7 @@
 import Gio from 'gi://Gio';
 
+import {listChildren, readText} from './hwmon.js';
+
 // The fields below come from struct gpu_metrics_v3_0 in drivers/gpu/drm/amd/include/kgd_pp_interface.h, at the
 // offsets the kernel compiles that struct to with its natural alignment. amdgpu publishes the struct as a whole and
 // describes it only by the revision and size in its header, so a field is read from a fixed offset once the
@@ -12,8 +14,11 @@ const OFFSET_FORMAT_REVISION = 2;
 const OFFSET_TEMPERATURE_GFX = 4;
 const OFFSET_TEMPERATURE_SOC = 6;
 const OFFSET_TEMPERATURE_CORE = 8;
+const OFFSET_TEMPERATURE_SKIN = 40;
 const OFFSET_AVERAGE_GFX_ACTIVITY = 42;
 const OFFSET_AVERAGE_IPU_ACTIVITY = 46;
+const OFFSET_AVERAGE_DRAM_READS = 94;
+const OFFSET_AVERAGE_DRAM_WRITES = 96;
 const OFFSET_AVERAGE_IPU_POWER = 116;
 const OFFSET_AVERAGE_APU_POWER = 120;
 const OFFSET_AVERAGE_GFX_POWER = 124;
@@ -24,6 +29,7 @@ const OFFSET_AVERAGE_GFXCLK_FREQUENCY = 174;
 const OFFSET_AVERAGE_IPUCLK_FREQUENCY = 180;
 const OFFSET_AVERAGE_UCLK_FREQUENCY = 186;
 const OFFSET_CURRENT_CORECLK = 190;
+const OFFSET_TIME_FILTER_ALPHAVALUE = 256;
 
 // The NPU's columns, each of which has an entry in average_ipu_activity.
 const NPU_COLUMNS = 8;
@@ -39,24 +45,30 @@ const NPU_COLUMNS = 8;
  */
 const NPU_MAX_FREQUENCY = 1800;
 
+// The width of the memory bus in bytes: the APU's memory controller has two 64 bit DDR5 channels, which the two memory
+// modules of this laptop fill. Each transfers twice per cycle of the memory clock.
+const DRAM_BUS_BYTES = 16;
+
+// The DRAM bandwidth is in 16 bit fields of MB/s, which wrap at this.
+const DRAM_BANDWIDTH_WRAP = 65536;
+
+// The share of the bound below which a reading of the DRAM bandwidth counts as wrapped, as described for
+// unwrapDramBandwidth. It leaves room for the firmware updating the table at its own times rather than at the times
+// the table is read.
+const DRAM_BOUND_MARGIN = 0.9;
+
 /**
  * Where each core sits in the per-core arrays, and the frequency it reaches when nothing holds it back.
  *
  * The table carries no mapping of its own, so this was measured by pinning a load to one core at a time and
  * watching which entry of average_core_power responded: on this processor the four classic cores occupy the even
  * entries 0 to 6 and the eight dense cores the entries 8 to 15, leaving 1, 3, 5 and 7 unused. A processor with a
- * different split may lay them out differently, in which case the activity test below keeps the result harmless
- * rather than wrong, since a core which is not where this expects it reads as idle instead of as a bad number.
+ * different split may lay them out differently, and its groups then read the entries of other cores or unused ones.
  */
 export const CORE_GROUPS = [
     {name: 'Zen 5', slots: [0, 2, 4, 6], maxFrequency: 5157},
     {name: 'Zen 5c', slots: [8, 9, 10, 11, 12, 13, 14, 15], maxFrequency: 3289},
 ];
-
-// A core drawing less than this is idle rather than held back, and a percentage of its maximum would then say
-// something about how little work it has rather than about throttling. Loaded cores draw several watts and idle
-// ones well under a tenth of one, so anything in between separates them.
-const ACTIVE_CORE_POWER_W = 0.5;
 
 // The table marks a field as carrying nothing, for entries the firmware leaves out, by setting it to the largest
 // value it can hold.
@@ -86,12 +98,43 @@ export const REASONS = [
 ];
 
 /**
+ * Finds the logical CPUs of each group of cores.
+ *
+ * A logical CPU belongs to the group whose frequency when nothing holds it back is the closest to the CPU's maximum
+ * frequency in cpufreq, which is 5157895 kHz for the threads of the classic cores of this processor and 3289474 kHz
+ * for those of the dense cores.
+ *
+ * @returns {Set<number>[]} the numbers of the logical CPUs of each group, in the order of CORE_GROUPS, without the CPUs
+ *   for which cpufreq reports no maximum frequency
+ */
+export function findGroupCpus() {
+    const groups = CORE_GROUPS.map(() => new Set());
+    for (const name of listChildren('/sys/devices/system/cpu')) {
+        const match = /^cpu(\d+)$/.exec(name);
+        if (!match)
+            continue;
+        const maxFrequency = Number.parseInt(readText(`/sys/devices/system/cpu/${name}/cpufreq/cpuinfo_max_freq`),
+            10) / 1000;
+        if (Number.isNaN(maxFrequency))
+            continue;
+        let closest = 0;
+        CORE_GROUPS.forEach((group, index) => {
+            if (Math.abs(group.maxFrequency - maxFrequency) <
+                Math.abs(CORE_GROUPS[closest].maxFrequency - maxFrequency))
+                closest = index;
+        });
+        groups[closest].add(Number(match[1]));
+    }
+    return groups;
+}
+
+/**
  * Decodes a metrics table.
  *
  * The power of the whole system is the power the firmware reads from the platform's PSYS sensor, the power the
  * laptop's components draw from the AC adapter or the battery, without the power which charges the battery. On
- * battery it was measured within 2 W of the discharge rate the battery reports at up to 25 W, and about 15% under it at
- * 55 W to 65 W. It is null on a platform which reports none, and for a reading of exactly 65535 mW, which is the
+ * battery it was measured within about 2 W of the discharge rate the battery reports at up to 25 W, and about 15% under
+ * it at 55 W to 65 W. It is null on a platform which reports none, and for a reading of exactly 65535 mW, which is the
  * table's mark of a field which carries nothing.
  *
  * @param {Uint8Array} bytes - the contents of a gpu_metrics file
@@ -134,12 +177,10 @@ export function decodeMetrics(bytes) {
                 busiest = slot;
             }
         }
-        const active = busiestPower >= ACTIVE_CORE_POWER_W;
         return {
             name: group.name,
             maxFrequency: group.maxFrequency,
-            active,
-            frequency: active ? view.getUint16(OFFSET_CURRENT_CORECLK + 2 * busiest, true) : 0,
+            frequency: view.getUint16(OFFSET_CURRENT_CORECLK + 2 * busiest, true),
         };
     });
 
@@ -169,6 +210,7 @@ export function decodeMetrics(bytes) {
         temperatureCore: temperatureCore / 100,
         temperatureGfx: view.getUint16(OFFSET_TEMPERATURE_GFX, true) / 100,
         temperatureSoc: view.getUint16(OFFSET_TEMPERATURE_SOC, true) / 100,
+        temperatureSkin: view.getUint16(OFFSET_TEMPERATURE_SKIN, true) / 100,
         systemPower: systemPower === null ? null : systemPower / 1000,
         apuPower: apuPower / 1000,
         corePower: view.getUint32(OFFSET_AVERAGE_ALL_CORE_POWER, true) / 1000,
@@ -179,17 +221,53 @@ export function decodeMetrics(bytes) {
         graphicsFrequency: view.getUint16(OFFSET_AVERAGE_GFXCLK_FREQUENCY, true),
         npuFrequency: view.getUint16(OFFSET_AVERAGE_IPUCLK_FREQUENCY, true),
         memoryFrequency: view.getUint16(OFFSET_AVERAGE_UCLK_FREQUENCY, true),
+        dramReads: view.getUint16(OFFSET_AVERAGE_DRAM_READS, true),
+        dramWrites: view.getUint16(OFFSET_AVERAGE_DRAM_WRITES, true),
+        filterTime: view.getUint32(OFFSET_TIME_FILTER_ALPHAVALUE, true),
         coreGroups,
         residency,
     };
 }
 
 /**
- * Finds the frequencies the GPU, the NPU and the memory reach when nothing holds them back.
+ * Corrects the DRAM bandwidth of a reading for the wrap of the table's fields.
+ *
+ * The table holds the read and the write bandwidth in 16 bit fields of MB/s, which wrap at 65536 MB/s, and the reads do
+ * go above that, to about 73 GB/s under a large language model on the GPU. The firmware averages both over time with
+ * the time constant of time_filter_alphavalue, 1 second on this laptop, so between two readings a bandwidth falls at
+ * most to the share e^(-elapsed/time constant) of the earlier one, which is what it falls to when the memory falls
+ * idle. When a GPU load ended, the reads were measured to fall by about 60% a second. A reading under that bound has
+ * wrapped, and is corrected by the wrap. Over a day of readings once a second and once every 2 seconds, this corrected
+ * no reading taken while the GPU was busy less than half of the time.
+ *
+ * A reading which has wrapped is not recognized as such without an earlier reading above the bound, so a bandwidth
+ * which is above the wrap already at the first reading shows as low until it falls below the wrap. The longer the time
+ * between two readings, the lower the bound, and with readings every 2 seconds the bound misses about a third of the
+ * wrapped readings of the log, and with an occasional reading 3 seconds after the one before, most of them. With
+ * readings every second, the bound misses none of them, also with an occasional reading 2 seconds after the one before.
+ *
+ * @param {object} previous - the earlier reading, as decodeMetrics returned it and this function corrected it
+ * @param {object} current - the later reading, as decodeMetrics returned it, whose dramReads and dramWrites this
+ *   corrects in place
+ * @param {number} elapsed - the milliseconds between the two readings
+ */
+export function unwrapDramBandwidth(previous, current, elapsed) {
+    if (current.filterTime <= 0)
+        return;
+    const share = DRAM_BOUND_MARGIN * Math.exp(-1000 * elapsed / current.filterTime);
+    for (const key of ['dramReads', 'dramWrites']) {
+        if (current[key] < share * previous[key])
+            current[key] += DRAM_BANDWIDTH_WRAP;
+    }
+}
+
+/**
+ * Finds the frequencies the GPU, the NPU and the memory reach when nothing holds them back, and the bandwidth of the
+ * memory at its frequency.
  *
  * @param {Gio.File} file - the metrics table, as findMetricsFile returned it
- * @returns {{graphics: number|null, npu: number, memory: number|null}} the frequencies in MHz, with null for one
- *   which the device does not report
+ * @returns {{graphics: number|null, npu: number, memory: number|null, memoryBandwidth: number|null}} the frequencies
+ *   in MHz and the bandwidth in MB/s, with null for one which the device does not report
  */
 export function findClockLimits(file) {
     // amdgpu lists the clock levels of the device's DPM next to its metrics table, one per line as "1: 2900Mhz", and
@@ -203,10 +281,12 @@ export function findClockLimits(file) {
             return null;
         }
     };
+    const memory = topLevel('pp_dpm_mclk');
     return {
         graphics: topLevel('pp_dpm_sclk'),
         npu: NPU_MAX_FREQUENCY,
-        memory: topLevel('pp_dpm_mclk'),
+        memory,
+        memoryBandwidth: memory === null ? null : memory * 2 * DRAM_BUS_BYTES,
     };
 }
 

@@ -13,12 +13,13 @@ import {decodeChargingPower, findBatteryFile} from './battery.js';
 import {FAN_MAX_RPM, findApuSensor, findBoardSensorFiles, findFanFiles} from './ec.js';
 import {findMemorySensors, findSsdSensors, findWifiSensors} from './hwmon.js';
 import {
-    CORE_GROUPS, REASONS, decodeMetrics, dominantReason, findClockLimits, findMetricsFile, throttleShares,
+    CORE_GROUPS, REASONS, decodeMetrics, dominantReason, findClockLimits, findGroupCpus, findMetricsFile,
+    throttleShares, unwrapDramBandwidth,
 } from './metrics.js';
 
 const SAMPLE_INTERVAL_S = 2;
 
-// The file in which the kernel adds up the time all CPUs spent in each state since boot.
+// The file in which the kernel adds up the time each logical CPU spent in each state since boot.
 const CPU_TIMES_PATH = '/proc/stat';
 
 // Below this share of an interval a reason counts as holding nothing back. The processor brushes against its limits
@@ -63,8 +64,9 @@ const FAN_FULL_TARGET_SHARE = 0.95;
 // screen. Borrowing it keeps the warning in the theme's colors, light or dark.
 const WARNING_PANEL_STYLE_CLASS = 'screen-recording-indicator';
 
-// The style class of a menu row which shows a critical temperature.
+// The style classes of the background and of the labels of a menu row which shows a critical temperature.
 const CRITICAL_ROW_STYLE_CLASS = 'cpu-throttle-indicator-critical';
+const CRITICAL_TEXT_STYLE_CLASS = 'cpu-throttle-indicator-critical-text';
 
 /**
  * Formats a frequency for the menu.
@@ -75,6 +77,18 @@ const CRITICAL_ROW_STYLE_CLASS = 'cpu-throttle-indicator-critical';
  */
 function formatFrequency(frequency, maxFrequency) {
     return maxFrequency ? `${frequency} MHz, ${Math.round(100 * frequency / maxFrequency)}%` : `${frequency} MHz`;
+}
+
+/**
+ * Formats a bandwidth for the menu.
+ *
+ * @param {number} bandwidth - the bandwidth in MB/s
+ * @param {number|null} maxBandwidth - the bandwidth in MB/s reached when nothing holds it back, or null when unknown
+ * @returns {string} the bandwidth, with its share of the maximum when that is known
+ */
+function formatBandwidth(bandwidth, maxBandwidth) {
+    const text = `${(bandwidth / 1000).toFixed(1)} GB/s`;
+    return maxBandwidth ? `${text}, ${Math.round(100 * bandwidth / maxBandwidth)}%` : text;
 }
 
 /**
@@ -94,6 +108,8 @@ class ThrottleIndicator extends PanelMenu.Button {
      * @param {object} devices - the files the indicator reads
      * @param {Gio.File} devices.metricsFile - the metrics table, as findMetricsFile returned it
      * @param {object} devices.clockLimits - the frequencies findClockLimits returned
+     * @param {Set<number>[]} devices.groupCpus - the logical CPUs of each group of cores, as findGroupCpus returned
+     *   them
      * @param {object[]} devices.fanFiles - the fans, as findFanFiles returned them
      * @param {Gio.File[]} devices.boardSensorFiles - the board's sensors, as findBoardSensorFiles returned them
      * @param {{file: Gio.File, critical: number|null}|null} devices.apuSensor - the APU's sensor, as findApuSensor
@@ -104,20 +120,22 @@ class ThrottleIndicator extends PanelMenu.Button {
      *   Celsius, or null when it has none
      */
     _init(iconsPath, {
-        metricsFile, clockLimits, fanFiles, boardSensorFiles, apuSensor, batteryFile, temperatureSensors,
+        metricsFile, clockLimits, groupCpus, fanFiles, boardSensorFiles, apuSensor, batteryFile, temperatureSensors,
     }) {
         super._init(0, 'CPU Throttle Indicator');
 
         this._file = metricsFile;
         this._clockLimits = clockLimits;
         this._cpuTimesFile = Gio.File.new_for_path(CPU_TIMES_PATH);
+        this._groupCpus = groupCpus;
         this._batteryFile = batteryFile;
         this._readingBattery = false;
         this._cancellable = new Gio.Cancellable();
         this._previous = null;
         this._reading = false;
         this._readingCpuTimes = false;
-        // The total and the idle time of all CPUs at the last reading, in the kernel's clock ticks.
+        // The total and the idle time of the logical CPUs of each group of cores at the last reading, in the kernel's
+        // clock ticks.
         this._cpuTimes = null;
         this._samplesUnderThreshold = 0;
         this._samplesHot = 0;
@@ -151,30 +169,66 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._warningItem = this._addWarning('Fan does not follow the processor heat',
             ['Fan control may be stuck on old temperatures.']);
 
-        this._shareLabels = new Map();
+        // The limits are in two columns, the temperature limits on the left with the platform's PROCHOT under them,
+        // and the power limits on the right.
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Limits'));
-        for (const reason of REASONS)
-            this._shareLabels.set(reason.key, this._addRow(reason.label));
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Frequency'));
-        this._frequencyLabels = CORE_GROUPS.map(group => this._addRow(`${group.name} cores`));
-        this._graphicsFrequencyLabel = this._addRow('GPU');
-        this._npuFrequencyLabel = this._addRow('NPU');
-        this._memoryFrequencyLabel = this._addRow('DRAM');
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Usage'));
-        this._cpuUsageLabel = this._addRow('CPU');
-        this._graphicsUsageLabel = this._addRow('GPU');
-        this._npuUsageLabel = this._addRow('NPU');
-        if (fanFiles.length)
-            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Fans'));
-        // Each row of the section shows one file, either the speed of a fan or its target.
+        const limits = this._addGrid();
+        const ofKind = kind => REASONS.filter(reason => reason.kind === kind);
+        const limitColumns = [[...ofKind('thermal'), ...ofKind('platform')], ofKind('power')];
+        this._shareLabels = new Map();
+        limitColumns.forEach((reasons, column) => reasons.forEach((reason, row) => {
+            const [label] = this._addGridRow(limits, row, 2 * column, reason.label, 1);
+            this._shareLabels.set(reason.key, label);
+        }));
+
+        // The usage and the frequency of each part are in a column each, with a heading which names the columns.
+        // A line fills the room left of each name in the heading, as in the heading of a section. The line before the
+        // first name and that name share a cell spanning the column of the row names, so that the line also runs over
+        // the room the values of the first column leave free.
+        const clocks = this._addGrid();
+        const usageHeading = new St.BoxLayout({style_class: 'cpu-throttle-indicator-heading', x_expand: true});
+        usageHeading.add_child(this._createHeadingLine());
+        usageHeading.add_child(new St.Label({text: 'Usage', style_class: 'cpu-throttle-indicator-column-name'}));
+        clocks.attach(usageHeading, 0, 0, 2, 1);
+        const frequencyHeading = new St.BoxLayout({style_class: 'cpu-throttle-indicator-grid-heading', x_expand: true});
+        frequencyHeading.add_child(this._createHeadingLine());
+        frequencyHeading.add_child(new St.Label({text: 'Frequency'}));
+        clocks.attach(frequencyHeading, 2, 0, 1, 1);
+        const clockRows = [...CORE_GROUPS.map(group => `${group.name} cores`), 'GPU', 'NPU', 'DRAM']
+            .map((name, index) => this._addGridRow(clocks, index + 1, 0, name, 2));
+        this._usageLabels = clockRows.slice(0, CORE_GROUPS.length).map(([usage]) => usage);
+        this._frequencyLabels = clockRows.slice(0, CORE_GROUPS.length).map(([, frequency]) => frequency);
+        [[this._graphicsUsageLabel, this._graphicsFrequencyLabel], [this._npuUsageLabel, this._npuFrequencyLabel],
+            [this._memoryUsageLabel, this._memoryFrequencyLabel]] = clockRows.slice(CORE_GROUPS.length);
+        // The fans have a column for their speed and one for their target, with a heading which names the section and
+        // the columns.
+        const fans = fanFiles.length ? this._addGrid() : null;
+        if (fans) {
+            // The name of the section and the name of the first column share a cell, so that the line between them
+            // runs over the room the values of the first column leave free.
+            const sectionHeading = new St.BoxLayout({style_class: 'cpu-throttle-indicator-heading', x_expand: true});
+            sectionHeading.add_child(new St.Label({text: 'Fans'}));
+            sectionHeading.add_child(this._createHeadingLine());
+            sectionHeading.add_child(new St.Label({text: 'Speed', style_class: 'cpu-throttle-indicator-column-name'}));
+            fans.attach(sectionHeading, 0, 0, 2, 1);
+            const targetHeading = new St.BoxLayout({
+                style_class: 'cpu-throttle-indicator-grid-heading',
+                x_expand: true,
+            });
+            targetHeading.add_child(this._createHeadingLine());
+            targetHeading.add_child(new St.Label({text: 'Target'}));
+            fans.attach(targetHeading, 2, 0, 1, 1);
+        }
+        // Each entry shows one file, either the speed of a fan or its target.
         this._fanRows = [];
-        for (const fan of fanFiles) {
-            // Fans are numbered only when there are several of them to tell apart.
-            const name = fanFiles.length === 1 ? 'Fan' : `Fan ${fan.number}`;
+        fanFiles.forEach((fan, index) => {
+            // A single fan is the one which cools the APU, and several are numbered to tell them apart.
+            const name = fanFiles.length === 1 ? 'APU' : `Fan ${fan.number}`;
+            const [speedLabel, targetLabel] = this._addGridRow(fans, index + 1, 0, name, 2);
             this._fanRows.push({
                 kind: 'speed',
                 file: fan.file,
-                label: this._addRow(name),
+                label: speedLabel,
                 reading: false,
                 // Undefined until the fan has been read, and null while the EC reports the fan as stalled.
                 speed: undefined,
@@ -183,43 +237,52 @@ class ThrottleIndicator extends PanelMenu.Button {
                 this._fanRows.push({
                     kind: 'target',
                     file: fan.targetFile,
-                    label: this._addRow(`${name} target`),
+                    label: targetLabel,
                     reading: false,
                     // Undefined until the target has been read.
                     speed: undefined,
                 });
             }
-        }
+        });
         this._fanSpeedRows = this._fanRows.filter(row => row.kind === 'speed');
         this._fanTargetRows = this._fanRows.filter(row => row.kind === 'target');
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Temperature'));
-        const addTemperatureRow = sensor => ({
-            file: sensor.file,
-            critical: sensor.critical,
-            label: this._addRow(sensor.name),
-            reading: false,
+        // The temperature and the power of each part are in a column each, with a heading which names the columns.
+        const parts = this._addGrid(true);
+        const temperatureLine = this._createHeadingLine();
+        temperatureLine.add_style_class_name('cpu-throttle-indicator-cell');
+        parts.attach(temperatureLine, 0, 0, 1, 1);
+        parts.attach(new St.Label({
+            text: 'Temperature',
+            style_class: 'cpu-throttle-indicator-cell',
+            x_align: Clutter.ActorAlign.END,
+        }), 1, 0, 1, 1);
+        const powerHeading = new St.BoxLayout({
+            style_class: 'cpu-throttle-indicator-grid-heading cpu-throttle-indicator-cell',
+            x_expand: true,
         });
-        // The APU's temperature which the EC reads leads the section, followed by the temperatures from the metrics
-        // table.
-        this._temperatureRows = apuSensor ? [addTemperatureRow({...apuSensor, name: 'APU'})] : [];
-        this._coreLabel = this._addRow('CPU');
-        this._gfxLabel = this._addRow('GPU');
-        this._socLabel = this._addRow('SoC');
-        this._temperatureRows.push(...temperatureSensors.map(addTemperatureRow));
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Power'));
+        powerHeading.add_child(this._createHeadingLine());
+        powerHeading.add_child(new St.Label({text: 'Power'}));
+        parts.attach(powerHeading, 2, 0, 1, 1);
         // The laptop's power is the APU's and the other power together, and the APU's is its four parts together,
-        // which are indented under it.
-        this._systemPowerLabel = this._addRow('Laptop');
-        this._apuPowerLabel = this._addRow('APU');
-        this._corePowerLabel = this._addRow('CPU', true);
-        this._graphicsPowerLabel = this._addRow('GPU', true);
-        this._npuPowerLabel = this._addRow('NPU', true);
-        this._socPowerLabel = this._addRow('SoC', true);
-        // The power which charges the battery is not part of the laptop's, and its row is shown only while the battery
-        // charges.
-        this._batteryPowerLabel = this._addRow('Battery');
-        this._setRowVisible(this._batteryPowerLabel, false);
-        this._otherPowerLabel = this._addRow('Other');
+        // which are indented under it. The power which charges the battery is not part of the laptop's, and its row
+        // is shown only while the battery charges. The memory modules, the SSD and the wireless card draw a part of
+        // the other power, and are indented under it.
+        let rows = 0;
+        const addPart = (name, indented = false) => this._addPartRow(parts, ++rows, name, indented);
+        this._laptopRow = addPart('Laptop');
+        this._apuRow = addPart('APU');
+        this._cpuRow = addPart('CPU', true);
+        this._gpuRow = addPart('GPU', true);
+        this._npuRow = addPart('NPU', true);
+        this._socRow = addPart('SoC', true);
+        this._batteryRow = addPart('Battery');
+        this._setRowVisible(this._batteryRow, false);
+        this._otherRow = addPart('Other');
+        const addSensor = (sensor, row) => ({file: sensor.file, critical: sensor.critical, row, reading: false});
+        this._temperatureSensors = [
+            ...(apuSensor ? [addSensor(apuSensor, this._apuRow)] : []),
+            ...temperatureSensors.map(sensor => addSensor(sensor, addPart(sensor.name, true))),
+        ];
 
         // The hwmon temperature sensors and the battery are shown only in the menu, so they are read only while it is
         // open, and once right as it opens. A read of the sensor of an NVMe drive or of a wireless card sends a command
@@ -263,55 +326,144 @@ class ThrottleIndicator extends PanelMenu.Button {
     }
 
     /**
-     * Adds a row to the menu which names something and leaves room for its value.
+     * Adds a grid to the menu, for rows whose columns line up.
      *
-     * @param {string} text - the name to show on the left of the row
-     * @param {boolean} [indented] - whether the name is indented, as a part of the row above
-     * @returns {St.Label} the label on the right of the row, to set the value on
+     * @param {boolean} [markable] - whether rows of the grid can be marked as critical, for which every child of the
+     *   grid has to have the style class cpu-throttle-indicator-cell
+     * @returns {Clutter.GridLayout} the layout of the grid, to attach labels to
      */
-    _addRow(text, indented = false) {
-        const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+    _addGrid(markable = false) {
         // The theme clears the background of a menu item which does not react to the pointer, so the background which
-        // marks a critical temperature is on a box inside the item.
-        const box = new St.BoxLayout({style_class: 'cpu-throttle-indicator-row', x_expand: true});
-        const value = new St.Label({y_align: Clutter.ActorAlign.CENTER});
-        box.add_child(new St.Label({
+        // marks a row is a child of the grid of its own.
+        const item = new PopupMenu.PopupBaseMenuItem({
+            style_class: markable ? 'cpu-throttle-indicator-markable-item' : '',
+            reactive: false,
+            can_focus: false,
+        });
+        const layout = new Clutter.GridLayout();
+        const grid = new St.Widget({
+            style_class: markable ? 'cpu-throttle-indicator-grid cpu-throttle-indicator-markable-grid'
+                : 'cpu-throttle-indicator-grid',
+            layout_manager: layout,
+            x_expand: true,
+        });
+        // GNOME Shell sets the spacing of a grid from its style only once the layout is hooked up to the widget.
+        layout.hookup_style(grid);
+        item.add_child(grid);
+        this.menu.addMenuItem(item);
+        return layout;
+    }
+
+    /**
+     * Creates a line as the theme draws it in the heading of a section.
+     *
+     * @returns {St.Widget} the line, which fills the room it is given
+     */
+    _createHeadingLine() {
+        // The theme styles the line only inside a heading, which the bin around it stands for.
+        return new St.Bin({
+            style_class: 'popup-separator-menu-item',
+            x_expand: true,
+            child: new St.Widget({
+                style_class: 'popup-separator-menu-item-separator',
+                x_expand: true,
+                y_align: Clutter.ActorAlign.CENTER,
+            }),
+        });
+    }
+
+    /**
+     * Adds a name and the labels of its values to a row of a grid.
+     *
+     * @param {Clutter.GridLayout} layout - the layout _addGrid returned
+     * @param {number} row - the row of the grid
+     * @param {number} column - the column of the name, with the values in the columns right of it
+     * @param {string} text - the name
+     * @param {number} values - the number of values
+     * @returns {St.Label[]} the labels of the values, to set the values on
+     */
+    _addGridRow(layout, row, column, text, values) {
+        // A name right of other columns has room between it and the value left of it.
+        layout.attach(new St.Label({
             text,
-            style_class: indented ? 'cpu-throttle-indicator-indented' : '',
+            style_class: column > 0 ? 'cpu-throttle-indicator-grid-inner-name' : '',
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
-        }));
-        box.add_child(value);
-        item.add_child(box);
-        this.menu.addMenuItem(item);
-        return value;
+        }), column, row, 1, 1);
+        const labels = [];
+        for (let index = 1; index <= values; index++) {
+            const label = new St.Label({x_align: Clutter.ActorAlign.END, y_align: Clutter.ActorAlign.CENTER});
+            layout.attach(label, column + index, row, 1, 1);
+            labels.push(label);
+        }
+        return labels;
     }
 
     /**
-     * Shows or hides a row of the menu.
+     * Adds a part of the laptop to a row of the grid of temperatures and power.
      *
-     * @param {St.Label} label - the label _addRow returned for the row
+     * @param {Clutter.GridLayout} layout - the layout _addGrid returned for a grid whose rows can be marked
+     * @param {number} row - the row of the grid
+     * @param {string} text - the name of the part
+     * @param {boolean} indented - whether the name is indented, as a part of the part above
+     * @returns {{background: St.Widget, labels: St.Label[], temperature: St.Label, power: St.Label}} the row, with the
+     *   labels of its temperature and its power to set them on
+     */
+    _addPartRow(layout, row, text, indented) {
+        // The background spans the row behind its labels, which are added after it.
+        const background = new St.Widget({style_class: 'cpu-throttle-indicator-row-background'});
+        layout.attach(background, 0, row, 3, 1);
+        const name = new St.Label({
+            text,
+            style_class: indented ? 'cpu-throttle-indicator-cell cpu-throttle-indicator-indented'
+                : 'cpu-throttle-indicator-cell',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        layout.attach(name, 0, row, 1, 1);
+        const [temperature, power] = [1, 2].map(column => {
+            const label = new St.Label({
+                style_class: 'cpu-throttle-indicator-cell',
+                x_align: Clutter.ActorAlign.END,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            layout.attach(label, column, row, 1, 1);
+            return label;
+        });
+        return {background, labels: [name, temperature, power], temperature, power};
+    }
+
+    /**
+     * Shows or hides a row of the grid of temperatures and power.
+     *
+     * @param {object} row - the row _addPartRow returned
      * @param {boolean} visible - whether the row is shown
      */
-    _setRowVisible(label, visible) {
-        // The label is in the box which _addRow put into the menu item.
-        label.get_parent().get_parent().visible = visible;
+    _setRowVisible(row, visible) {
+        for (const actor of [row.background, ...row.labels])
+            actor.visible = visible;
     }
 
     /**
-     * Shows a temperature in a row of the menu, and marks the row while the temperature is critical.
+     * Shows a temperature in a row of the grid of temperatures and power, and marks the row while the temperature is
+     * critical.
      *
-     * @param {St.Label} label - the label _addRow returned for the row
+     * @param {object} row - the row _addPartRow returned
      * @param {number|null} temperature - the temperature in degrees Celsius, or null when the sensor cannot be read
      * @param {boolean} critical - whether the temperature is critical
      */
-    _showTemperature(label, temperature, critical) {
-        label.text = temperature === null ? 'error' : `${temperature.toFixed(1)} C`;
-        const row = label.get_parent();
+    _showTemperature(row, temperature, critical) {
+        row.temperature.text = temperature === null ? 'error' : `${temperature.toFixed(1)} C`;
         if (critical)
-            row.add_style_class_name(CRITICAL_ROW_STYLE_CLASS);
+            row.background.add_style_class_name(CRITICAL_ROW_STYLE_CLASS);
         else
-            row.remove_style_class_name(CRITICAL_ROW_STYLE_CLASS);
+            row.background.remove_style_class_name(CRITICAL_ROW_STYLE_CLASS);
+        for (const label of row.labels) {
+            if (critical)
+                label.add_style_class_name(CRITICAL_TEXT_STYLE_CLASS);
+            else
+                label.remove_style_class_name(CRITICAL_TEXT_STYLE_CLASS);
+        }
     }
 
     /**
@@ -382,19 +534,31 @@ class ThrottleIndicator extends PanelMenu.Button {
             }
             if (this._cancellable.is_cancelled())
                 return;
-            // The first line holds the times of all CPUs together, as "cpu" followed by the time spent in user, nice,
-            // system, idle, iowait, irq, softirq and steal, and then in guest and guest_nice, which user and nice
-            // include already. A CPU waiting for I/O is idle.
-            const times = new TextDecoder().decode(bytes.get_data()).split('\n', 1)[0].trim().split(/\s+/).slice(1, 9)
-                .map(Number);
-            const total = times.reduce((sum, time) => sum + time, 0);
-            const idle = times[3] + times[4];
-            const previous = this._cpuTimes;
-            this._cpuTimes = {total, idle};
-            if (previous && total > previous.total) {
-                const busy = 1 - (idle - previous.idle) / (total - previous.total);
-                this._cpuUsageLabel.text = `${Math.round(100 * busy)}%`;
+            // Each line "cpu<N>" holds the times of one logical CPU, as the time spent in user, nice, system, idle,
+            // iowait, irq, softirq and steal, and then in guest and guest_nice, which user and nice include already. A
+            // CPU waiting for I/O is idle.
+            const times = this._groupCpus.map(() => ({total: 0, idle: 0}));
+            for (const line of new TextDecoder().decode(bytes.get_data()).split('\n')) {
+                const match = /^cpu(\d+)\s+(.*)$/.exec(line);
+                const group = match ? this._groupCpus.findIndex(cpus => cpus.has(Number(match[1]))) : -1;
+                if (group < 0)
+                    continue;
+                const fields = match[2].trim().split(/\s+/).slice(0, 8).map(Number);
+                times[group].total += fields.reduce((sum, time) => sum + time, 0);
+                times[group].idle += fields[3] + fields[4];
             }
+            const previous = this._cpuTimes;
+            this._cpuTimes = times;
+            if (!previous)
+                return;
+            // A CPU taken offline leaves the totals of its group, which can then fall below the last reading.
+            times.forEach((current, group) => {
+                const elapsed = current.total - previous[group].total;
+                if (elapsed > 0) {
+                    const busy = 1 - (current.idle - previous[group].idle) / elapsed;
+                    this._usageLabels[group].text = `${Math.round(100 * busy)}%`;
+                }
+            });
         });
     }
 
@@ -416,20 +580,20 @@ class ThrottleIndicator extends PanelMenu.Button {
             if (this._cancellable.is_cancelled())
                 return;
             const power = decodeChargingPower(bytes.get_data());
-            this._setRowVisible(this._batteryPowerLabel, power !== null);
+            this._setRowVisible(this._batteryRow, power !== null);
             if (power !== null)
-                this._batteryPowerLabel.text = formatPower(power);
+                this._batteryRow.power.text = formatPower(power);
         });
     }
 
     _sampleTemperatures() {
         // Each file is read off the main loop and one read at a time, the same as the metrics table.
-        for (const row of this._temperatureRows) {
-            if (row.reading)
+        for (const sensor of this._temperatureSensors) {
+            if (sensor.reading)
                 continue;
-            row.reading = true;
-            row.file.load_bytes_async(this._cancellable, (file, result) => {
-                row.reading = false;
+            sensor.reading = true;
+            sensor.file.load_bytes_async(this._cancellable, (file, result) => {
+                sensor.reading = false;
                 let temperature = null;
                 try {
                     const [bytes] = file.load_bytes_finish(result);
@@ -446,8 +610,8 @@ class ThrottleIndicator extends PanelMenu.Button {
                     }
                 }
                 if (!this._cancellable.is_cancelled()) {
-                    this._showTemperature(row.label, temperature,
-                        row.critical !== null && temperature !== null && temperature >= row.critical);
+                    this._showTemperature(sensor.row, temperature,
+                        sensor.critical !== null && temperature !== null && temperature >= sensor.critical);
                 }
             });
         }
@@ -579,44 +743,41 @@ class ThrottleIndicator extends PanelMenu.Button {
         const shares = throttleShares(previous.metrics, metrics, elapsed);
         for (const reason of REASONS)
             this._shareLabels.get(reason.key).text = `${Math.round(shares[reason.key])}%`;
-        // A group which is not working is slow because it has nothing to do, so reporting a share of its maximum
-        // would say nothing about whether anything is holding it back.
         metrics.coreGroups.forEach((group, index) => {
-            this._frequencyLabels[index].text = group.active
-                ? formatFrequency(group.frequency, group.maxFrequency)
-                : 'idle';
+            this._frequencyLabels[index].text = formatFrequency(group.frequency, group.maxFrequency);
         });
-        // The GPU and the NPU are slow when they have nothing to do, the same as a group of cores. The table has no busy
-        // percentage for the memory, so its frequency is always shown.
-        this._graphicsFrequencyLabel.text = metrics.graphicsActivity > 0
-            ? formatFrequency(metrics.graphicsFrequency, this._clockLimits.graphics)
-            : 'idle';
-        this._npuFrequencyLabel.text = metrics.npuActivity > 0
-            ? formatFrequency(metrics.npuFrequency, this._clockLimits.npu)
-            : 'idle';
+        this._graphicsFrequencyLabel.text = formatFrequency(metrics.graphicsFrequency, this._clockLimits.graphics);
+        this._npuFrequencyLabel.text = formatFrequency(metrics.npuFrequency, this._clockLimits.npu);
         this._memoryFrequencyLabel.text = formatFrequency(metrics.memoryFrequency, this._clockLimits.memory);
         this._graphicsUsageLabel.text = `${metrics.graphicsActivity}%`;
         this._npuUsageLabel.text = `${Math.round(metrics.npuActivity)}%`;
+        // The usage of the memory is the bandwidth of its reads and writes together.
+        unwrapDramBandwidth(previous.metrics, metrics, elapsed);
+        this._memoryUsageLabel.text = formatBandwidth(metrics.dramReads + metrics.dramWrites,
+            this._clockLimits.memoryBandwidth);
 
-        // The table carries no temperature limits, so none of these temperatures is ever marked as critical.
-        this._showTemperature(this._coreLabel, metrics.temperatureCore, false);
-        this._showTemperature(this._gfxLabel, metrics.temperatureGfx, false);
-        this._showTemperature(this._socLabel, metrics.temperatureSoc, false);
+        // The table carries no temperature limits, so none of these temperatures is ever marked as critical. The
+        // laptop's temperature is the skin temperature, which AMD's firmware interface describes as the highest skin
+        // temperature the APU and the sensors on the chassis report.
+        this._showTemperature(this._laptopRow, metrics.temperatureSkin, false);
+        this._showTemperature(this._cpuRow, metrics.temperatureCore, false);
+        this._showTemperature(this._gpuRow, metrics.temperatureGfx, false);
+        this._showTemperature(this._socRow, metrics.temperatureSoc, false);
 
-        this._systemPowerLabel.text = formatPower(metrics.systemPower);
-        this._apuPowerLabel.text = formatPower(metrics.apuPower);
-        this._corePowerLabel.text = formatPower(metrics.corePower);
-        this._graphicsPowerLabel.text = formatPower(metrics.graphicsPower);
-        this._npuPowerLabel.text = formatPower(metrics.npuPower);
+        this._laptopRow.power.text = formatPower(metrics.systemPower);
+        this._apuRow.power.text = formatPower(metrics.apuPower);
+        this._cpuRow.power.text = formatPower(metrics.corePower);
+        this._gpuRow.power.text = formatPower(metrics.graphicsPower);
+        this._npuRow.power.text = formatPower(metrics.npuPower);
         // The APU's power which neither the cores, the GPU nor the NPU draw is drawn by the rest of the chip, such as
         // the data fabric, the memory controller and its PHY, the display and media engines and the I/O. The cores'
         // power is the firmware's estimate, so the difference can come out slightly below zero while the rest of the
         // chip idles.
-        this._socPowerLabel.text = formatPower(
+        this._socRow.power.text = formatPower(
             Math.max(0, metrics.apuPower - metrics.corePower - metrics.graphicsPower - metrics.npuPower));
         // The laptop's power which the APU does not draw is drawn by the display, the memory modules, the SSD, the
         // wireless card, the fan, the USB devices and the voltage regulators' losses.
-        this._otherPowerLabel.text = formatPower(
+        this._otherRow.power.text = formatPower(
             metrics.systemPower === null ? null : Math.max(0, metrics.systemPower - metrics.apuPower));
 
         const dominant = dominantReason(shares, THRESHOLD_PERCENT);
@@ -679,6 +840,7 @@ export default class CpuThrottleIndicatorExtension extends Extension {
         this._indicator = new Indicator(`${this.path}/icons`, {
             metricsFile: file,
             clockLimits: findClockLimits(file),
+            groupCpus: findGroupCpus(),
             fanFiles: findFanFiles(),
             boardSensorFiles: findBoardSensorFiles(),
             apuSensor: findApuSensor(),

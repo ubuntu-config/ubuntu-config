@@ -363,12 +363,12 @@ installed.
 
 ### Processor throttling
 
-An indicator appears in the top bar while the processor is being held below the speed it would otherwise run
-at, and names the limit which holds it there. Its menu breaks that down into the share of the last interval each
-limit accounted for, alongside the frequencies of the cores, the GPU, the NPU and the memory, the usage of the CPU,
-the GPU and the NPU, the fan speed, the temperatures and the power. It is always the first of the indicators on the
-right of the top bar, so the icons of applications, which the AppIndicators extension shows there, follow it whichever
-started first.
+An indicator appears in the top bar while the processor is being held below the speed it would otherwise run at, and
+names the limit which holds it there. Its menu breaks that down into the share of the last interval each limit
+accounted for, alongside the frequencies of the cores, the GPU, the NPU and the memory, the usage of the cores, the
+GPU and the NPU, the fan speed, the temperatures and the power. It is always the first of the indicators on the
+right of the top bar, so the icons of applications, which the AppIndicators extension shows there, follow it
+whichever started first.
 
 The interfaces the usual tools read for this are Intel's and AMD publishes no equivalent, so the indicator
 reads the APU's own metrics table at `/sys/class/drm/card*/device/gpu_metrics` instead. That table counts the
@@ -378,24 +378,34 @@ publishing the table in the `gpu_metrics_v3_0` layout, which Strix Point in the 
 
 The table also holds the power, the busy percentages and the clocks the menu shows. The firmware reads the laptop's
 power from the platform's PSYS sensor: the power the laptop's components draw from the AC adapter or the battery,
-without the power which charges the battery. On battery it was measured within 2 W of the discharge rate the battery
-reports at up to 25 W, and about 15% under it at 55 W to 65 W. The table holds it in a 16 bit field of milliwatts,
-which wraps at 65.5 W, and the indicator adds the wrapped part back, as the laptop's power is never below the APU's.
-The SoC row is the APU's power which neither the cores, the GPU nor the NPU draw, such as the power of the data fabric
-and of the memory controller and its PHY. The memory modules draw their power outside the APU, so the other row
-includes it, as the laptop's power which the APU does not draw, together with the power of the display and the SSD.
-While the battery charges, a battery row shows the power which charges it, from the voltage and the current the kernel
-reports for the battery, as the laptop's power does not include it. The GPU's and the DRAM's frequencies are given as
-a share of the top of the clock levels amdgpu lists in `pp_dpm_sclk` and `pp_dpm_mclk`, and the NPU's as a share of
-1800 MHz, the top of the NPU's clock table in the kernel's `amdxdna` driver. The CPU usage comes from `/proc/stat`.
+without the power which charges the battery. On battery it was measured within about 2 W of the discharge rate the
+battery reports at up to 25 W, and about 15% under it at 55 W to 65 W. The table holds it in a 16 bit field of
+milliwatts, which wraps at 65.5 W, and the indicator adds the wrapped part back, as the laptop's power is never below
+the APU's. The SoC row is the APU's power which neither the cores, the GPU nor the NPU draw, such as the power of the
+data fabric and of the memory controller and its PHY. The memory modules draw their power outside the APU, so the
+other row includes it, as the laptop's power which the APU does not draw, together with the power of the display and
+the SSD. While the battery charges, a battery row shows the power which charges it, from the voltage and the current
+the kernel reports for the battery, as the laptop's power does not include it. The GPU's and the DRAM's frequencies
+are given as a share of the top of the clock levels amdgpu lists in `pp_dpm_sclk` and `pp_dpm_mclk`, and the NPU's as
+a share of 1800 MHz, the top of the NPU's clock table in the kernel's `amdxdna` driver. The usage of each group of
+cores comes from `/proc/stat`, for the logical CPUs whose maximum frequency in cpufreq is the group's. The usage of
+the DRAM is the bandwidth of its reads and writes, as a share of 89.6 GB/s, the bandwidth of the two 64 bit channels
+at the top of the memory clock. The table holds the bandwidth in 16 bit fields of MB/s, which wrap at 65.5 GB/s, and
+the reads go above that under a large language model on the GPU. The firmware averages the bandwidth with a time
+constant of 1 second, so between two readings it can fall at most to e^(-elapsed/1 s) of the earlier one, and the
+indicator corrects a reading under that bound by the wrap. A bandwidth above the wrap already when the indicator
+starts shows as low until it falls below the wrap, and so does one above it when a reading misses the bound: the
+indicator reads the table every 2 seconds, at which the bound misses about a third of the wrapped readings of a day of
+logs, while reading it every second would miss none.
 
 The menu shows the temperatures of the memory modules, the SSD and the wireless card from their hwmon devices. It
 reads them, the EC's reading of the APU's temperature and the battery only while it is open, as a read of the SSD's or
-the wireless card's sensor sends the device a command, which wakes it from a power saving state. A temperature turns
-red when it reaches the critical limit its hwmon device reports: 85 C for the memory modules, 93.85 C for the SSD, and
-114.85 C for the APU's temperature which the EC reads, the threshold at which the EC throttles the APU. The table
-carries no limits for the temperatures of the CPU, the GPU and the SoC, and the wireless card reports none, so these
-never turn red.
+the wireless card's sensor sends the device a command, which wakes it from a power saving state. The laptop's
+temperature is the skin temperature from the table, which AMD's firmware interface describes as the highest skin
+temperature the APU and the sensors on the chassis report. A temperature turns red when it reaches the critical limit
+its hwmon device reports: 85 C for the memory modules, 93.85 C for the SSD, and 114.85 C for the APU's temperature
+which the EC reads, the threshold at which the EC throttles the APU. The table carries no limits for the temperatures
+of the laptop, the CPU, the GPU and the SoC, and the wireless card reports none, so these never turn red.
 
 The menu also shows the fan's speed and the target speed the embedded controller (EC) is bringing it to, both as the
 EC reports them through `cros_ec`'s hwmon device. The target is 0 while the fan is off. While
