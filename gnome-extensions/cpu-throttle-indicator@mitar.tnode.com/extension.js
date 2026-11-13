@@ -9,6 +9,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
+import {decodeChargingPower, findBatteryFile} from './battery.js';
 import {FAN_MAX_RPM, findApuSensor, findBoardSensorFiles, findFanFiles} from './ec.js';
 import {findMemorySensors, findSsdSensors, findWifiSensors} from './hwmon.js';
 import {
@@ -97,16 +98,21 @@ class ThrottleIndicator extends PanelMenu.Button {
      * @param {Gio.File[]} devices.boardSensorFiles - the board's sensors, as findBoardSensorFiles returned them
      * @param {{file: Gio.File, critical: number|null}|null} devices.apuSensor - the APU's sensor, as findApuSensor
      *   returned it
+     * @param {Gio.File|null} devices.batteryFile - the battery's state, as findBatteryFile returned it
      * @param {{name: string, file: Gio.File, critical: number|null}[]} devices.temperatureSensors - the other hwmon
      *   temperature sensors to show in the menu, each with the name to show it under and its critical limit in degrees
      *   Celsius, or null when it has none
      */
-    _init(iconsPath, {metricsFile, clockLimits, fanFiles, boardSensorFiles, apuSensor, temperatureSensors}) {
+    _init(iconsPath, {
+        metricsFile, clockLimits, fanFiles, boardSensorFiles, apuSensor, batteryFile, temperatureSensors,
+    }) {
         super._init(0, 'CPU Throttle Indicator');
 
         this._file = metricsFile;
         this._clockLimits = clockLimits;
         this._cpuTimesFile = Gio.File.new_for_path(CPU_TIMES_PATH);
+        this._batteryFile = batteryFile;
+        this._readingBattery = false;
         this._cancellable = new Gio.Cancellable();
         this._previous = null;
         this._reading = false;
@@ -210,14 +216,20 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._graphicsPowerLabel = this._addRow('GPU', true);
         this._npuPowerLabel = this._addRow('NPU', true);
         this._socPowerLabel = this._addRow('SoC', true);
+        // The power which charges the battery is not part of the laptop's, and its row is shown only while the battery
+        // charges.
+        this._batteryPowerLabel = this._addRow('Battery');
+        this._setRowVisible(this._batteryPowerLabel, false);
         this._otherPowerLabel = this._addRow('Other');
 
-        // The hwmon temperature sensors are shown only in the menu, so they are read only while it is open, and once
-        // right as it opens. A read of the sensor of an NVMe drive or of a wireless card sends a command to the
-        // device, which wakes it from a power saving state.
+        // The hwmon temperature sensors and the battery are shown only in the menu, so they are read only while it is
+        // open, and once right as it opens. A read of the sensor of an NVMe drive or of a wireless card sends a command
+        // to the device, which wakes it from a power saving state.
         this.menu.connect('open-state-changed', (menu, open) => {
-            if (open)
+            if (open) {
                 this._sampleTemperatures();
+                this._sampleBattery();
+            }
         });
 
         // Nothing is known until two readings have been compared, and until then there is nothing to show.
@@ -228,8 +240,10 @@ class ThrottleIndicator extends PanelMenu.Button {
             this._sampleCpuTimes();
             this._sampleFans();
             this._sampleBoardSensors();
-            if (this.menu.isOpen)
+            if (this.menu.isOpen) {
                 this._sampleTemperatures();
+                this._sampleBattery();
+            }
             return GLib.SOURCE_CONTINUE;
         });
         this._sample();
@@ -272,6 +286,17 @@ class ThrottleIndicator extends PanelMenu.Button {
         item.add_child(box);
         this.menu.addMenuItem(item);
         return value;
+    }
+
+    /**
+     * Shows or hides a row of the menu.
+     *
+     * @param {St.Label} label - the label _addRow returned for the row
+     * @param {boolean} visible - whether the row is shown
+     */
+    _setRowVisible(label, visible) {
+        // The label is in the box which _addRow put into the menu item.
+        label.get_parent().get_parent().visible = visible;
     }
 
     /**
@@ -371,6 +396,30 @@ class ThrottleIndicator extends PanelMenu.Button {
                 const busy = 1 - (idle - previous.idle) / (total - previous.total);
                 this._cpuUsageLabel.text = `${Math.round(100 * busy)}%`;
             }
+        });
+    }
+
+    _sampleBattery() {
+        // The file is read off the main loop and one read at a time, the same as the metrics table.
+        if (!this._batteryFile || this._readingBattery)
+            return;
+        this._readingBattery = true;
+        this._batteryFile.load_bytes_async(this._cancellable, (file, result) => {
+            this._readingBattery = false;
+            let bytes;
+            try {
+                [bytes] = file.load_bytes_finish(result);
+            } catch (error) {
+                if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                    console.warn(`CPU Throttle Indicator: cannot read ${file.get_path()}: ${error.message}`);
+                return;
+            }
+            if (this._cancellable.is_cancelled())
+                return;
+            const power = decodeChargingPower(bytes.get_data());
+            this._setRowVisible(this._batteryPowerLabel, power !== null);
+            if (power !== null)
+                this._batteryPowerLabel.text = formatPower(power);
         });
     }
 
@@ -635,6 +684,7 @@ export default class CpuThrottleIndicatorExtension extends Extension {
             fanFiles: findFanFiles(),
             boardSensorFiles: findBoardSensorFiles(),
             apuSensor: findApuSensor(),
+            batteryFile: findBatteryFile(),
             temperatureSensors: [
                 ...named('DRAM', findMemorySensors()),
                 ...named('SSD', findSsdSensors()),

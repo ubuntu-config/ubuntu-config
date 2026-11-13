@@ -384,17 +384,18 @@ which wraps at 65.5 W, and the indicator adds the wrapped part back, as the lapt
 The SoC row is the APU's power which neither the cores, the GPU nor the NPU draw, such as the power of the data fabric
 and of the memory controller and its PHY. The memory modules draw their power outside the APU, so the other row
 includes it, as the laptop's power which the APU does not draw, together with the power of the display and the SSD.
-The GPU's and the DRAM's frequencies are given as a share of the top of the clock levels amdgpu lists in `pp_dpm_sclk`
-and `pp_dpm_mclk`, and the NPU's as a share of 1800 MHz, the top of the NPU's clock table in the kernel's `amdxdna`
-driver. The CPU usage comes from `/proc/stat`.
+While the battery charges, a battery row shows the power which charges it, from the voltage and the current the kernel
+reports for the battery, as the laptop's power does not include it. The GPU's and the DRAM's frequencies are given as
+a share of the top of the clock levels amdgpu lists in `pp_dpm_sclk` and `pp_dpm_mclk`, and the NPU's as a share of
+1800 MHz, the top of the NPU's clock table in the kernel's `amdxdna` driver. The CPU usage comes from `/proc/stat`.
 
 The menu shows the temperatures of the memory modules, the SSD and the wireless card from their hwmon devices. It
-reads them and the EC's reading of the APU's temperature only while it is open, as a read of the SSD's or the wireless
-card's sensor sends the device a command, which wakes it from a power saving state. A temperature turns red when it
-reaches the critical limit its hwmon device reports: 85 C for the memory modules, 93.85 C for the SSD, and 114.85 C
-for the APU's temperature which the EC reads, the threshold at which the EC throttles the APU. The table carries no
-limits for the temperatures of the CPU, the GPU, the SoC and the skin, and the wireless card reports none, so these
-never turn red.
+reads them, the EC's reading of the APU's temperature and the battery only while it is open, as a read of the SSD's or
+the wireless card's sensor sends the device a command, which wakes it from a power saving state. A temperature turns
+red when it reaches the critical limit its hwmon device reports: 85 C for the memory modules, 93.85 C for the SSD, and
+114.85 C for the APU's temperature which the EC reads, the threshold at which the EC throttles the APU. The table
+carries no limits for the temperatures of the CPU, the GPU, the SoC and the skin, and the wireless card reports none,
+so these never turn red.
 
 The menu also shows the fan's speed and the target speed the embedded controller (EC) is bringing it to, both as the
 EC reports them through `cros_ec`'s hwmon device. The target is 0 while the fan is off. While
