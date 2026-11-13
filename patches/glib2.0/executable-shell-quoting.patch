@@ -1,0 +1,142 @@
+Description: Take the executable of an application from its command line as g_shell_parse_argv() splits it.
+ g_app_info_get_executable() returned the first word of the Exec line up to a space, so for a quoted executable it
+ returned the quotes as part of it, and for one with a space in its path only the part before the space, although GLib
+ runs the Exec line split with g_shell_parse_argv(). It now returns the first word as g_shell_parse_argv() splits it,
+ and the first word up to a space only for a command line which g_shell_parse_argv() rejects, which
+ g_app_info_create_from_commandline() accepts. g_app_info_create_from_commandline() names an application without a
+ name after the base name of the same word, as its FIXME suggested.
+ .
+ The test /appinfo/executable-quoted checks command lines with a quoted executable, one with a space in its path and
+ one which g_shell_parse_argv() rejects, and a desktop file with a quoted executable.
+Author: Mitar
+Bug: https://gitlab.gnome.org/GNOME/glib/-/issues/2930
+Forwarded: no
+Last-Update: 2026-11-13
+--- a/gio/gdesktopappinfo.c
++++ b/gio/gdesktopappinfo.c
+@@ -1814,15 +1814,29 @@
+  * binary_from_exec:
+  * @exec: an exec line
+  *
+- * Returns the first word in an exec line (ie: the binary name).
++ * Returns the first word in an exec line (ie: the binary name), split as
++ * g_shell_parse_argv() splits the exec line when launching it.
+  *
+- * If @exec is "  progname --foo %F" then returns "progname".
++ * If @exec is "  progname --foo %F" then returns "progname", and if it is
++ * "'/opt/my app/progname' --foo %F" then returns "/opt/my app/progname".
+  */
+ static char *
+ binary_from_exec (const char *exec)
+ {
+   const char *p, *start;
++  char **argv;
+ 
++  if (g_shell_parse_argv (exec, NULL, &argv, NULL))
++    {
++      char *binary = g_strdup (argv[0]);
++
++      g_strfreev (argv);
++      return binary;
++    }
++
++  /* g_app_info_create_from_commandline() accepts a command line which
++   * g_shell_parse_argv() rejects, such as one with an unbalanced quote, so
++   * fall back to the first word up to a space. */
+   p = exec;
+   while (*p == ' ')
+     p++;
+@@ -4643,8 +4657,6 @@
+                                          GAppInfoCreateFlags   flags,
+                                          GError              **error)
+ {
+-  char **split;
+-  char *basename;
+   GDesktopAppInfo *info;
+ 
+   g_return_val_if_fail (commandline, NULL);
+@@ -4668,13 +4680,14 @@
+     info->name = g_strdup (application_name);
+   else
+     {
+-      /* FIXME: this should be more robust. Maybe g_shell_parse_argv and use argv[0] */
+-      split = g_strsplit (commandline, " ", 2);
+-      basename = split[0] ? g_path_get_basename (split[0]) : NULL;
+-      g_strfreev (split);
+-      info->name = basename;
+-      if (info->name == NULL)
++      char *binary = binary_from_exec (commandline);
++
++      if (binary[0] != '\0')
++        info->name = g_path_get_basename (binary);
++      else
+         info->name = g_strdup ("custom");
++
++      g_free (binary);
+     }
+   info->comment = g_strdup_printf (_("Custom definition for %s"), info->name);
+ 
+--- a/gio/tests/appinfo.c
++++ b/gio/tests/appinfo.c
+@@ -313,6 +313,53 @@
+   g_free (cmdline_out);
+ }
+ 
++/* The executable is the first word of the command line as g_shell_parse_argv()
++ * splits it, also when it is quoted, see
++ * https://gitlab.gnome.org/GNOME/glib/-/issues/2930. */
++static void
++test_executable_quoted (void)
++{
++  const struct
++  {
++    const char *commandline;
++    const char *executable;
++    const char *name;
++  } tests[] = {
++    { "/usr/bin/hello --friendly", "/usr/bin/hello", "hello" },
++    { "\"/usr/bin/hello\" --exemplary", "/usr/bin/hello", "hello" },
++    { "  '/opt/my app/hello world' --friendly", "/opt/my app/hello world", "hello world" },
++    /* A command line which g_shell_parse_argv() rejects is split at the
++     * first space. */
++    { "\"/usr/bin/hello --unbalanced", "\"/usr/bin/hello", "hello" },
++    { "", "%f", "custom" },
++  };
++  GDesktopAppInfo *info;
++  GKeyFile *kf;
++  gsize i;
++
++  for (i = 0; i < G_N_ELEMENTS (tests); i++)
++    {
++      GAppInfo *appinfo;
++      GError *error = NULL;
++
++      appinfo = g_app_info_create_from_commandline (tests[i].commandline, NULL, G_APP_INFO_CREATE_NONE, &error);
++      g_assert_no_error (error);
++      g_assert_cmpstr (g_app_info_get_executable (appinfo), ==, tests[i].executable);
++      g_assert_cmpstr (g_app_info_get_name (appinfo), ==, tests[i].name);
++      g_object_unref (appinfo);
++    }
++
++  kf = g_key_file_new ();
++  g_key_file_set_string (kf, G_KEY_FILE_DESKTOP_GROUP, G_KEY_FILE_DESKTOP_KEY_TYPE, G_KEY_FILE_DESKTOP_TYPE_APPLICATION);
++  g_key_file_set_string (kf, G_KEY_FILE_DESKTOP_GROUP, G_KEY_FILE_DESKTOP_KEY_NAME, "Quoted");
++  g_key_file_set_string (kf, G_KEY_FILE_DESKTOP_GROUP, G_KEY_FILE_DESKTOP_KEY_EXEC, "\"true\" --option %U");
++  info = g_desktop_app_info_new_from_keyfile (kf);
++  g_key_file_unref (kf);
++  g_assert_nonnull (info);
++  g_assert_cmpstr (g_app_info_get_executable (G_APP_INFO (info)), ==, "true");
++  g_object_unref (info);
++}
++
+ static void
+ test_launch_context (void)
+ {
+@@ -634,6 +681,7 @@
+   g_test_add_func ("/appinfo/launch/no-appid", test_launch_no_app_id);
+   g_test_add_func ("/appinfo/show-in", test_show_in);
+   g_test_add_func ("/appinfo/commandline", test_commandline);
++  g_test_add_func ("/appinfo/executable-quoted", test_executable_quoted);
+   g_test_add_func ("/appinfo/launch-context", test_launch_context);
+   g_test_add_func ("/appinfo/launch-context-signals", test_launch_context_signals);
+   g_test_add_func ("/appinfo/tryexec", test_tryexec);

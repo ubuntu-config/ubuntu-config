@@ -11,8 +11,8 @@ its process ID, and the handler keeps that process ID when gio-launch-desktop ex
 
 With --scope, each launch also has to run the handler in a systemd scope of its own, app-gnome-handler-PID.scope,
 which GLib with patches/glib2.0/scope-before-exec.patch creates when Firefox runs in a unit of the systemd user
-instance. GLib names the scope after the Exec key up to its first space, so OUT_DIR has to be a path which needs no
-quoting in a shell.
+instance. GLib names the scope after the base name of the executable, which Firefox quotes in the Exec key, so GLib
+needs patches/glib2.0/executable-shell-quoting.patch for the name to be "handler".
 
 Prints one line for each launch. When every check passed and Firefox exited with status 0, prints "RESULT: OK" and
 exits with 0, and otherwise exits with 1.

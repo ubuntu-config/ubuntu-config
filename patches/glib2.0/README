@@ -108,3 +108,24 @@ gsubprocess-trapped-accept-esrch.patch
     passes with it. The patch changes only the test and is not proposed upstream yet. Drop it once
     Ubuntu ships a GLib whose trace_children() in gio/tests/gsubprocess.c accepts ESRCH from
     PTRACE_CONT.
+
+executable-shell-quoting.patch
+    Makes g_app_info_get_executable() return the executable of an application as GLib runs it: the
+    first word of the Exec key as g_shell_parse_argv() splits it. It returned the first word up to a
+    space, with the quotes of a quoted executable, and only the part before the space of one whose
+    path has a space (GLib issue https://gitlab.gnome.org/GNOME/glib/-/issues/2930).
+    g_app_info_create_from_commandline() names an application created without a name after the base
+    name of the same word, which its FIXME suggested. A command line which g_shell_parse_argv()
+    rejects, which g_app_info_create_from_commandline() accepts, still gives its first word up to a
+    space.
+
+    Firefox quotes the executable of a local handler in the command line it creates the handler
+    from, see patches/firefox/local-handler-through-gio.patch, and scope-before-exec.patch names the
+    scope of an application without a desktop ID after its executable, after the base name of an
+    executable which starts with /. Without this patch, the executable of a handler started with a
+    quote, so its scope was named after the whole quoted path, escaped, instead of
+    app-gnome-handler-PID.scope.
+
+    The fix is binary_from_exec in gio/gdesktopappinfo.c. The patch adds the test
+    /appinfo/executable-quoted to gio/tests/appinfo.c, which fails without the fix. Not proposed
+    upstream yet. Drop the patch once GLib fixes issue 2930.
