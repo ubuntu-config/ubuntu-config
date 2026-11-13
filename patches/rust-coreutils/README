@@ -24,15 +24,17 @@ test-skip-list-stray-word.patch (debian-series)
 
 test-build-panic-unwind.patch (debian-series)
     Lets the tests compile with many jobs. The release profile sets panic = "abort", but a test
-    harness needs unwinding, so cargo test builds uu_stdbuf_libstdbuf twice, with panic=abort for the
-    coreutils binary and with panic=unwind for the test binaries. The crate is a cdylib, whose file
-    name has no hash, so both variants are linked to target/release/deps/libstdbuf.so, which cargo
-    warns about as an "output filename collision". With 16 and with 24 jobs both links ran at the
-    same time, one failed with "file truncated", and no test ran. The patch sets
-    CARGO_PROFILE_RELEASE_PANIC=unwind for the test step only, so that one variant exists, and the
-    install step still builds the installed binaries with panic=abort. uutils' main still sets
-    panic = "abort" and has uu_stdbuf depend on uu_stdbuf_libstdbuf, so drop the patch only once
-    the test step of a build no longer warns about the collision without it.
+    harness needs unwinding, so cargo test builds uu_stdbuf_libstdbuf twice, with panic=abort for
+    the coreutils binary and with panic=unwind for the test binaries. The crate is a cdylib, whose
+    file name has no hash, so both variants are linked to target/release/deps/libstdbuf.so, which
+    cargo warns about as an "output filename collision". With thin LTO, which
+    Tweak-release-build-profile.patch sets, both also write their intermediate objects into
+    target/release/deps, named after the output, so the two links read and rewrite the same
+    objects. With 16 and with 24 jobs one link failed with "file truncated", and no test ran. The
+    patch sets CARGO_PROFILE_RELEASE_PANIC=unwind for the test step only, so that one variant
+    exists, and the install step still builds the installed binaries with panic=abort. uutils' main
+    still sets panic = "abort" and has uu_stdbuf depend on uu_stdbuf_libstdbuf, so drop the patch
+    only once the test step of a build no longer warns about the collision without it.
 
     With both patches, builds with 24 jobs in a container ran all of tests/tests.rs: 5,424 tests
     passed, 82 were ignored, and 3 failed, in date, head and ls, in one build also one in install.

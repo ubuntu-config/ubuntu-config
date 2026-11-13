@@ -2,10 +2,11 @@ Description: Build the tests with panic=unwind, so that cargo builds libstdbuf o
  The release profile sets panic = "abort", but a test harness needs unwinding, so cargo test builds the dependencies of
  the test binaries with panic=unwind and those of the coreutils binary, which the tests run, with panic=abort.
  uu_stdbuf_libstdbuf is a dependency of both, and as a cdylib its file name has no hash, so both variants are linked to
- target/release/deps/libstdbuf.so, which cargo warns about as an "output filename collision". With many jobs both
- links run at the same time, one fails with "file truncated", and no test runs, as in 2 of 2 builds with 16 and 24
- jobs. The test step now sets CARGO_PROFILE_RELEASE_PANIC=unwind, so that only one variant exists. The install step
- builds the binaries it installs afterwards with the release profile, as before.
+ target/release/deps/libstdbuf.so, which cargo warns about as an "output filename collision". With thin LTO, which
+ Tweak-release-build-profile.patch sets, both also write their intermediate objects into target/release/deps, named
+ after the output, so the two links read and rewrite the same objects, one fails with "file truncated", and no test
+ runs, as in 2 of 2 builds with 16 and 24 jobs. The test step now sets CARGO_PROFILE_RELEASE_PANIC=unwind, so that only
+ one variant exists. The install step builds the binaries it installs afterwards with the release profile, as before.
 Author: Mitar
 Forwarded: no
 Last-Update: 2026-11-13
