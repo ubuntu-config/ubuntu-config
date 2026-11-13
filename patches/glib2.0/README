@@ -94,3 +94,17 @@ scope-before-exec.patch
                                   also after starting Thunderbird or Signal from the dock
       journalctl --user -b | grep 'Could not create transient scope'
                                   should find nothing
+
+gsubprocess-trapped-accept-esrch.patch
+    Fixes a race in the test /gsubprocess/exit-status/trapped of gio/tests/gsubprocess.c, which
+    runs during the build. The test traces a helper with ptrace, which spawns a shell and kills it
+    with SIGKILL as soon as the spawn returns, and asserts that continuing each stop of the traced
+    processes with PTRACE_CONT succeeds. When the helper kills the shell after waitpid() reported a
+    stop of the shell and before PTRACE_CONT, PTRACE_CONT fails with ESRCH, and with it the test and
+    the build, with "assertion failed (ptrace (PTRACE_CONT, pid, NULL, 0) >= 0): errno 3: No such
+    process". The patch makes the test accept ESRCH there. When the helper spawns true first, so
+    that its threads exist before it spawns the shell, and the test sleeps 20 ms before PTRACE_CONT
+    of processes other than the helper, the test fails this way every time without the patch, and
+    passes with it. The patch changes only the test and is not proposed upstream yet. Drop it once
+    Ubuntu ships a GLib whose trace_children() in gio/tests/gsubprocess.c accepts ESRCH from
+    PTRACE_CONT.

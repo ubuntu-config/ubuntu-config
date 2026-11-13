@@ -1,0 +1,71 @@
+Description: Accept ESRCH from PTRACE_CONT in the gsubprocess test of a traced child's exit status.
+ /gsubprocess/exit-status/trapped traces a helper which spawns sh -c "exec sleep infinity" and kills the shell with
+ SIGKILL as soon as the spawn returns. trace_children() continues each stop of the traced processes with PTRACE_CONT
+ and asserts that this succeeds, but when the helper kills the shell after waitpid() reported a stop of the shell and
+ before PTRACE_CONT, PTRACE_CONT fails with ESRCH. A build of the package failed once this way, with "assertion failed
+ (ptrace (PTRACE_CONT, pid, NULL, 0) >= 0): errno 3: No such process". When the helper spawns true first, so that its
+ threads exist before it spawns the shell, and the test sleeps 20 ms before PTRACE_CONT of processes other than the
+ helper, the test fails this way every time.
+ .
+ trace_children() now continues stops with continue_tracee(), which accepts ESRCH. It checks the result of waitpid()
+ with g_assert_no_errno(), as it asserted that errno is 0 also after a successful waitpid(), which does not reset
+ errno, so an ESRCH from an earlier PTRACE_CONT would fail it. With the patch, 100 runs of the test failed none,
+ without and with the changes forcing the race, and all tests of gsubprocess pass.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-13
+diff --git a/gio/tests/gsubprocess.c b/gio/tests/gsubprocess.c
+--- a/gio/tests/gsubprocess.c
++++ b/gio/tests/gsubprocess.c
+@@ -2012,6 +2012,17 @@ test_fd_conflation_child_err_report_fd (void)
+ 
+ #ifdef __linux__
+ 
++/* Continue the traced process @pid from its stop, delivering @signum to it.
++ * The process can have been killed since waitpid() reported the stop, as the
++ * sleep-and-kill helper kills the shell it spawns right away. PTRACE_CONT
++ * then fails with ESRCH, which is accepted. */
++static void
++continue_tracee (pid_t pid, int signum)
++{
++  if (ptrace (PTRACE_CONT, pid, NULL, signum) < 0)
++    g_assert_cmpint (errno, ==, ESRCH);
++}
++
+ /* Handle ptrace events on @main_child, and assert that when it exits, it does
+  * so with status %EXIT_SUCCESS, rather than signalling. Other than that, this
+  * just calls %PTRACE_CONT for all trace events. */
+@@ -2042,8 +2053,7 @@ trace_children (pid_t main_child)
+       if (pid == -1 && errno == ECHILD)
+         break;
+ 
+-      g_assert_cmpint (errno, ==, 0);
+-      g_assert_cmpint (pid, >=, 0);
++      g_assert_no_errno (pid);
+ 
+       if (WIFSTOPPED (wstatus))
+         stop_signum = WSTOPSIG (wstatus);
+@@ -2057,19 +2067,19 @@ trace_children (pid_t main_child)
+           switch (ptrace_event)
+             {
+             case 0:
+-              g_assert_no_errno (ptrace (PTRACE_CONT, pid, NULL, stop_signum));
++              continue_tracee (pid, stop_signum);
+               break;
+             default:
+-              g_assert_no_errno (ptrace (PTRACE_CONT, pid, NULL, 0));
++              continue_tracee (pid, 0);
+               break;
+             }
+           break;
+         case SIGSTOP:
+-          g_assert_no_errno (ptrace (PTRACE_CONT, pid, NULL, 0));
++          continue_tracee (pid, 0);
+           break;
+         default:
+           if (!WIFEXITED (wstatus) && !WIFSIGNALED (wstatus))
+-            g_assert_no_errno (ptrace (PTRACE_CONT, pid, NULL, stop_signum));
++            continue_tracee (pid, stop_signum);
+           break;
+         }
+ 

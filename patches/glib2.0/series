@@ -1,1 +1,2 @@
 scope-before-exec.patch
+gsubprocess-trapped-accept-esrch.patch
