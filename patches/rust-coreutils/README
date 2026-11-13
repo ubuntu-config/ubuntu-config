@@ -37,9 +37,10 @@ test-build-panic-unwind.patch (debian-series)
     objects. With 16 and with 24 jobs one link failed with "file truncated", and no test ran. The
     patch sets CARGO_PROFILE_RELEASE_PANIC=unwind for the test step only, so that one variant
     exists, and the install step still builds the installed binaries with panic=abort. The collision
-    is reported in https://github.com/uutils/coreutils/issues/16422, and uutils' main still sets
-    panic = "abort" and has uu_stdbuf depend on uu_stdbuf_libstdbuf, so drop the patch only once
-    the test step of a build no longer warns about the collision without it.
+    is reported in https://github.com/uutils/coreutils/issues/16422. Cargo 1.100 builds each unit in
+    a directory of its own, which avoids it, but its layout breaks the installation of
+    libstdbuf.so with make install, see https://github.com/uutils/coreutils/issues/16427. Drop the
+    patch once Ubuntu builds the package with cargo 1.100 or later.
 
     With both patches, builds with 24 jobs in a container ran all of tests/tests.rs: 5,424 tests
     passed, 82 were ignored, and 3 failed, in date, head and ls, in one build also one in install.
