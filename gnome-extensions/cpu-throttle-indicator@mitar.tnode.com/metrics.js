@@ -12,7 +12,6 @@ const OFFSET_FORMAT_REVISION = 2;
 const OFFSET_TEMPERATURE_GFX = 4;
 const OFFSET_TEMPERATURE_SOC = 6;
 const OFFSET_TEMPERATURE_CORE = 8;
-const OFFSET_TEMPERATURE_SKIN = 40;
 const OFFSET_AVERAGE_GFX_ACTIVITY = 42;
 const OFFSET_AVERAGE_IPU_ACTIVITY = 46;
 const OFFSET_AVERAGE_IPU_POWER = 116;
@@ -170,7 +169,6 @@ export function decodeMetrics(bytes) {
         temperatureCore: temperatureCore / 100,
         temperatureGfx: view.getUint16(OFFSET_TEMPERATURE_GFX, true) / 100,
         temperatureSoc: view.getUint16(OFFSET_TEMPERATURE_SOC, true) / 100,
-        temperatureSkin: view.getUint16(OFFSET_TEMPERATURE_SKIN, true) / 100,
         systemPower: systemPower === null ? null : systemPower / 1000,
         apuPower: apuPower / 1000,
         corePower: view.getUint32(OFFSET_AVERAGE_ALL_CORE_POWER, true) / 1000,

@@ -205,7 +205,6 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._coreLabel = this._addRow('CPU');
         this._gfxLabel = this._addRow('GPU');
         this._socLabel = this._addRow('SoC');
-        this._skinLabel = this._addRow('Skin');
         this._temperatureRows.push(...temperatureSensors.map(addTemperatureRow));
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Power'));
         // The laptop's power is the APU's and the other power together, and the APU's is its four parts together,
@@ -603,7 +602,6 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._showTemperature(this._coreLabel, metrics.temperatureCore, false);
         this._showTemperature(this._gfxLabel, metrics.temperatureGfx, false);
         this._showTemperature(this._socLabel, metrics.temperatureSoc, false);
-        this._showTemperature(this._skinLabel, metrics.temperatureSkin, false);
 
         this._systemPowerLabel.text = formatPower(metrics.systemPower);
         this._apuPowerLabel.text = formatPower(metrics.apuPower);

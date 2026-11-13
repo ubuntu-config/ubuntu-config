@@ -394,8 +394,8 @@ reads them, the EC's reading of the APU's temperature and the battery only while
 the wireless card's sensor sends the device a command, which wakes it from a power saving state. A temperature turns
 red when it reaches the critical limit its hwmon device reports: 85 C for the memory modules, 93.85 C for the SSD, and
 114.85 C for the APU's temperature which the EC reads, the threshold at which the EC throttles the APU. The table
-carries no limits for the temperatures of the CPU, the GPU, the SoC and the skin, and the wireless card reports none,
-so these never turn red.
+carries no limits for the temperatures of the CPU, the GPU and the SoC, and the wireless card reports none, so these
+never turn red.
 
 The menu also shows the fan's speed and the target speed the embedded controller (EC) is bringing it to, both as the
 EC reports them through `cros_ec`'s hwmon device. The target is 0 while the fan is off. While
