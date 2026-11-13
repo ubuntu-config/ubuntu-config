@@ -169,62 +169,41 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._warningItem = this._addWarning('Fan does not follow the processor heat',
             ['Fan control may be stuck on old temperatures.']);
 
-        // The limits are in two columns, the temperature limits on the left with the platform's PROCHOT under them,
-        // and the power limits on the right.
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Limits'));
-        const limits = this._addGrid();
-        const ofKind = kind => REASONS.filter(reason => reason.kind === kind);
-        const limitColumns = [[...ofKind('thermal'), ...ofKind('platform')], ofKind('power')];
-        this._shareLabels = new Map();
-        limitColumns.forEach((reasons, column) => reasons.forEach((reason, row) => {
-            const [label] = this._addGridRow(limits, row, 2 * column, reason.label, 1);
-            this._shareLabels.set(reason.key, label);
-        }));
+        // All sections are rows of one grid, so that their columns line up: the names, a first column of values and a
+        // second one.
+        const grid = this._addGrid();
+        let row = 0;
 
-        // The usage and the frequency of each part are in a column each, with a heading which names the columns.
-        // A line fills the room left of each name in the heading, as in the heading of a section. The line before the
-        // first name and that name share a cell spanning the column of the row names, so that the line also runs over
-        // the room the values of the first column leave free.
-        const clocks = this._addGrid();
-        const usageHeading = new St.BoxLayout({style_class: 'cpu-throttle-indicator-heading', x_expand: true});
-        usageHeading.add_child(this._createHeadingLine());
-        usageHeading.add_child(new St.Label({text: 'Usage', style_class: 'cpu-throttle-indicator-column-name'}));
-        clocks.attach(usageHeading, 0, 0, 2, 1);
-        const frequencyHeading = new St.BoxLayout({style_class: 'cpu-throttle-indicator-grid-heading', x_expand: true});
-        frequencyHeading.add_child(this._createHeadingLine());
-        frequencyHeading.add_child(new St.Label({text: 'Frequency'}));
-        clocks.attach(frequencyHeading, 2, 0, 1, 1);
+        // The limits are in two columns, the temperature limits with the platform's PROCHOT under them on the left,
+        // up to the first column of values, and the power limits in the second column of values.
+        this._addSectionHeading(grid, row++, 'Limits');
+        const ofKind = kind => REASONS.filter(reason => reason.kind === kind);
+        const [left, right] = [[...ofKind('thermal'), ...ofKind('platform')], ofKind('power')];
+        this._shareLabels = new Map();
+        for (let index = 0; index < Math.max(left.length, right.length); index++) {
+            const [leftLabel, rightLabel] = this._addLimitRow(grid, row++, left[index]?.label, right[index]?.label);
+            if (leftLabel)
+                this._shareLabels.set(left[index].key, leftLabel);
+            if (rightLabel)
+                this._shareLabels.set(right[index].key, rightLabel);
+        }
+
+        this._addColumnsHeading(grid, row++, null, 'Usage', 'Frequency');
         const clockRows = [...CORE_GROUPS.map(group => `${group.name} cores`), 'GPU', 'NPU', 'DRAM']
-            .map((name, index) => this._addGridRow(clocks, index + 1, 0, name, 2));
+            .map(name => this._addRow(grid, row++, name).values);
         this._usageLabels = clockRows.slice(0, CORE_GROUPS.length).map(([usage]) => usage);
         this._frequencyLabels = clockRows.slice(0, CORE_GROUPS.length).map(([, frequency]) => frequency);
         [[this._graphicsUsageLabel, this._graphicsFrequencyLabel], [this._npuUsageLabel, this._npuFrequencyLabel],
             [this._memoryUsageLabel, this._memoryFrequencyLabel]] = clockRows.slice(CORE_GROUPS.length);
-        // The fans have a column for their speed and one for their target, with a heading which names the section and
-        // the columns.
-        const fans = fanFiles.length ? this._addGrid() : null;
-        if (fans) {
-            // The name of the section and the name of the first column share a cell, so that the line between them
-            // runs over the room the values of the first column leave free.
-            const sectionHeading = new St.BoxLayout({style_class: 'cpu-throttle-indicator-heading', x_expand: true});
-            sectionHeading.add_child(new St.Label({text: 'Fans'}));
-            sectionHeading.add_child(this._createHeadingLine());
-            sectionHeading.add_child(new St.Label({text: 'Speed', style_class: 'cpu-throttle-indicator-column-name'}));
-            fans.attach(sectionHeading, 0, 0, 2, 1);
-            const targetHeading = new St.BoxLayout({
-                style_class: 'cpu-throttle-indicator-grid-heading',
-                x_expand: true,
-            });
-            targetHeading.add_child(this._createHeadingLine());
-            targetHeading.add_child(new St.Label({text: 'Target'}));
-            fans.attach(targetHeading, 2, 0, 1, 1);
-        }
+
+        if (fanFiles.length)
+            this._addColumnsHeading(grid, row++, 'Fans', 'Speed', 'Target');
         // Each entry shows one file, either the speed of a fan or its target.
         this._fanRows = [];
-        fanFiles.forEach((fan, index) => {
+        for (const fan of fanFiles) {
             // A single fan is the one which cools the APU, and several are numbered to tell them apart.
             const name = fanFiles.length === 1 ? 'APU' : `Fan ${fan.number}`;
-            const [speedLabel, targetLabel] = this._addGridRow(fans, index + 1, 0, name, 2);
+            const [speedLabel, targetLabel] = this._addRow(grid, row++, name).values;
             this._fanRows.push({
                 kind: 'speed',
                 file: fan.file,
@@ -243,32 +222,19 @@ class ThrottleIndicator extends PanelMenu.Button {
                     speed: undefined,
                 });
             }
-        });
-        this._fanSpeedRows = this._fanRows.filter(row => row.kind === 'speed');
-        this._fanTargetRows = this._fanRows.filter(row => row.kind === 'target');
-        // The temperature and the power of each part are in a column each, with a heading which names the columns.
-        const parts = this._addGrid(true);
-        const temperatureLine = this._createHeadingLine();
-        temperatureLine.add_style_class_name('cpu-throttle-indicator-cell');
-        parts.attach(temperatureLine, 0, 0, 1, 1);
-        parts.attach(new St.Label({
-            text: 'Temperature',
-            style_class: 'cpu-throttle-indicator-cell',
-            x_align: Clutter.ActorAlign.END,
-        }), 1, 0, 1, 1);
-        const powerHeading = new St.BoxLayout({
-            style_class: 'cpu-throttle-indicator-grid-heading cpu-throttle-indicator-cell',
-            x_expand: true,
-        });
-        powerHeading.add_child(this._createHeadingLine());
-        powerHeading.add_child(new St.Label({text: 'Power'}));
-        parts.attach(powerHeading, 2, 0, 1, 1);
+        }
+        this._fanSpeedRows = this._fanRows.filter(fanRow => fanRow.kind === 'speed');
+        this._fanTargetRows = this._fanRows.filter(fanRow => fanRow.kind === 'target');
+
         // The laptop's power is the APU's and the other power together, and the APU's is its four parts together,
         // which are indented under it. The power which charges the battery is not part of the laptop's, and its row
         // is shown only while the battery charges. The memory modules, the SSD and the wireless card draw a part of
         // the other power, and are indented under it.
-        let rows = 0;
-        const addPart = (name, indented = false) => this._addPartRow(parts, ++rows, name, indented);
+        this._addColumnsHeading(grid, row++, null, 'Temperature', 'Power');
+        const addPart = (name, indented = false) => {
+            const part = this._addRow(grid, row++, name, indented);
+            return {...part, temperature: part.values[0], power: part.values[1]};
+        };
         this._laptopRow = addPart('Laptop');
         this._apuRow = addPart('APU');
         this._cpuRow = addPart('CPU', true);
@@ -278,7 +244,7 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._batteryRow = addPart('Battery');
         this._setRowVisible(this._batteryRow, false);
         this._otherRow = addPart('Other');
-        const addSensor = (sensor, row) => ({file: sensor.file, critical: sensor.critical, row, reading: false});
+        const addSensor = (sensor, part) => ({file: sensor.file, critical: sensor.critical, row: part, reading: false});
         this._temperatureSensors = [
             ...(apuSensor ? [addSensor(apuSensor, this._apuRow)] : []),
             ...temperatureSensors.map(sensor => addSensor(sensor, addPart(sensor.name, true))),
@@ -326,24 +292,24 @@ class ThrottleIndicator extends PanelMenu.Button {
     }
 
     /**
-     * Adds a grid to the menu, for rows whose columns line up.
+     * Adds a grid to the menu, for rows whose columns line up and which can be marked as critical.
      *
-     * @param {boolean} [markable] - whether rows of the grid can be marked as critical, for which every child of the
-     *   grid has to have the style class cpu-throttle-indicator-cell
-     * @returns {Clutter.GridLayout} the layout of the grid, to attach labels to
+     * Every child of the grid has to have the style class cpu-throttle-indicator-cell, which together with the style of
+     * the grid and of the menu item holding it keeps the text where the theme puts the text of a menu item.
+     *
+     * @returns {Clutter.GridLayout} the layout of the grid, to attach children to
      */
-    _addGrid(markable = false) {
+    _addGrid() {
         // The theme clears the background of a menu item which does not react to the pointer, so the background which
         // marks a row is a child of the grid of its own.
         const item = new PopupMenu.PopupBaseMenuItem({
-            style_class: markable ? 'cpu-throttle-indicator-markable-item' : '',
+            style_class: 'cpu-throttle-indicator-grid-item',
             reactive: false,
             can_focus: false,
         });
         const layout = new Clutter.GridLayout();
         const grid = new St.Widget({
-            style_class: markable ? 'cpu-throttle-indicator-grid cpu-throttle-indicator-markable-grid'
-                : 'cpu-throttle-indicator-grid',
+            style_class: 'cpu-throttle-indicator-grid',
             layout_manager: layout,
             x_expand: true,
         });
@@ -373,43 +339,91 @@ class ThrottleIndicator extends PanelMenu.Button {
     }
 
     /**
-     * Adds a name and the labels of its values to a row of a grid.
+     * Adds the heading of a section without columns to a row of a grid, as the theme draws the heading of a section.
      *
      * @param {Clutter.GridLayout} layout - the layout _addGrid returned
      * @param {number} row - the row of the grid
-     * @param {number} column - the column of the name, with the values in the columns right of it
-     * @param {string} text - the name
-     * @param {number} values - the number of values
-     * @returns {St.Label[]} the labels of the values, to set the values on
+     * @param {string} title - the name of the section
      */
-    _addGridRow(layout, row, column, text, values) {
-        // A name right of other columns has room between it and the value left of it.
-        layout.attach(new St.Label({
-            text,
-            style_class: column > 0 ? 'cpu-throttle-indicator-grid-inner-name' : '',
+    _addSectionHeading(layout, row, title) {
+        const heading = new St.BoxLayout({
+            style_class: 'cpu-throttle-indicator-heading cpu-throttle-indicator-cell',
             x_expand: true,
-            y_align: Clutter.ActorAlign.CENTER,
-        }), column, row, 1, 1);
-        const labels = [];
-        for (let index = 1; index <= values; index++) {
-            const label = new St.Label({x_align: Clutter.ActorAlign.END, y_align: Clutter.ActorAlign.CENTER});
-            layout.attach(label, column + index, row, 1, 1);
-            labels.push(label);
-        }
-        return labels;
+        });
+        heading.add_child(new St.Label({text: title}));
+        heading.add_child(this._createHeadingLine());
+        layout.attach(heading, 0, row, 3, 1);
     }
 
     /**
-     * Adds a part of the laptop to a row of the grid of temperatures and power.
+     * Adds the heading of a section with two columns of values to a row of a grid, with a line left of the name of each
+     * column.
      *
-     * @param {Clutter.GridLayout} layout - the layout _addGrid returned for a grid whose rows can be marked
+     * @param {Clutter.GridLayout} layout - the layout _addGrid returned
      * @param {number} row - the row of the grid
-     * @param {string} text - the name of the part
-     * @param {boolean} indented - whether the name is indented, as a part of the part above
-     * @returns {{background: St.Widget, labels: St.Label[], temperature: St.Label, power: St.Label}} the row, with the
-     *   labels of its temperature and its power to set them on
+     * @param {string|null} title - the name of the section, left of the line before the name of the first column, or
+     *   null for none
+     * @param {string} first - the name of the first column of values
+     * @param {string} second - the name of the second column of values
      */
-    _addPartRow(layout, row, text, indented) {
+    _addColumnsHeading(layout, row, title, first, second) {
+        // The line before the name of the first column spans the column of the row names as well, so that it also
+        // runs over the room the values of the first column leave free.
+        const firstHeading = new St.BoxLayout({
+            style_class: 'cpu-throttle-indicator-heading cpu-throttle-indicator-cell',
+            x_expand: true,
+        });
+        if (title)
+            firstHeading.add_child(new St.Label({text: title}));
+        firstHeading.add_child(this._createHeadingLine());
+        firstHeading.add_child(new St.Label({text: first, style_class: 'cpu-throttle-indicator-column-name'}));
+        layout.attach(firstHeading, 0, row, 2, 1);
+        const secondHeading = new St.BoxLayout({
+            style_class: 'cpu-throttle-indicator-pair cpu-throttle-indicator-cell',
+            x_expand: true,
+        });
+        secondHeading.add_child(this._createHeadingLine());
+        secondHeading.add_child(new St.Label({text: second}));
+        layout.attach(secondHeading, 2, row, 1, 1);
+    }
+
+    /**
+     * Adds two limits to a row of a grid, each with its name and its share together, one in a cell spanning the column
+     * of the row names and the first column of values, and one in the second column of values.
+     *
+     * @param {Clutter.GridLayout} layout - the layout _addGrid returned
+     * @param {number} row - the row of the grid
+     * @param {string|undefined} left - the name of the first limit, or undefined for none
+     * @param {string|undefined} right - the name of the second limit, or undefined for none
+     * @returns {(St.Label|null)[]} the labels of the shares of the two limits, to set them on, with null for a limit
+     *   which is not there
+     */
+    _addLimitRow(layout, row, left, right) {
+        // The name of a limit is not a row name, so a long one does not widen the column of the row names.
+        const addLimit = (text, column, width) => {
+            if (!text)
+                return null;
+            const pair = new St.BoxLayout({style_class: 'cpu-throttle-indicator-pair cpu-throttle-indicator-cell'});
+            pair.add_child(new St.Label({text, x_expand: true, y_align: Clutter.ActorAlign.CENTER}));
+            const label = new St.Label({y_align: Clutter.ActorAlign.CENTER});
+            pair.add_child(label);
+            layout.attach(pair, column, row, width, 1);
+            return label;
+        };
+        return [addLimit(left, 0, 2), addLimit(right, 2, 1)];
+    }
+
+    /**
+     * Adds a name and two values to a row of a grid, with a background behind them which can mark the row.
+     *
+     * @param {Clutter.GridLayout} layout - the layout _addGrid returned
+     * @param {number} row - the row of the grid
+     * @param {string} text - the name
+     * @param {boolean} [indented] - whether the name is indented, as a part of the row above
+     * @returns {{background: St.Widget, labels: St.Label[], values: St.Label[]}} the row, with the labels of its two
+     *   values to set the values on
+     */
+    _addRow(layout, row, text, indented = false) {
         // The background spans the row behind its labels, which are added after it.
         const background = new St.Widget({style_class: 'cpu-throttle-indicator-row-background'});
         layout.attach(background, 0, row, 3, 1);
@@ -421,7 +435,7 @@ class ThrottleIndicator extends PanelMenu.Button {
             y_align: Clutter.ActorAlign.CENTER,
         });
         layout.attach(name, 0, row, 1, 1);
-        const [temperature, power] = [1, 2].map(column => {
+        const values = [1, 2].map(column => {
             const label = new St.Label({
                 style_class: 'cpu-throttle-indicator-cell',
                 x_align: Clutter.ActorAlign.END,
@@ -430,13 +444,13 @@ class ThrottleIndicator extends PanelMenu.Button {
             layout.attach(label, column, row, 1, 1);
             return label;
         });
-        return {background, labels: [name, temperature, power], temperature, power};
+        return {background, labels: [name, ...values], values};
     }
 
     /**
-     * Shows or hides a row of the grid of temperatures and power.
+     * Shows or hides a row of the grid.
      *
-     * @param {object} row - the row _addPartRow returned
+     * @param {object} row - the row _addRow returned
      * @param {boolean} visible - whether the row is shown
      */
     _setRowVisible(row, visible) {
@@ -445,10 +459,9 @@ class ThrottleIndicator extends PanelMenu.Button {
     }
 
     /**
-     * Shows a temperature in a row of the grid of temperatures and power, and marks the row while the temperature is
-     * critical.
+     * Shows a temperature in a row of the grid, and marks the row while the temperature is critical.
      *
-     * @param {object} row - the row _addPartRow returned
+     * @param {object} row - the row _addRow returned, with the label of the temperature as temperature
      * @param {number|null} temperature - the temperature in degrees Celsius, or null when the sensor cannot be read
      * @param {boolean} critical - whether the temperature is critical
      */

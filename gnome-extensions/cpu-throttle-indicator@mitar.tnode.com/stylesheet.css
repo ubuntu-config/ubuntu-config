@@ -13,22 +13,16 @@
     font-weight: bold;
 }
 
-/* A grid of names and values, with the rows as far apart as the theme puts the menu items. */
-.cpu-throttle-indicator-grid {
-    spacing-rows: 18px;
-    spacing-columns: 12px;
-}
-
-/* A grid whose rows can be marked, the menu item holding it, and the cells of the grid. The theme pads a menu item by
-   9px above and below and by 12px at the sides, and the item and the cells split that padding between them, as they
-   split the spacing of the rows and the columns of the grid. The text is where it is in the other grids, and the
-   background which marks a row covers the padding of its cells, so it has room around the text without changing the
-   height of the row. */
-.popup-menu-item.cpu-throttle-indicator-markable-item {
+/* The grid of the menu, the menu item holding it, and the cells of the grid. The theme pads a menu item by 9px above
+   and below and by 12px at the sides, and puts the menu items 36px apart for text 18px high. The item and the cells
+   split that padding between them, as they split the 12px between the columns. The text is where the theme puts the
+   text of a menu item, and the background which marks a row covers the padding of its cells, so it has room around
+   the text without changing the height of the row. */
+.popup-menu-item.cpu-throttle-indicator-grid-item {
     padding: 3px 6px;
 }
 
-.cpu-throttle-indicator-grid.cpu-throttle-indicator-markable-grid {
+.cpu-throttle-indicator-grid {
     spacing-rows: 6px;
     spacing-columns: 0;
 }
@@ -42,31 +36,27 @@
     padding-left: 24px;
 }
 
-/* The background of a row of a grid whose rows can be marked. */
+/* The background of a row. */
 .cpu-throttle-indicator-row-background {
     border-radius: 8px;
 }
 
-/* The heading of a section with a line right of its name, as far from the name as the theme puts the line of the
+/* The heading of a section, with a line right of its name, as far from the name as the theme puts the line of the
    heading of a section. */
 .cpu-throttle-indicator-heading {
     spacing: 6px;
 }
 
-/* The name of a column in the heading of a section, which together with the spacing of the heading is as far from
-   the line left of it as the columns are apart. */
+/* The name of the first column in the heading of a section, which together with the spacing of the heading is as far
+   from the line left of it as the columns are apart. */
 .cpu-throttle-indicator-column-name {
     padding-left: 6px;
 }
 
-/* A heading of a column of a grid with a line left of its name, as far from the name as the columns are apart. */
-.cpu-throttle-indicator-grid-heading {
+/* Two children of a cell, as far apart as the columns are: the line and the name in the heading of the second column,
+   and the name of a limit and its share. */
+.cpu-throttle-indicator-pair {
     spacing: 12px;
-}
-
-/* A name in a grid right of the value of another name. */
-.cpu-throttle-indicator-grid-inner-name {
-    padding-left: 12px;
 }
 
 /* A row with a critical temperature, in the same red as the warning, and its text. */
