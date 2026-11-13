@@ -14,6 +14,7 @@ Description: Launch an executable chosen as a handler through GIO, so that it ca
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090791
 Author: Mitar
 Forwarded: https://phabricator.services.mozilla.com/D340772
+Applied-Upstream: 162, https://github.com/mozilla-firefox/firefox/commit/cb24fc0b765df47312f72125ee2fff8db3e47a84
 Last-Update: 2026-11-12
 ---
 diff --git a/toolkit/system/gnome/nsGIOService.cpp b/toolkit/system/gnome/nsGIOService.cpp

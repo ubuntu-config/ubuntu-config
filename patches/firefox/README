@@ -163,8 +163,9 @@ local-handler-through-gio.patch
     tests/firefox/test_local_handler.py launches a handler each of these ways and checks that it runs through
     gio-launch-desktop with its argument unchanged, and with --scope, on this desktop with the GLib patch installed,
     that it runs in a scope of its own. The version for Mozilla also has an xpcshell test for the arguments,
-    uriloader/exthandler/tests/unit/test_launch_local_handler.js. Proposed as D340772 on
-    phabricator.services.mozilla.com, for Mozilla bug 2090791.
+    uriloader/exthandler/tests/unit/test_launch_local_handler.js. In Firefox 162, merged for
+    Mozilla bug 2090791 from D340772 on phabricator.services.mozilla.com. Drop the patch once the
+    PPA's Firefox is 162 or newer.
 
 wasm-sandboxed-libraries.patch (debian-series)
     Builds graphite, ogg, hunspell, expat, woff2 and soundtouch as wasm sandboxed libraries, as Mozilla's own
