@@ -520,6 +520,11 @@ def firefox(session, checks, out_dir):
         checks.check("logging out again ends Firefox cleanly, with its session saved", firefox_session_saved())
         ended, lines = ended_before_shell(session, logout_started, pid)
         checks.check("logging out again lets Firefox quit before GNOME Shell shuts down", ended, str(lines))
+        # xdg-desktop-portal-gtk logs each inhibit session still open when it stops waiting for them at the end of the
+        # session, such as one which the portal created before it restarted.
+        still_open = [line for line in session.journal(logout_started) if "still open" in line]
+        checks.check("logging out again waits for no inhibit session from before the portal restarted", not still_open,
+                     str(still_open))
         return {"before": before, "after": after, "dialogs": dialogs}
     finally:
         server.terminate()

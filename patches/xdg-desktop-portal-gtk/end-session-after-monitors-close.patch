@@ -8,9 +8,13 @@ Description: Let the session end only once the applications monitoring it closed
  xdg-desktop-portal-gtk now answers EndSession only once every inhibit session is closed, which happens when its
  application closes it or disconnects from the bus, so also when it exits, or after 8 seconds at most, less than the
  10 seconds gnome-session waits for the answer. It logs every inhibit session still open then.
+ .
+ The portal frontend closes the inhibit session of an application which closes it or disconnects, but nothing closed
+ the inhibit sessions of a frontend which left the bus, as xdg-desktop-portal does when it restarts, so the next
+ logout waited the full 8 seconds for them. xdg-desktop-portal-gtk now closes them once their frontend left the bus.
 Author: Mitar
 Forwarded: no
-Last-Update: 2026-11-07
+Last-Update: 2026-11-13
 ---
 --- a/src/inhibit.c
 +++ b/src/inhibit.c
@@ -43,7 +47,15 @@ Last-Update: 2026-11-07
      }
    else if (g_str_equal (signal_name, "Stop"))
      {
-@@ -441,6 +447,58 @@
+@@ -403,6 +409,7 @@
+ {
+   Session parent;
+   gboolean pending_query_end_response;
++  guint frontend_watch;
+ } InhibitSession;
+ 
+ typedef struct _InhibitSessionClass
+@@ -441,13 +448,72 @@
  }
  
  static void
@@ -102,9 +114,10 @@ Last-Update: 2026-11-07
  inhibit_session_close (Session *session)
  {
    InhibitSession *inhibit_session = (InhibitSession *)session;
-@@ -448,6 +506,12 @@
+ 
    g_debug ("Closing inhibit session %s", ((Session *)inhibit_session)->id);
  
++  g_clear_handle_id (&inhibit_session->frontend_watch, g_bus_unwatch_name);
    active_sessions = g_list_remove (active_sessions, session);
 +
 +  if (end_session_timeout != 0 && active_sessions == NULL)
@@ -115,3 +128,42 @@ Last-Update: 2026-11-07
  }
  
  static void
+@@ -491,6 +557,22 @@
+   return inhibit_session;
+ }
+ 
++/* The portal frontend closes the inhibit session of an application which
++ * closes it or disconnects from the bus, but nothing closes the inhibit
++ * sessions of a frontend which left the bus itself, as when it restarted. */
++static void
++frontend_vanished (GDBusConnection *connection,
++                   const char      *name,
++                   gpointer         user_data)
++{
++  Session *session = user_data;
++
++  g_debug ("Closing inhibit session %s, as %s left the bus", session->id, name);
++
++  if (!session->closed)
++    session_close (session);
++}
++
+ static gboolean
+ handle_create_monitor (XdpImplInhibit *object,
+                        GDBusMethodInvocation *invocation,
+@@ -513,6 +595,15 @@
+       goto out;
+     }
+ 
++  ((InhibitSession *)session)->frontend_watch =
++    g_bus_watch_name_on_connection (g_dbus_method_invocation_get_connection (invocation),
++                                    g_dbus_method_invocation_get_sender (invocation),
++                                    G_BUS_NAME_WATCHER_FLAGS_NONE,
++                                    NULL,
++                                    frontend_vanished,
++                                    session,
++                                    NULL);
++
+   response = 0;
+ 
+ out:

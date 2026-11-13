@@ -18,11 +18,20 @@ end-session-after-monitors-close.patch
     open as "The session ends with inhibit session ... still open". An application which monitors
     the session without quitting when it ends delays the end of the session by these 8 seconds.
 
+    The portal frontend, xdg-desktop-portal, closes the inhibit session of an application which
+    closes it or disconnects, but nothing closed the inhibit sessions of a frontend which left the
+    bus, as xdg-desktop-portal does when it restarts, so the next logout waited the full 8 seconds
+    for them. xdg-desktop-portal-gtk now closes the inhibit sessions of a frontend once it left the
+    bus. With stand-ins for gnome-session and the frontend, which created an inhibit session and
+    exited, EndSession was answered after 8.3 seconds without this, and after 1 ms with it.
+
     The wait is in wait_for_monitors_to_close in src/inhibit.c, which client_proxy_signal calls on
-    EndSession, and inhibit_session_close ends it. After a version bump, check that EndSession is still
-    answered there. The patch adds no test, as xdg-desktop-portal-gtk has no test suite. The session
-    test in tests/session/ checks it with Firefox: logging out has to let Firefox quit before GNOME
-    Shell shuts down. Not proposed upstream yet.
+    EndSession, and inhibit_session_close ends it. frontend_vanished closes the inhibit sessions of a
+    frontend which left the bus. After a version bump, check that EndSession is still answered there.
+    The patch adds no test, as xdg-desktop-portal-gtk has no test suite. The session test in
+    tests/session/ checks it with Firefox: logging out has to let Firefox quit before GNOME Shell
+    shuts down, and after xdg-desktop-portal restarted, logging out waits for no inhibit session of
+    the frontend from before the restart. Not proposed upstream yet.
 
     Check by hand after a rebuild and a new login, with Firefox open:
 
