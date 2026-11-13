@@ -14,7 +14,9 @@
 # started at login had no tray icon whenever it created the icon first. The extension exports the watcher before it
 # requests the name, so once the name has an owner, Chromium's checks pass.
 #
-# Not needed any more once Chromium waits for the name to have an owner: https://issues.chromium.org/issues/580998950
+# Not needed any more once the applications are built on an Electron release with Chromium 160 or later, which waits
+# for the name to have an owner (https://issues.chromium.org/issues/580998950), and whose own tray icon code switches
+# over once the name appears.
 
 set -u
 
