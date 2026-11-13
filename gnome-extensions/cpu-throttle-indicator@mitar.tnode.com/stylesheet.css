@@ -12,3 +12,22 @@
 .cpu-throttle-indicator-warning-title {
     font-weight: bold;
 }
+
+/* A row of the menu, with the space the theme puts between the children of a menu item. */
+.cpu-throttle-indicator-row {
+    spacing: 6px;
+}
+
+/* The name of a row which is a part of the row above it. */
+.cpu-throttle-indicator-indented {
+    padding-left: 18px;
+}
+
+/* A row with a critical temperature, in the same red as the warning. The spread of the shadow widens the red around
+   the text without changing the size of the row, so the text stays where it is in the other rows. */
+.cpu-throttle-indicator-critical {
+    color: white;
+    background-color: #c7162b;
+    border-radius: 4px;
+    box-shadow: 0 0 0 5px #c7162b;
+}

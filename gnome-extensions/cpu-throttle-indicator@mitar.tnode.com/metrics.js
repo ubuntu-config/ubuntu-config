@@ -13,11 +13,32 @@ const OFFSET_TEMPERATURE_GFX = 4;
 const OFFSET_TEMPERATURE_SOC = 6;
 const OFFSET_TEMPERATURE_CORE = 8;
 const OFFSET_TEMPERATURE_SKIN = 40;
+const OFFSET_AVERAGE_GFX_ACTIVITY = 42;
+const OFFSET_AVERAGE_IPU_ACTIVITY = 46;
+const OFFSET_AVERAGE_IPU_POWER = 116;
+const OFFSET_AVERAGE_APU_POWER = 120;
 const OFFSET_AVERAGE_GFX_POWER = 124;
 const OFFSET_AVERAGE_ALL_CORE_POWER = 132;
 const OFFSET_AVERAGE_CORE_POWER = 136;
+const OFFSET_AVERAGE_SYS_POWER = 168;
+const OFFSET_AVERAGE_GFXCLK_FREQUENCY = 174;
+const OFFSET_AVERAGE_IPUCLK_FREQUENCY = 180;
+const OFFSET_AVERAGE_UCLK_FREQUENCY = 186;
 const OFFSET_CURRENT_CORECLK = 190;
-const OFFSET_AVERAGE_SOCKET_POWER = 112;
+
+// The NPU's columns, each of which has an entry in average_ipu_activity.
+const NPU_COLUMNS = 8;
+
+/**
+ * The frequency of the NPU's array of AI engines when nothing holds it back, in MHz.
+ *
+ * amdgpu does not publish the NPU's clock levels, so the value comes from the kernel's amdxdna driver, the H clock of
+ * the top level of npu4_dpm_clk_table in drivers/accel/amdxdna/npu4_regs.c, which the driver uses for the NPU of
+ * Strix Point. average_ipuclk_frequency follows that clock: with the NPU awake at the driver's default power mode, it
+ * settled at 1152 MHz while average_mpipu_frequency settled at 798 MHz, the H clock and the MP-NPU clock of one level
+ * of the table.
+ */
+const NPU_MAX_FREQUENCY = 1800;
 
 /**
  * Where each core sits in the per-core arrays, and the frequency it reaches when nothing holds it back.
@@ -60,17 +81,25 @@ export const REASONS = [
     {key: 'spl', offset: 232, short: 'SPL', label: 'Sustained power (SPL)', kind: 'power'},
     {key: 'fppt', offset: 236, short: 'FPPT', label: 'Fast power (FPPT)', kind: 'power'},
     {key: 'sppt', offset: 240, short: 'SPPT', label: 'Slow power (SPPT)', kind: 'power'},
-    {key: 'thm_core', offset: 244, short: 'THM', label: 'Core temperature', kind: 'thermal'},
-    {key: 'thm_gfx', offset: 248, short: 'THM', label: 'Graphics temperature', kind: 'thermal'},
+    {key: 'thm_core', offset: 244, short: 'THM', label: 'CPU temperature', kind: 'thermal'},
+    {key: 'thm_gfx', offset: 248, short: 'THM', label: 'GPU temperature', kind: 'thermal'},
     {key: 'thm_soc', offset: 252, short: 'THM', label: 'SoC temperature', kind: 'thermal'},
 ];
 
 /**
  * Decodes a metrics table.
  *
+ * The power of the whole system is the power the firmware reads from the platform's PSYS sensor, the power the
+ * laptop's components draw from the AC adapter or the battery, without the power which charges the battery. On
+ * battery it was measured within 2 W of the discharge rate the battery reports at up to 25 W, and about 15% under it at
+ * 55 W to 65 W. It is null on a platform which reports none, and for a reading of exactly 65535 mW, which is the
+ * table's mark of a field which carries nothing.
+ *
  * @param {Uint8Array} bytes - the contents of a gpu_metrics file
- * @returns {object|null} the temperatures in degrees Celsius, the package power in watts, and the residency counter
- *   of every reason keyed by its name, or null when the contents are not a table in the layout this decodes
+ * @returns {object|null} the temperatures in degrees Celsius, the power of the whole system and of the APU and its
+ *   parts in watts, the busy percentages of the GPU and the NPU, the clocks of the GPU, the NPU and the memory and of
+ *   each group of cores in MHz, and the residency counter of every reason keyed by its name, or null when the contents
+ *   are not a table in the layout this decodes
  */
 export function decodeMetrics(bytes) {
     if (bytes.length !== STRUCTURE_SIZE)
@@ -119,17 +148,67 @@ export function decodeMetrics(bytes) {
     for (const reason of REASONS)
         residency[reason.key] = view.getUint32(reason.offset, true);
 
-    // Temperatures are in hundredths of a degree Celsius and power is in milliwatts.
+    // The NPU as a whole is busy for the share of the time its columns are busy on average.
+    let npuActivity = 0;
+    for (let column = 0; column < NPU_COLUMNS; column++)
+        npuActivity += view.getUint16(OFFSET_AVERAGE_IPU_ACTIVITY + 2 * column, true);
+    npuActivity /= NPU_COLUMNS;
+
+    // The power of the whole system is in a 16 bit field, which wraps at 65536 mW, and the laptop does draw more than
+    // that, for example 68 W with the APU at its fast power limit while the display, the memory and the fan draw 23 W.
+    // The laptop's power includes the APU's, so a reading below the APU's has wrapped, and the laptop never draws twice
+    // as much. A reading of 0 is a platform without a PSYS sensor.
+    const apuPower = view.getUint32(OFFSET_AVERAGE_APU_POWER, true);
+    let systemPower = view.getUint16(OFFSET_AVERAGE_SYS_POWER, true);
+    if (systemPower === 0 || systemPower === UNSET_UINT16)
+        systemPower = null;
+    else if (systemPower < apuPower)
+        systemPower += UNSET_UINT16 + 1;
+
+    // Temperatures are in hundredths of a degree Celsius, power is in milliwatts and clocks are in MHz.
     return {
         temperatureCore: temperatureCore / 100,
         temperatureGfx: view.getUint16(OFFSET_TEMPERATURE_GFX, true) / 100,
         temperatureSoc: view.getUint16(OFFSET_TEMPERATURE_SOC, true) / 100,
         temperatureSkin: view.getUint16(OFFSET_TEMPERATURE_SKIN, true) / 100,
-        socketPower: view.getUint32(OFFSET_AVERAGE_SOCKET_POWER, true) / 1000,
+        systemPower: systemPower === null ? null : systemPower / 1000,
+        apuPower: apuPower / 1000,
         corePower: view.getUint32(OFFSET_AVERAGE_ALL_CORE_POWER, true) / 1000,
         graphicsPower: view.getUint32(OFFSET_AVERAGE_GFX_POWER, true) / 1000,
+        npuPower: view.getUint16(OFFSET_AVERAGE_IPU_POWER, true) / 1000,
+        graphicsActivity: view.getUint16(OFFSET_AVERAGE_GFX_ACTIVITY, true),
+        npuActivity,
+        graphicsFrequency: view.getUint16(OFFSET_AVERAGE_GFXCLK_FREQUENCY, true),
+        npuFrequency: view.getUint16(OFFSET_AVERAGE_IPUCLK_FREQUENCY, true),
+        memoryFrequency: view.getUint16(OFFSET_AVERAGE_UCLK_FREQUENCY, true),
         coreGroups,
         residency,
+    };
+}
+
+/**
+ * Finds the frequencies the GPU, the NPU and the memory reach when nothing holds them back.
+ *
+ * @param {Gio.File} file - the metrics table, as findMetricsFile returned it
+ * @returns {{graphics: number|null, npu: number, memory: number|null}} the frequencies in MHz, with null for one
+ *   which the device does not report
+ */
+export function findClockLimits(file) {
+    // amdgpu lists the clock levels of the device's DPM next to its metrics table, one per line as "1: 2900Mhz", and
+    // marks the current level with a star.
+    const topLevel = name => {
+        try {
+            const [, contents] = file.get_parent().get_child(name).load_contents(null);
+            const levels = [...new TextDecoder().decode(contents).matchAll(/^\d+: (\d+)Mhz/gm)].map(m => Number(m[1]));
+            return levels.length ? Math.max(...levels) : null;
+        } catch {
+            return null;
+        }
+    };
+    return {
+        graphics: topLevel('pp_dpm_sclk'),
+        npu: NPU_MAX_FREQUENCY,
+        memory: topLevel('pp_dpm_mclk'),
     };
 }
 

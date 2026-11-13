@@ -9,10 +9,16 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import {FAN_MAX_RPM, findApuSensorFile, findBoardSensorFiles, findFanFiles} from './ec.js';
-import {CORE_GROUPS, REASONS, decodeMetrics, dominantReason, findMetricsFile, throttleShares} from './metrics.js';
+import {FAN_MAX_RPM, findApuSensor, findBoardSensorFiles, findFanFiles} from './ec.js';
+import {findMemorySensors, findSsdSensors, findWifiSensors} from './hwmon.js';
+import {
+    CORE_GROUPS, REASONS, decodeMetrics, dominantReason, findClockLimits, findMetricsFile, throttleShares,
+} from './metrics.js';
 
 const SAMPLE_INTERVAL_S = 2;
+
+// The file in which the kernel adds up the time all CPUs spent in each state since boot.
+const CPU_TIMES_PATH = '/proc/stat';
 
 // Below this share of an interval a reason counts as holding nothing back. The processor brushes against its limits
 // briefly whenever it boosts, and reporting that would leave the indicator showing almost all of the time.
@@ -56,17 +62,57 @@ const FAN_FULL_TARGET_SHARE = 0.95;
 // screen. Borrowing it keeps the warning in the theme's colors, light or dark.
 const WARNING_PANEL_STYLE_CLASS = 'screen-recording-indicator';
 
+// The style class of a menu row which shows a critical temperature.
+const CRITICAL_ROW_STYLE_CLASS = 'cpu-throttle-indicator-critical';
+
+/**
+ * Formats a frequency for the menu.
+ *
+ * @param {number} frequency - the frequency in MHz
+ * @param {number|null} maxFrequency - the frequency in MHz reached when nothing holds it back, or null when unknown
+ * @returns {string} the frequency, with its share of the maximum when that is known
+ */
+function formatFrequency(frequency, maxFrequency) {
+    return maxFrequency ? `${frequency} MHz, ${Math.round(100 * frequency / maxFrequency)}%` : `${frequency} MHz`;
+}
+
+/**
+ * Formats a power for the menu.
+ *
+ * @param {number|null} power - the power in watts, or null when unknown
+ * @returns {string} the power
+ */
+function formatPower(power) {
+    return power === null ? 'unknown' : `${power.toFixed(1)} W`;
+}
+
 const Indicator = GObject.registerClass(
 class ThrottleIndicator extends PanelMenu.Button {
-    _init(iconsPath, file, apuSensorFile, fanFiles, boardSensorFiles) {
+    /**
+     * @param {string} iconsPath - the directory of the extension's icons
+     * @param {object} devices - the files the indicator reads
+     * @param {Gio.File} devices.metricsFile - the metrics table, as findMetricsFile returned it
+     * @param {object} devices.clockLimits - the frequencies findClockLimits returned
+     * @param {object[]} devices.fanFiles - the fans, as findFanFiles returned them
+     * @param {Gio.File[]} devices.boardSensorFiles - the board's sensors, as findBoardSensorFiles returned them
+     * @param {{file: Gio.File, critical: number|null}|null} devices.apuSensor - the APU's sensor, as findApuSensor
+     *   returned it
+     * @param {{name: string, file: Gio.File, critical: number|null}[]} devices.temperatureSensors - the other hwmon
+     *   temperature sensors to show in the menu, each with the name to show it under and its critical limit in degrees
+     *   Celsius, or null when it has none
+     */
+    _init(iconsPath, {metricsFile, clockLimits, fanFiles, boardSensorFiles, apuSensor, temperatureSensors}) {
         super._init(0, 'CPU Throttle Indicator');
 
-        this._file = file;
-        this._apuSensorFile = apuSensorFile;
+        this._file = metricsFile;
+        this._clockLimits = clockLimits;
+        this._cpuTimesFile = Gio.File.new_for_path(CPU_TIMES_PATH);
         this._cancellable = new Gio.Cancellable();
         this._previous = null;
         this._reading = false;
-        this._readingApuSensor = false;
+        this._readingCpuTimes = false;
+        // The total and the idle time of all CPUs at the last reading, in the kernel's clock ticks.
+        this._cpuTimes = null;
         this._samplesUnderThreshold = 0;
         this._samplesHot = 0;
         this._samplesFanOffWhileHot = 0;
@@ -105,6 +151,13 @@ class ThrottleIndicator extends PanelMenu.Button {
             this._shareLabels.set(reason.key, this._addRow(reason.label));
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Frequency'));
         this._frequencyLabels = CORE_GROUPS.map(group => this._addRow(`${group.name} cores`));
+        this._graphicsFrequencyLabel = this._addRow('GPU');
+        this._npuFrequencyLabel = this._addRow('NPU');
+        this._memoryFrequencyLabel = this._addRow('DRAM');
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Usage'));
+        this._cpuUsageLabel = this._addRow('CPU');
+        this._graphicsUsageLabel = this._addRow('GPU');
+        this._npuUsageLabel = this._addRow('NPU');
         if (fanFiles.length)
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Fans'));
         // Each row of the section shows one file, either the speed of a fan or its target.
@@ -133,29 +186,54 @@ class ThrottleIndicator extends PanelMenu.Button {
         }
         this._fanSpeedRows = this._fanRows.filter(row => row.kind === 'speed');
         this._fanTargetRows = this._fanRows.filter(row => row.kind === 'target');
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Sensors'));
-        this._powerLabel = this._addRow('APU power (SPL budget)');
-        this._corePowerLabel = this._addRow('CPU cores');
-        this._graphicsPowerLabel = this._addRow('Graphics');
-        this._coreLabel = this._addRow('Hottest core');
-        this._gfxLabel = this._addRow('Graphics temperature');
-        this._socLabel = this._addRow('SoC temperature');
-        this._skinLabel = this._addRow('Skin temperature');
-        if (apuSensorFile)
-            this._apuSensorLabel = this._addRow('APU temperature (EC)');
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Temperature'));
+        const addTemperatureRow = sensor => ({
+            file: sensor.file,
+            critical: sensor.critical,
+            label: this._addRow(sensor.name),
+            reading: false,
+        });
+        // The APU's temperature which the EC reads leads the section, followed by the temperatures from the metrics
+        // table.
+        this._temperatureRows = apuSensor ? [addTemperatureRow({...apuSensor, name: 'APU'})] : [];
+        this._coreLabel = this._addRow('CPU');
+        this._gfxLabel = this._addRow('GPU');
+        this._socLabel = this._addRow('SoC');
+        this._skinLabel = this._addRow('Skin');
+        this._temperatureRows.push(...temperatureSensors.map(addTemperatureRow));
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Power'));
+        // The laptop's power is the APU's and the other power together, and the APU's is its four parts together,
+        // which are indented under it.
+        this._systemPowerLabel = this._addRow('Laptop');
+        this._apuPowerLabel = this._addRow('APU');
+        this._corePowerLabel = this._addRow('CPU', true);
+        this._graphicsPowerLabel = this._addRow('GPU', true);
+        this._npuPowerLabel = this._addRow('NPU', true);
+        this._socPowerLabel = this._addRow('SoC', true);
+        this._otherPowerLabel = this._addRow('Other');
+
+        // The hwmon temperature sensors are shown only in the menu, so they are read only while it is open, and once
+        // right as it opens. A read of the sensor of an NVMe drive or of a wireless card sends a command to the
+        // device, which wakes it from a power saving state.
+        this.menu.connect('open-state-changed', (menu, open) => {
+            if (open)
+                this._sampleTemperatures();
+        });
 
         // Nothing is known until two readings have been compared, and until then there is nothing to show.
         this.hide();
 
         this._timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, SAMPLE_INTERVAL_S, () => {
             this._sample();
-            this._sampleApuSensor();
+            this._sampleCpuTimes();
             this._sampleFans();
             this._sampleBoardSensors();
+            if (this.menu.isOpen)
+                this._sampleTemperatures();
             return GLib.SOURCE_CONTINUE;
         });
         this._sample();
-        this._sampleApuSensor();
+        this._sampleCpuTimes();
         this._sampleFans();
         this._sampleBoardSensors();
     }
@@ -175,15 +253,41 @@ class ThrottleIndicator extends PanelMenu.Button {
      * Adds a row to the menu which names something and leaves room for its value.
      *
      * @param {string} text - the name to show on the left of the row
+     * @param {boolean} [indented] - whether the name is indented, as a part of the row above
      * @returns {St.Label} the label on the right of the row, to set the value on
      */
-    _addRow(text) {
+    _addRow(text, indented = false) {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+        // The theme clears the background of a menu item which does not react to the pointer, so the background which
+        // marks a critical temperature is on a box inside the item.
+        const box = new St.BoxLayout({style_class: 'cpu-throttle-indicator-row', x_expand: true});
         const value = new St.Label({y_align: Clutter.ActorAlign.CENTER});
-        item.add_child(new St.Label({text, x_expand: true, y_align: Clutter.ActorAlign.CENTER}));
-        item.add_child(value);
+        box.add_child(new St.Label({
+            text,
+            style_class: indented ? 'cpu-throttle-indicator-indented' : '',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
+        box.add_child(value);
+        item.add_child(box);
         this.menu.addMenuItem(item);
         return value;
+    }
+
+    /**
+     * Shows a temperature in a row of the menu, and marks the row while the temperature is critical.
+     *
+     * @param {St.Label} label - the label _addRow returned for the row
+     * @param {number|null} temperature - the temperature in degrees Celsius, or null when the sensor cannot be read
+     * @param {boolean} critical - whether the temperature is critical
+     */
+    _showTemperature(label, temperature, critical) {
+        label.text = temperature === null ? 'error' : `${temperature.toFixed(1)} C`;
+        const row = label.get_parent();
+        if (critical)
+            row.add_style_class_name(CRITICAL_ROW_STYLE_CLASS);
+        else
+            row.remove_style_class_name(CRITICAL_ROW_STYLE_CLASS);
     }
 
     /**
@@ -237,39 +341,68 @@ class ThrottleIndicator extends PanelMenu.Button {
         });
     }
 
-    _sampleApuSensor() {
+    _sampleCpuTimes() {
         // The file is read off the main loop and one read at a time, the same as the metrics table.
-        if (!this._apuSensorFile || this._readingApuSensor)
+        if (this._readingCpuTimes)
             return;
-        this._readingApuSensor = true;
-        this._apuSensorFile.load_bytes_async(this._cancellable, (file, result) => {
-            this._readingApuSensor = false;
-            let temperature = null;
+        this._readingCpuTimes = true;
+        this._cpuTimesFile.load_bytes_async(this._cancellable, (file, result) => {
+            this._readingCpuTimes = false;
+            let bytes;
             try {
-                const [bytes] = file.load_bytes_finish(result);
-                temperature = Number(new TextDecoder().decode(bytes.get_data())) / 1000;
+                [bytes] = file.load_bytes_finish(result);
             } catch (error) {
-                if (error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
-                    return;
-                // INVALID_DATA is the EC failing to read the sensor. Any other error is about reaching the file and
-                // says nothing about the sensor, so the menu keeps showing its last reading.
-                if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.INVALID_DATA)) {
+                if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                     console.warn(`CPU Throttle Indicator: cannot read ${file.get_path()}: ${error.message}`);
-                    return;
-                }
+                return;
             }
-            if (!this._cancellable.is_cancelled())
-                this._updateApuSensor(temperature);
+            if (this._cancellable.is_cancelled())
+                return;
+            // The first line holds the times of all CPUs together, as "cpu" followed by the time spent in user, nice,
+            // system, idle, iowait, irq, softirq and steal, and then in guest and guest_nice, which user and nice
+            // include already. A CPU waiting for I/O is idle.
+            const times = new TextDecoder().decode(bytes.get_data()).split('\n', 1)[0].trim().split(/\s+/).slice(1, 9)
+                .map(Number);
+            const total = times.reduce((sum, time) => sum + time, 0);
+            const idle = times[3] + times[4];
+            const previous = this._cpuTimes;
+            this._cpuTimes = {total, idle};
+            if (previous && total > previous.total) {
+                const busy = 1 - (idle - previous.idle) / (total - previous.total);
+                this._cpuUsageLabel.text = `${Math.round(100 * busy)}%`;
+            }
         });
     }
 
-    /**
-     * Reads the APU temperature the embedded controller reports, and shows it in the menu.
-     *
-     * @param {number|null} temperature - the temperature in degrees Celsius, or null when the EC cannot read the sensor
-     */
-    _updateApuSensor(temperature) {
-        this._apuSensorLabel.text = temperature === null ? 'error' : `${temperature.toFixed(1)} C`;
+    _sampleTemperatures() {
+        // Each file is read off the main loop and one read at a time, the same as the metrics table.
+        for (const row of this._temperatureRows) {
+            if (row.reading)
+                continue;
+            row.reading = true;
+            row.file.load_bytes_async(this._cancellable, (file, result) => {
+                row.reading = false;
+                let temperature = null;
+                try {
+                    const [bytes] = file.load_bytes_finish(result);
+                    temperature = Number(new TextDecoder().decode(bytes.get_data())) / 1000;
+                } catch (error) {
+                    if (error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                        return;
+                    // INVALID_DATA is the driver reporting that it cannot read the sensor, as the EC's driver does for
+                    // every error state the EC reports for a sensor. Any other error is about reaching the file and
+                    // says nothing about the sensor, so the menu keeps showing its last reading.
+                    if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.INVALID_DATA)) {
+                        console.warn(`CPU Throttle Indicator: cannot read ${file.get_path()}: ${error.message}`);
+                        return;
+                    }
+                }
+                if (!this._cancellable.is_cancelled()) {
+                    this._showTemperature(row.label, temperature,
+                        row.critical !== null && temperature !== null && temperature >= row.critical);
+                }
+            });
+        }
     }
 
     _sampleFans() {
@@ -402,16 +535,42 @@ class ThrottleIndicator extends PanelMenu.Button {
         // would say nothing about whether anything is holding it back.
         metrics.coreGroups.forEach((group, index) => {
             this._frequencyLabels[index].text = group.active
-                ? `${group.frequency} MHz, ${Math.round(100 * group.frequency / group.maxFrequency)}%`
+                ? formatFrequency(group.frequency, group.maxFrequency)
                 : 'idle';
         });
-        this._powerLabel.text = `${metrics.socketPower.toFixed(1)} W`;
-        this._corePowerLabel.text = `${metrics.corePower.toFixed(1)} W`;
-        this._graphicsPowerLabel.text = `${metrics.graphicsPower.toFixed(1)} W`;
-        this._coreLabel.text = `${metrics.temperatureCore.toFixed(1)} C`;
-        this._gfxLabel.text = `${metrics.temperatureGfx.toFixed(1)} C`;
-        this._socLabel.text = `${metrics.temperatureSoc.toFixed(1)} C`;
-        this._skinLabel.text = `${metrics.temperatureSkin.toFixed(1)} C`;
+        // The GPU and the NPU are slow when they have nothing to do, the same as a group of cores. The table has no busy
+        // percentage for the memory, so its frequency is always shown.
+        this._graphicsFrequencyLabel.text = metrics.graphicsActivity > 0
+            ? formatFrequency(metrics.graphicsFrequency, this._clockLimits.graphics)
+            : 'idle';
+        this._npuFrequencyLabel.text = metrics.npuActivity > 0
+            ? formatFrequency(metrics.npuFrequency, this._clockLimits.npu)
+            : 'idle';
+        this._memoryFrequencyLabel.text = formatFrequency(metrics.memoryFrequency, this._clockLimits.memory);
+        this._graphicsUsageLabel.text = `${metrics.graphicsActivity}%`;
+        this._npuUsageLabel.text = `${Math.round(metrics.npuActivity)}%`;
+
+        // The table carries no temperature limits, so none of these temperatures is ever marked as critical.
+        this._showTemperature(this._coreLabel, metrics.temperatureCore, false);
+        this._showTemperature(this._gfxLabel, metrics.temperatureGfx, false);
+        this._showTemperature(this._socLabel, metrics.temperatureSoc, false);
+        this._showTemperature(this._skinLabel, metrics.temperatureSkin, false);
+
+        this._systemPowerLabel.text = formatPower(metrics.systemPower);
+        this._apuPowerLabel.text = formatPower(metrics.apuPower);
+        this._corePowerLabel.text = formatPower(metrics.corePower);
+        this._graphicsPowerLabel.text = formatPower(metrics.graphicsPower);
+        this._npuPowerLabel.text = formatPower(metrics.npuPower);
+        // The APU's power which neither the cores, the GPU nor the NPU draw is drawn by the rest of the chip, such as
+        // the data fabric, the memory controller and its PHY, the display and media engines and the I/O. The cores'
+        // power is the firmware's estimate, so the difference can come out slightly below zero while the rest of the
+        // chip idles.
+        this._socPowerLabel.text = formatPower(
+            Math.max(0, metrics.apuPower - metrics.corePower - metrics.graphicsPower - metrics.npuPower));
+        // The laptop's power which the APU does not draw is drawn by the display, the memory modules, the SSD, the
+        // wireless card, the fan, the USB devices and the voltage regulators' losses.
+        this._otherPowerLabel.text = formatPower(
+            metrics.systemPower === null ? null : Math.max(0, metrics.systemPower - metrics.apuPower));
 
         const dominant = dominantReason(shares, THRESHOLD_PERCENT);
         if (dominant) {
@@ -463,9 +622,25 @@ export default class CpuThrottleIndicatorExtension extends Extension {
         }
         // An embedded controller which does not report the APU temperature leaves the menu without it, and one which
         // reports no fan leaves the menu without its fans. The warning about the fan not following the heat then
-        // rests on whichever of the fans and the board temperatures the EC does report.
-        this._indicator = new Indicator(`${this.path}/icons`, file, findApuSensorFile(), findFanFiles(),
-            findBoardSensorFiles());
+        // rests on whichever of the fans and the board temperatures the EC does report. The menu lists the sensors of
+        // the memory modules, the SSDs and the wireless cards this system has, numbered only when there are several
+        // of a kind to tell apart.
+        const named = (name, sensors) => sensors.map((sensor, index) => ({
+            ...sensor,
+            name: sensors.length === 1 ? name : `${name} ${index + 1}`,
+        }));
+        this._indicator = new Indicator(`${this.path}/icons`, {
+            metricsFile: file,
+            clockLimits: findClockLimits(file),
+            fanFiles: findFanFiles(),
+            boardSensorFiles: findBoardSensorFiles(),
+            apuSensor: findApuSensor(),
+            temperatureSensors: [
+                ...named('DRAM', findMemorySensors()),
+                ...named('SSD', findSsdSensors()),
+                ...named('Wi-Fi', findWifiSensors()),
+            ],
+        });
         Main.panel.addToStatusArea(this.uuid, this._indicator);
         // The indicator stays the first one on the right of the top bar. Indicators added after it are mostly added at
         // the start of that box as well, and AppIndicators adds the icons of applications at its second place, counting
