@@ -87,6 +87,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     AppArmor rules which fusermount3 needs with libfuse 3.17.
   - [File indexing does not crash on vanished downloads](#file-indexing-does-not-crash-on-vanished-downloads):
     localsearch's extractor handles a file deleted before it could read it.
+  - [A command's crash is not reported as a crash of timeout](#a-commands-crash-is-not-reported-as-a-crash-of-timeout):
+    timeout turns off its own core dumps before it passes on the signal which killed the command.
   - [Only the working internal microphone is offered](#only-the-working-internal-microphone-is-offered): the audio
     coprocessor's microphone input, which has no microphones wired to it, is left out.
   - [snapd's desktop helper starts with the desktop](#snapds-desktop-helper-starts-with-the-desktop): it starts and
@@ -804,6 +806,15 @@ error without crashing (`patches/localsearch/`, `patches/tinysparql/`). The fixe
 [localsearch merge request 707](https://gitlab.gnome.org/GNOME/localsearch/-/merge_requests/707) and
 [tinysparql merge request 819](https://gitlab.gnome.org/GNOME/tinysparql/-/merge_requests/819), and the patches can be
 dropped once Ubuntu ships versions which include them.
+
+### A command's crash is not reported as a crash of timeout
+
+When a command which timeout runs is killed by a signal, timeout kills itself with the same signal, so that its exit
+status shows the signal. Ubuntu's timeout, from the Rust coreutils, dumped core when the signal was one like SIGSEGV or
+SIGABRT, and apport reported a crash of timeout besides the crash of the command. GNU timeout turns off its own core
+dumps first. The Rust coreutils are patched with the upstream fix (`patches/rust-coreutils/`), from
+[uutils pull request 15157](https://github.com/uutils/coreutils/pull/15157), which is not in a release yet, and the
+patch can be dropped once Ubuntu ships a release which includes it.
 
 ### Only the working internal microphone is offered
 

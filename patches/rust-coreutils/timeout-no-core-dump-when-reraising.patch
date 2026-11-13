@@ -1,0 +1,89 @@
+Description: Do not dump core in timeout when it passes on the signal which killed the command.
+ When the command it runs is killed by a signal, timeout kills itself with the same signal, so that its own exit
+ status shows the signal. For a signal like SIGSEGV or SIGABRT, timeout then dumped core too, and apport reported a
+ crash of timeout besides the crash of the command. timeout now first turns off core dumps for itself, with
+ prctl(PR_SET_DUMPABLE, 0), or where that fails with a core size limit of 0, and kills itself only when that succeeded,
+ as GNU timeout does. The new test test_child_core_dump_not_repeated runs timeout with an unlimited core size and checks
+ that it is killed by SIGSEGV without dumping core.
+ .
+ Both commits of the pull request, combined. The test is placed before test_preserve_status_even_when_send_signal, as
+ 0.10.0 lacks the test which precedes it upstream.
+Author: Tanbir Hossain Ramim <96797470+TanbirRamim@users.noreply.github.com>
+Origin: backport, https://github.com/uutils/coreutils/pull/15157
+Bug: https://github.com/uutils/coreutils/issues/15144
+Applied-Upstream: main after 0.12.0, commits af6ccebde81ac3359d26d28c602506e70f8a10ae c9c790b352053100ff30f53093fce6b052290204, not yet in a release
+Last-Update: 2026-11-13
+diff --git a/src/uu/timeout/src/platform/unix.rs b/src/uu/timeout/src/platform/unix.rs
+--- a/src/uu/timeout/src/platform/unix.rs
++++ b/src/uu/timeout/src/platform/unix.rs
+@@ -3,7 +3,7 @@
+ // For the full copyright and license information, please view the LICENSE
+ // file that was distributed with this source code.
+ 
+-// spell-checker:ignore (ToDO) sigstr setpgid sigchld sigwait getpid TTIN TTOU
++// spell-checker:ignore (ToDO) sigstr setpgid sigchld sigwait getpid TTIN TTOU rlimit setrlimit Dumpable
+ 
+ use std::io;
+ use std::os::unix::process::CommandExt;
+@@ -136,9 +136,31 @@ pub(crate) fn preserve_signal_info(signal: core::ffi::c_int) -> core::ffi::c_int
+     // The easiest way to preserve the latter seems to be to kill
+     // ourselves with whatever signal our child exited with, which is
+     // what the following is intended to accomplish.
+-    if let Some(sig) = signal_from_raw(signal) {
++    //
++    // If the child dumped core, re-raising a signal like SIGSEGV would make
++    // us dump core too and get blamed for the crash, so only do it once
++    // core dumps are off.
++    if let Some(sig) = signal_from_raw(signal)
++        && disable_core_dumps()
++    {
+         let _ = unblock_signal(sig);
+         let _ = kill_process(getpid(), sig);
+     }
+     signal
+ }
++
++/// Make sure this process won't dump core, returning whether that worked.
++fn disable_core_dumps() -> bool {
++    use rustix::process::{Resource, Rlimit, setrlimit};
++    #[cfg(any(target_os = "linux", target_os = "android"))]
++    if rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
++        .is_ok()
++    {
++        return true;
++    }
++    let limit = Rlimit {
++        current: Some(0),
++        maximum: Some(0),
++    };
++    setrlimit(Resource::Core, limit).is_ok()
++}
+diff --git a/tests/by-util/test_timeout.rs b/tests/by-util/test_timeout.rs
+--- a/tests/by-util/test_timeout.rs
++++ b/tests/by-util/test_timeout.rs
+@@ -130,6 +130,25 @@ fn test_kill_after_preserves_timeout_exit_without_preserve_status() {
+         .fails_with_code(124)
+         .no_output();
+ }
++/// When the child dumps core, timeout re-raises its signal without dumping
++/// core itself.
++// Linux only: on macOS the child would write a real core file into /cores.
++#[test]
++#[cfg(target_os = "linux")]
++fn test_child_core_dump_not_repeated() {
++    use std::os::unix::process::ExitStatusExt;
++    let ts = TestScenario::new(util_name!());
++    let script = r#"ulimit -c unlimited 2>/dev/null; exec "$0" timeout 5 sh -c 'kill -SEGV $$'"#;
++    let status = std::process::Command::new("sh")
++        .args(["-c", script])
++        .arg(&ts.bin_path)
++        .current_dir(ts.fixtures.as_string())
++        .status()
++        .unwrap();
++    assert_eq!(status.signal(), Some(libc::SIGSEGV));
++    assert!(!status.core_dumped());
++}
++
+ #[test]
+ fn test_preserve_status_even_when_send_signal() {
+     let (ts, bin) = scenario_with_bin();

@@ -1,0 +1,22 @@
+Description: Build the tests with panic=unwind, so that cargo builds libstdbuf once.
+ The release profile sets panic = "abort", but a test harness needs unwinding, so cargo test builds the dependencies of
+ the test binaries with panic=unwind and those of the coreutils binary, which the tests run, with panic=abort.
+ uu_stdbuf_libstdbuf is a dependency of both, and as a cdylib its file name has no hash, so both variants are linked to
+ target/release/deps/libstdbuf.so, which cargo warns about as an "output filename collision". With many jobs both
+ links run at the same time, one fails with "file truncated", and no test runs, as in 2 of 2 builds with 16 and 24
+ jobs. The test step now sets CARGO_PROFILE_RELEASE_PANIC=unwind, so that only one variant exists. The install step
+ builds the binaries it installs afterwards with the release profile, as before.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-13
+--- a/debian/rules
++++ b/debian/rules
+@@ -122,7 +122,7 @@
+ 	@echo "Skipping the test suite on s390x to stay under the buildd timeout"
+ else
+ 	# for now, don't fail the build if tests are failing
+-	CARGO_HOME=$(CURDIR)/debian/cargo_home make PROFILE=release MULTICALL=$(MULTICALL) \
++	CARGO_PROFILE_RELEASE_PANIC=unwind CARGO_HOME=$(CURDIR)/debian/cargo_home make PROFILE=release MULTICALL=$(MULTICALL) \
+ 				TEST_NO_FAIL_FAST="-- --skip test_dd::test_stdin_stdout_skip_w_multiplier \
+ 				--skip test_env::test_env_arg_ignore_signal_valid_signals \
+ 				--skip test_env::test_env_french \

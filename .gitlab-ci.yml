@@ -102,6 +102,7 @@ build:
           - libportal
           - localsearch
           - ptyxis
+          - rust-coreutils
           - tinysparql
           - vte2.91
           - xdg-desktop-portal

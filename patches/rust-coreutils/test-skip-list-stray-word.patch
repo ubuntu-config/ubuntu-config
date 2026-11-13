@@ -1,0 +1,18 @@
+Description: Drop the stray word in the list of tests to skip, which made the build run only 27 tests.
+ override_dh_auto_test passes a list of --skip options to cargo test, and one of its lines ends with the word stdout
+ after the test name, which cargo treats as a test name filter. The build therefore ran only the 27 tests with stdout
+ in their names, of more than 5,500 in tests/tests.rs. Ubuntu's packaging dropped the word in 0.11.0-2ubuntu1.
+Origin: vendor, https://git.launchpad.net/ubuntu/+source/rust-coreutils/tree/debian/rules?h=import/0.11.0-2ubuntu1
+Forwarded: not-needed
+Last-Update: 2026-11-13
+--- a/debian/rules
++++ b/debian/rules
+@@ -134,7 +134,7 @@
+ 				--skip test_nohup::test_nohup_stderr_to_stdout \
+ 				--skip test_nohup::test_nohup_with_pseudo_terminal_emulation_on_stdin_stdout_stderr_get_replaced \
+ 				--skip test_tail::test_following_with_pid \
+-				--skip test_tail::test_follow_when_files_are_pointing_to_same_relative_file_and_file_stays_same_size stdout \
++				--skip test_tail::test_follow_when_files_are_pointing_to_same_relative_file_and_file_stays_same_size \
+ 				--skip test_touch::test_touch_changes_time_of_file_in_stdout \
+ 				--skip test_error_messages_french_translation \
+ 				--skip test_french_colored_error_messages \

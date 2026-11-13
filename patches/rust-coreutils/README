@@ -1,0 +1,38 @@
+Source package: rust-coreutils
+
+timeout-no-core-dump-when-reraising.patch
+    Backport of https://github.com/uutils/coreutils/pull/15157, merged into uutils' main after
+    0.12.0 and not in a release yet. When the command timeout runs is killed by a signal, timeout
+    kills itself with the same signal, so that its own exit status shows the signal. For a signal
+    like SIGSEGV or SIGABRT, timeout then dumped core too, and apport wrote a crash report for
+    /usr/lib/cargo/bin/coreutils/timeout besides the one for the command. GNU timeout turns off core
+    dumps for itself first, and the patch makes timeout do the same, in preserve_signal_info in
+    src/uu/timeout/src/platform/unix.rs.
+
+    The patch adds test_child_core_dump_not_repeated to tests/by-util/test_timeout.rs, which fails
+    without the fix. The build runs it with the two patches below, but debian/rules ignores the
+    result of the tests, so check the build log for "test_timeout::test_child_core_dump_not_repeated
+    ... ok" after a version bump. Drop the patch once Ubuntu ships a uutils release which includes
+    the pull request, the first after 0.12.0.
+
+test-skip-list-stray-word.patch (debian-series)
+    The --skip options which override_dh_auto_test in debian/rules passes to cargo test include a
+    stray word, stdout, which cargo treats as a test name filter, so the build ran only the 27 tests
+    with stdout in their names, of more than 5,500 in tests/tests.rs. Ubuntu's packaging dropped the
+    word in 0.11.0-2ubuntu1, and the patch backports that. Drop it once Ubuntu's version in 26.04
+    lacks the word.
+
+test-build-panic-unwind.patch (debian-series)
+    Lets the tests compile with many jobs. The release profile sets panic = "abort", but a test
+    harness needs unwinding, so cargo test builds uu_stdbuf_libstdbuf twice, with panic=abort for the
+    coreutils binary and with panic=unwind for the test binaries. The crate is a cdylib, whose file
+    name has no hash, so both variants are linked to target/release/deps/libstdbuf.so, which cargo
+    warns about as an "output filename collision". With 16 and with 24 jobs both links ran at the
+    same time, one failed with "file truncated", and no test ran. The patch sets
+    CARGO_PROFILE_RELEASE_PANIC=unwind for the test step only, so that one variant exists, and the
+    install step still builds the installed binaries with panic=abort. uutils' main still sets
+    panic = "abort" and has uu_stdbuf depend on uu_stdbuf_libstdbuf, so drop the patch only once
+    the test step of a build no longer warns about the collision without it.
+
+    With both patches, builds with 24 jobs in a container ran all of tests/tests.rs: 5,424 tests
+    passed, 82 were ignored, and 3 failed, in date, head and ls, in one build also one in install.
