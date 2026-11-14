@@ -1,0 +1,27 @@
+Description: Give every build a build ID of its own, the date of the topmost changelog entry.
+ The packaging uses the build ID of Mozilla's release build, from the BUILDID file of the source, so every build of
+ the same release has the same build ID, also one built with changed patches. Firefox keeps the scripts it compiled
+ in the startup cache of each profile (startupCache/scriptCache-current.bin in the profile's cache directory) and
+ discards them only when the version or the build ID differs from the one in the profile's compatibility.ini. A
+ profile which ran an earlier build of the same release thus keeps running that build's JavaScript, and a changed
+ patch to JavaScript has no effect in it. Mozilla does not invalidate the cache when only omni.ja changes (Mozilla
+ bug 1389778, WONTFIX).
+ .
+ The build ID is now the date of the topmost changelog entry, in UTC. For a rebuild with local patches this is
+ the date the rebuild added its entry, so each rebuild has a build ID later than the one before it and later than
+ Mozilla's. Firefox compares only the major version to detect a downgrade, so a different build ID of the same
+ release never counts as one.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-14
+--- a/debian/build/rules.mk
++++ b/debian/build/rules.mk
+@@ -17,7 +17,7 @@
+ MOZ_OBJDIR		:= $(DEB_BUILDDIR)/obj-$(DEB_HOST_GNU_TYPE)
+ MOZ_DISTDIR		:= $(MOZ_OBJDIR)/dist
+
+-MOZ_BUILDID := $(shell cat $(DEB_SRCDIR)/BUILDID)
++MOZ_BUILDID := $(shell date -u -d "$$(dpkg-parsechangelog -SDate)" +%Y%m%d%H%M%S)
+ $(info Build ID: $(MOZ_BUILDID))
+
+ ifeq (,$(MOZ_APP))

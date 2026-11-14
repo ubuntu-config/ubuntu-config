@@ -193,6 +193,20 @@ drop-apparmor-profile.patch (debian-series)
     reload /etc/apparmor.d/firefox and then install this one. Reported as Launchpad bug 2172775. Drop the patch
     once the PPA stops shipping the profile.
 
+build-id-from-changelog.patch (debian-series)
+    Sets the build ID to the date of the topmost changelog entry, which this script adds for each rebuild, instead
+    of the build ID of Mozilla's release build. Firefox keeps the scripts it compiled in the startup cache of each
+    profile and discards them only when the version or the build ID changes, so with Mozilla's build ID every
+    rebuild of the same release had the same one, and a profile kept running the JavaScript of the build which ran
+    when its cache was last discarded. A changed patch to JavaScript, like session-restore-launch-window.patch,
+    had no effect in it until the next release. With the patch every rebuild discards the caches at its first
+    start. Firefox compares only the major version to detect a downgrade, so the changed build ID never counts as
+    one.
+
+    A profile which last ran a build without the patch discards its caches at the first start of a build with it.
+    To discard them by hand, start Firefox once with -purgecaches, or remove the profile's startupCache directory
+    in ~/.cache/mozilla/firefox/ while Firefox is not running.
+
 Check by hand after a rebuild and a restart of Firefox:
 
   strings /usr/lib/firefox/libxul.so /usr/lib/firefox/liblgpllibs.so | grep -o 'rlbox_wasm2c_[a-z0-9]*' | sort -u
@@ -208,3 +222,5 @@ Check by hand after a rebuild and a restart of Firefox:
                                      configure-gnome-desktop.sh adds, works around it.
   find /etc/apparmor.d -name '*firefox*'
                                      should print only /etc/apparmor.d/firefox, Ubuntu's profile
+  grep LastVersion ~/.config/mozilla/firefox/Profiles/*/compatibility.ini
+                                     should end with the date of the rebuild's changelog entry, in UTC

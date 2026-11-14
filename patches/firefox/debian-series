@@ -1,2 +1,3 @@
 wasm-sandboxed-libraries.patch
 drop-apparmor-profile.patch
+build-id-from-changelog.patch
