@@ -19,6 +19,12 @@ import {
 
 const SAMPLE_INTERVAL_S = 2;
 
+// How often the metrics table is read. The DRAM bandwidth in it wraps, and a wrap is recognized by comparing each
+// reading with the one before it, which needs a reading every second, as unwrapDramBandwidth describes. Everything
+// else in the table is used from every READINGS_PER_UPDATE-th reading only, SAMPLE_INTERVAL_S apart.
+const METRICS_INTERVAL_S = 1;
+const READINGS_PER_UPDATE = SAMPLE_INTERVAL_S / METRICS_INTERVAL_S;
+
 // The file in which the kernel adds up the time each logical CPU spent in each state since boot.
 const CPU_TIMES_PATH = '/proc/stat';
 
@@ -131,7 +137,11 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._batteryFile = batteryFile;
         this._readingBattery = false;
         this._cancellable = new Gio.Cancellable();
+        // The reading the indicator was last updated from, and the last reading of the table.
         this._previous = null;
+        this._lastReading = null;
+        // The readings left until the next update of the indicator, so that the first reading updates it.
+        this._readingsUntilUpdate = 1;
         this._reading = false;
         this._readingCpuTimes = false;
         // The total and the idle time of the logical CPUs of each group of cores at the last reading, in the kernel's
@@ -263,8 +273,11 @@ class ThrottleIndicator extends PanelMenu.Button {
         // Nothing is known until two readings have been compared, and until then there is nothing to show.
         this.hide();
 
-        this._timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, SAMPLE_INTERVAL_S, () => {
+        this._metricsTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, METRICS_INTERVAL_S, () => {
             this._sample();
+            return GLib.SOURCE_CONTINUE;
+        });
+        this._timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, SAMPLE_INTERVAL_S, () => {
             this._sampleCpuTimes();
             this._sampleFans();
             this._sampleBoardSensors();
@@ -284,6 +297,10 @@ class ThrottleIndicator extends PanelMenu.Button {
     // an override has to chain up for that to still happen.
     _onDestroy() {
         this._cancellable.cancel();
+        if (this._metricsTimeoutId) {
+            GLib.source_remove(this._metricsTimeoutId);
+            this._metricsTimeoutId = 0;
+        }
         if (this._timeoutId) {
             GLib.source_remove(this._timeoutId);
             this._timeoutId = 0;
@@ -526,8 +543,32 @@ class ThrottleIndicator extends PanelMenu.Button {
             // Cancelling happens as the indicator is being destroyed, and a read that had already completed by then
             // still arrives here, with widgets that must not be touched any more.
             if (!this._cancellable.is_cancelled())
-                this._update(decodeMetrics(bytes.get_data()), GLib.get_monotonic_time());
+                this._handleReading(decodeMetrics(bytes.get_data()), GLib.get_monotonic_time());
         });
+    }
+
+    /**
+     * Handles a reading of the metrics table: corrects its DRAM bandwidth against the reading before it, and updates
+     * the indicator from every READINGS_PER_UPDATE-th reading.
+     *
+     * @param {object|null} metrics - the reading, or null when the table could not be decoded
+     * @param {number} timestamp - the monotonic time in microseconds at which the reading was made
+     */
+    _handleReading(metrics, timestamp) {
+        // A table that cannot be decoded says nothing about whether anything is being held back, which is not the
+        // same as saying that nothing is, so the indicator keeps showing its last state.
+        if (!metrics)
+            return;
+        if (this._lastReading) {
+            unwrapDramBandwidth(this._lastReading.metrics, metrics,
+                (timestamp - this._lastReading.timestamp) / 1000);
+        }
+        this._lastReading = {metrics, timestamp};
+        this._readingsUntilUpdate--;
+        if (this._readingsUntilUpdate > 0)
+            return;
+        this._readingsUntilUpdate = READINGS_PER_UPDATE;
+        this._update(metrics, timestamp);
     }
 
     _sampleCpuTimes() {
@@ -702,17 +743,12 @@ class ThrottleIndicator extends PanelMenu.Button {
     }
 
     /**
-     * Updates the indicator and its menu from a reading and the reading before it.
+     * Updates the indicator and its menu from a reading and the reading it was updated from before.
      *
-     * @param {object|null} metrics - the reading, or null when the table could not be decoded
+     * @param {object} metrics - the reading, with its DRAM bandwidth corrected
      * @param {number} timestamp - the monotonic time in microseconds at which the reading was made
      */
     _update(metrics, timestamp) {
-        // A table that cannot be decoded says nothing about whether anything is being held back, which is not the
-        // same as saying that nothing is, so the indicator keeps showing its last state.
-        if (!metrics)
-            return;
-
         // A burst of load which ends before the board warms up rightly never starts the fan nor changes a board
         // reading, so a cool sample starts both counts over.
         const hot = metrics.temperatureCore >= FAN_NEEDED_ABOVE_C;
@@ -765,7 +801,6 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._graphicsUsageLabel.text = `${metrics.graphicsActivity}%`;
         this._npuUsageLabel.text = `${Math.round(metrics.npuActivity)}%`;
         // The usage of the memory is the bandwidth of its reads and writes together.
-        unwrapDramBandwidth(previous.metrics, metrics, elapsed);
         this._memoryUsageLabel.text = formatBandwidth(metrics.dramReads + metrics.dramWrites,
             this._clockLimits.memoryBandwidth);
 

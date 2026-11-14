@@ -393,10 +393,11 @@ the DRAM is the bandwidth of its reads and writes, as a share of 89.6 GB/s, the 
 at the top of the memory clock. The table holds the bandwidth in 16 bit fields of MB/s, which wrap at 65.5 GB/s, and
 the reads go above that under a large language model on the GPU. The firmware averages the bandwidth with a time
 constant of 1 second, so between two readings it can fall at most to e^(-elapsed/1 s) of the earlier one, and the
-indicator corrects a reading under that bound by the wrap. A bandwidth above the wrap already when the indicator
-starts shows as low until it falls below the wrap, and so does one above it when a reading misses the bound: the
-indicator reads the table every 2 seconds, at which the bound misses about a third of the wrapped readings of a day of
-logs, while reading it every second would miss none.
+indicator corrects a reading under that bound by the wrap. The indicator reads the table every second for this, at
+which the bound missed none of the wrapped readings of a day of logs, also with an occasional reading 2 seconds after
+the one before, while readings every 2 seconds would miss about a third of them. Everything else in the table updates
+the indicator every 2 seconds. A bandwidth above the wrap already when the indicator starts shows as low until it
+falls below the wrap.
 
 The menu shows the temperatures of the memory modules, the SSD and the wireless card from their hwmon devices. It
 reads them, the EC's reading of the APU's temperature and the battery only while it is open, as a read of the SSD's or
