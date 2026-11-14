@@ -23,7 +23,7 @@ Author: Mitar
 Forwarded: no
 ---
 diff --git a/docs/docs/instructions/server/prefix_cache.md b/docs/docs/instructions/server/prefix_cache.md
-index 969168e..f2fd868 100644
+index ee80cb5..18385fa 100644
 --- a/docs/docs/instructions/server/prefix_cache.md
 +++ b/docs/docs/instructions/server/prefix_cache.md
 @@ -37,7 +37,7 @@ The other supported models gain the same way. Measured on shorter prompts (about
@@ -54,10 +54,10 @@ index 969168e..f2fd868 100644
  - **Models with a sliding window or a convolution state** (Gemma 3 and 4, gpt-oss, the LFM2 family) save a state that cannot be rewound, so a saved prompt is resumed only when the new prompt starts with all of it, and a prompt that shares just the first part of a saved one resumes at the saved system-prompt start instead.
  - **Pictures and audio.** The Qwen-VL models, Qwen3.5 and MiniCPM-V reuse prompts that contain pictures. The Gemma 4 models (and the `nemotron3.5-bolt` model built on them) reuse text prompts through the prefix cache; a prompt with a picture or audio keeps the older single-checkpoint reuse. `qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b` are text only.
 diff --git a/docs/docs/models/qwen.md b/docs/docs/models/qwen.md
-index 9ddc04c..b304e54 100644
+index 22fd082..14d385b 100644
 --- a/docs/docs/models/qwen.md
 +++ b/docs/docs/models/qwen.md
-@@ -643,7 +643,7 @@ The `-r` option determines the image's height:
+@@ -605,7 +605,7 @@ The `-r` option determines the image's height:
  - **Type:** Image-Text-to-Text
  - **Think:** Yes
  - **Tool Calling Support:** Yes  
@@ -67,10 +67,10 @@ index 9ddc04c..b304e54 100644
  - **Base Model:** [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
  - **Quantization:** Q4_K
 diff --git a/src/common/AutoModel/automodel.cpp b/src/common/AutoModel/automodel.cpp
-index 179ef25..7a8e080 100644
+index 158198a..fd43e52 100644
 --- a/src/common/AutoModel/automodel.cpp
 +++ b/src/common/AutoModel/automodel.cpp
-@@ -462,32 +462,51 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
+@@ -504,34 +504,53 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
                                 std::optional<int> requested_max_new_tokens) {
      bool success = true;
      uint64_t head_prefill_ns = 0;
@@ -117,16 +117,18 @@ index 179ef25..7a8e080 100644
 -            head_prefill_ns = head_meta.prefill_duration;
 -            const std::vector<int> head_tokens(full_tokens.begin(), full_tokens.begin() + boundary);
 -            cache.set_live(head_tokens);
--            cache.save(head_tokens, {}, true, 0);
+-            cache.save(head_tokens, image_hashes, true, 0); // keeps the hashes of the pictures inside the head
 -        } else {
 +        if (!this->_shared_insert(head_meta, head, is_cancelled, nullptr, 0, std::nullopt, false)) {
              meta_info.stop_reason = head_meta.stop_reason;
+             meta_info.error_message = head_meta.error_message;
+             meta_info.error_code = head_meta.error_code;
 +            return false;
          }
 +        head_prefill_ns += head_meta.prefill_duration;
 +        const std::vector<int> head_tokens(full_tokens.begin(), full_tokens.begin() + length);
 +        cache.set_live(head_tokens);
-+        cache.save(head_tokens, {}, is_boundary, 0);
++        cache.save(head_tokens, image_hashes, is_boundary, 0); // keeps the hashes of the pictures inside the head
 +        return true;
 +    };
 +    if (payload == nullptr && boundary > match_len && boundary < full_tokens.size()) {
@@ -137,7 +139,7 @@ index 179ef25..7a8e080 100644
      }
      if (success) {
          success = payload != nullptr
-@@ -502,9 +521,12 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
+@@ -546,9 +565,12 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
      meta_info.cached_prompt_tokens = static_cast<int>(match_len);
      meta_info.prefill_duration += head_prefill_ns;
      cache.set_live(full_tokens);
@@ -153,7 +155,7 @@ index 179ef25..7a8e080 100644
      meta_info.prefix_cache = cache.report();
      return true;
 diff --git a/src/common/prefix_slot_cache.cpp b/src/common/prefix_slot_cache.cpp
-index 2dd3141..60483ba 100644
+index b6a85dd..23e427a 100644
 --- a/src/common/prefix_slot_cache.cpp
 +++ b/src/common/prefix_slot_cache.cpp
 @@ -92,6 +92,12 @@ void PrefixSlotCache::attach(void* engine, const flm_state_api* api) {
@@ -170,10 +172,10 @@ index 2dd3141..60483ba 100644
  
  int PrefixSlotCache::end_kv_from(const std::vector<int>& tokens, size_t boundary) const {
 diff --git a/src/include/AutoModel/automodel.hpp b/src/include/AutoModel/automodel.hpp
-index f06f890..2239b4d 100644
+index d470456..0e55fff 100644
 --- a/src/include/AutoModel/automodel.hpp
 +++ b/src/include/AutoModel/automodel.hpp
-@@ -326,9 +326,10 @@ protected:
+@@ -352,9 +352,10 @@ protected:
  	/// \param tokens the prompt without its last generation-prompt tokens (what is prefilled)
  	/// \param full_tokens the same tokens, kept intact: _shared_insert erases the part the engine already holds from `tokens`
  	/// \param match_len what _prefix_resume returned
@@ -187,7 +189,7 @@ index f06f890..2239b4d 100644
  	/// \param last_image_token_index as _shared_insert's first_len_run
  	bool _prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_info, std::vector<int>& tokens, const std::vector<int>& full_tokens,
  	                    const std::vector<uint64_t>& image_hashes, size_t match_len, const std::string& boundary_marker,
-@@ -356,7 +357,7 @@ protected:
+@@ -382,7 +383,7 @@ protected:
  
  	/// \brief insert a text-only prompt through the slots (use when _prefix_slot_mode() said yes)
  	/// \param tokens the whole rendered prompt; its last `trim` tokens are left out of the prefill
@@ -262,7 +264,7 @@ index c1fc2db..6b99e68 100644
      int cache_mb_ = -1;
      int slots_ = -1;
 diff --git a/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp b/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
-index 66e5e6b..85b4e95 100644
+index c219fa3..40ad728 100644
 --- a/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
 +++ b/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
 @@ -90,17 +90,30 @@ std::vector<int> cat(std::vector<int> a, const std::vector<int>& b) {
@@ -349,7 +351,7 @@ index 66e5e6b..85b4e95 100644
  void test_small_tail_not_saved() {
      std::printf("a side call a few tokens past the shared head is not saved, so it cannot push out the main conversation\n");
      fake_engine e;
-@@ -391,6 +447,8 @@ int main() {
+@@ -429,6 +485,8 @@ int main() {
      test_head_restored_after_cold_request();
      test_eviction_order();
      test_boundary_kept_for_dependents();
