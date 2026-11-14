@@ -407,6 +407,73 @@ def ptyxis(session, checks, out_dir):
     return {"before": before, "after": after, "dialogs": dialogs, "screens": ended, "texts": texts}
 
 
+# For each Ptyxis window, its workspace, whether a workspace thumbnail of the overview shows it, and the size of its actor,
+# which the thumbnail clones. WorkspaceThumbnail keeps its workspace in metaWorkspace and its clones in _windows.
+OVERVIEW_THUMBNAILS = """(() => {
+  const thumbnails = [];
+  const collect = actor => {
+    if (actor.constructor.name === 'WorkspaceThumbnail')
+      thumbnails.push(actor);
+    actor.get_children().forEach(collect);
+  };
+  collect(Main.layoutManager.overviewGroup);
+  return global.get_window_actors().filter(actor => actor.meta_window.get_wm_class() === 'org.gnome.Ptyxis').map(actor => {
+    const window = actor.meta_window;
+    const workspace = window.get_workspace()?.index() ?? null;
+    return {
+      id: window.get_id(),
+      workspace,
+      inThumbnail: thumbnails.some(t => t.metaWorkspace.index() === workspace && t._windows.some(c => c.metaWindow === window)),
+      width: actor.width,
+      height: actor.height,
+    };
+  });
+})()"""
+
+
+@test
+def overview_thumbnails(session, checks, out_dir):
+    """The overview's workspace thumbnails show the windows restored to workspaces not visited since logging in, which
+    needs patches/mutter/hidden-window-updates.patch. Mutter otherwise keeps the actor of such a window at 0x0 until
+    its workspace is activated."""
+    session.gsettings("org.gnome.shell", "favorite-apps", f"['{PTYXIS}']")
+    session.login()
+    created = []
+    for workspace in (1, 4):
+        session.call("activateWorkspace", workspace)
+        # The dock lists the windows of the active workspace a moment after a switch, and a click before that activates
+        # the window of the previous workspace.
+        time.sleep(1)
+        session.call("clickDockIcon", PTYXIS)
+        created.append(shown_window(session, PTYXIS, lambda w, workspace=workspace: w["workspace"] == workspace))
+    checks.check("Ptyxis has a window on workspace 2 and one on workspace 5",
+                 all(created) and [w["workspace"] for w in created] == [1, 4], str([window_summary(w) for w in created]))
+    if not all(created):
+        return {}
+    # Ptyxis saves its session a few seconds after a change.
+    time.sleep(5)
+    session.logout()
+
+    session.login()
+    session.call("activateWorkspace", 0)
+    session.call("clickDockIcon", PTYXIS)
+    restored = wait_for(lambda: (lambda ws: ws if {w["workspace"] for w in ws} >= {1, 4} else None)(session.windows(PTYXIS)), 30)
+    checks.check("Ptyxis restores its windows to workspaces 2 and 5", restored,
+                 str([window_summary(w) for w in session.windows(PTYXIS)]))
+    # The restored windows draw their first content right after they are restored.
+    time.sleep(3)
+    session.eval("Main.overview.show(); true")
+    wait_for(lambda: session.eval("Main.overview.visible && !Main.overview.animationInProgress"), 10)
+    shown = session.eval(OVERVIEW_THUMBNAILS)
+    session.eval("Main.overview.hide(); true")
+    for workspace in (1, 4):
+        window = find(shown, lambda w, workspace=workspace: w["workspace"] == workspace)
+        checks.check(f"the window restored to workspace {workspace + 1}, not visited yet, shows in its thumbnail with its size",
+                     window and window["inThumbnail"] and window["width"] > 0 and window["height"] > 0, str(window))
+    session.logout()
+    return {"overview": shown}
+
+
 FIREFOX = "firefox.desktop"
 WEB_PORT = 8000
 

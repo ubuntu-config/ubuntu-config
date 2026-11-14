@@ -1,0 +1,154 @@
+Description: Let a window placed while hidden update its actor before it is shown.
+ Mutter freezes the updates of a Wayland window until the window is shown for the first time, since only then did
+ it know which monitor the window is on, and thus its size. While they are frozen, the window's actor neither
+ follows the window's geometry nor shows the content the client committed, so it stays 0x0. A window which is
+ hidden from the start, like one a session restores to another workspace, is shown only when that workspace is
+ activated, and until then previews of it, like the overview's workspace thumbnails, show nothing where it is.
+ .
+ A window placed while hidden already has its monitor and size: mutter places a hidden window as soon as it has a
+ buffer so that previews of hidden windows know where they are, and a restored window is placed from its stored
+ state. The updates of a Wayland window are now frozen only until it is shown or placed while hidden, and the
+ frozen state is synced after a window is hidden. Windows shown when they map are unchanged.
+ .
+ The test restore-other-workspace restores a window to the second workspace while the first one is active and
+ checks that the window is hidden and that its actor has the size of the window's buffer, which fails without the
+ change, as the actor is 0x0.
+Author: Mitar
+Last-Update: 2026-11-14
+diff --git a/src/core/window.c b/src/core/window.c
+index 312a2de..de4c8f9 100644
+--- a/src/core/window.c
++++ b/src/core/window.c
+@@ -2655,6 +2655,12 @@ implement_showing (MetaWindow *window,
+ 
+       meta_window_hide (window);
+ 
++      /* Updates of a window placed while hidden need not wait until it is
++       * shown. */
++      if (window->known_to_compositor)
++        meta_compositor_sync_updates_frozen (window->display->compositor,
++                                             window);
++
+       if (!window->override_redirect)
+         sync_client_window_mapped (window);
+     }
+diff --git a/src/tests/wayland-unit-tests.c b/src/tests/wayland-unit-tests.c
+index a87c576..231a001 100644
+--- a/src/tests/wayland-unit-tests.c
++++ b/src/tests/wayland-unit-tests.c
+@@ -1435,6 +1435,88 @@ toplevel_sessions_restore_changed (void)
+   meta_wayland_test_client_finish (wayland_test_client2);
+ }
+ 
++static void
++toplevel_sessions_restore_other_workspace (void)
++{
++  MetaSessionManager *session_manager;
++  MetaBackend *backend = meta_context_get_backend (test_context);
++  ClutterActor *stage = meta_backend_get_stage (backend);
++  MetaDisplay *display = meta_context_get_display (test_context);
++  MetaWorkspaceManager *workspace_manager =
++    meta_display_get_workspace_manager (display);
++  MetaWaylandTestClient *wayland_test_client;
++  MetaWindow *window;
++  MetaWindowActor *window_actor;
++  MtkRectangle buffer_rect;
++  float actor_width, actor_height;
++  g_autofree char *session_id = NULL;
++
++  meta_workspace_manager_update_num_workspaces (
++    workspace_manager, meta_display_get_current_time_roundtrip (display), 2);
++  g_assert_cmpint (meta_workspace_manager_get_active_workspace_index (workspace_manager),
++                   ==, 0);
++
++  session_manager = meta_context_get_session_manager (test_context);
++  g_signal_connect (session_manager, "session-instantiated",
++                    G_CALLBACK (on_session_instantiated), &session_id);
++
++  /* Launch client once, move window to the second workspace */
++  wayland_test_client =
++    meta_wayland_test_client_new (test_context, "xdg-session-management-restore");
++
++  wait_for_sync_point (0);
++  wait_for_paint (stage);
++
++  window = find_client_window ("toplevel1");
++  g_assert_nonnull (window);
++
++  meta_window_change_workspace_by_index (window, 1, FALSE);
++  wait_for_paint (stage);
++
++  meta_wayland_test_driver_emit_sync_event (test_driver, 0);
++  meta_wayland_test_client_finish (wayland_test_client);
++
++  g_assert_nonnull (session_id);
++
++  /* Launch client again, check the window is restored to the second workspace,
++   * hidden, with its actor following its geometry and content, as previews of
++   * the second workspace show it */
++  wayland_test_client =
++    meta_wayland_test_client_new_with_args (test_context,
++                                            "xdg-session-management-restore",
++                                            session_id,
++                                            NULL);
++
++  wait_for_sync_point (0);
++  wait_for_paint (stage);
++
++  window = find_client_window ("toplevel1");
++  g_assert_nonnull (window);
++
++  g_assert_cmpint (meta_workspace_index (meta_window_get_workspace (window)),
++                   ==, 1);
++  g_assert_true (window->hidden);
++
++  window_actor = meta_window_actor_from_window (window);
++  meta_window_get_buffer_rect (window, &buffer_rect);
++  clutter_actor_get_size (CLUTTER_ACTOR (window_actor),
++                          &actor_width, &actor_height);
++  g_assert_cmpint (buffer_rect.width, >, 0);
++  g_assert_cmpint (buffer_rect.height, >, 0);
++  g_assert_cmpfloat (actor_width, ==, buffer_rect.width);
++  g_assert_cmpfloat (actor_height, ==, buffer_rect.height);
++
++  g_signal_handlers_disconnect_by_func (session_manager,
++                                        on_session_instantiated,
++                                        &session_id);
++
++  meta_wayland_test_driver_emit_sync_event (test_driver, 0);
++  meta_wayland_test_client_finish (wayland_test_client);
++
++  meta_workspace_manager_update_num_workspaces (
++    workspace_manager, meta_display_get_current_time_roundtrip (display), 1);
++}
++
+ static void
+ toplevel_sessions_restore_fullscreen (void)
+ {
+@@ -2512,6 +2594,8 @@ init_tests (void)
+                    toplevel_sessions_restore_session_destroyed);
+   g_test_add_func ("/wayland/toplevel/sessions/restore-changed",
+                    toplevel_sessions_restore_changed);
++  g_test_add_func ("/wayland/toplevel/sessions/restore-other-workspace",
++                   toplevel_sessions_restore_other_workspace);
+ #ifdef MUTTER_PRIVILEGED_TEST
+   (void)(toplevel_sessions_restore_maximized);
+   (void)(toplevel_sessions_restore_tiled);
+diff --git a/src/wayland/meta-window-wayland.c b/src/wayland/meta-window-wayland.c
+index 6d20598..91e81b0 100644
+--- a/src/wayland/meta-window-wayland.c
++++ b/src/wayland/meta-window-wayland.c
+@@ -986,7 +986,12 @@ meta_window_wayland_are_updates_frozen (MetaWindow *window)
+ {
+   MetaWindowWayland *wl_window = META_WINDOW_WAYLAND (window);
+ 
+-  return !wl_window->has_been_shown;
++  if (wl_window->has_been_shown)
++    return FALSE;
++
++  /* A window placed while hidden, as on another workspace, has its monitor and
++   * size, and previews of it, like workspace thumbnails, need its content. */
++  return !(window->placed && window->hidden);
+ }
+ 
+ static gboolean

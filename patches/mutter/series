@@ -5,3 +5,4 @@ xdg-toplevel-session-rename.patch
 save-toplevels-on-session-destroy.patch
 save-toplevels-on-change.patch
 wayland-keyboard-test-sync-point.patch
+hidden-window-updates.patch

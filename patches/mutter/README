@@ -150,3 +150,18 @@ wayland-keyboard-test-sync-point.patch
     window could dispatch the sync point request, so the test hung until meson killed it after 360
     seconds and failed the build. It changes only the test. Drop the patch once Ubuntu ships mutter
     51, which has it.
+
+hidden-window-updates.patch
+    Mutter freezes the updates of a Wayland window until the window is shown for the first time,
+    and until then the window's actor stays 0x0, without the client's content. A window restored to
+    another workspace is shown only when that workspace is activated, so after logging in, the
+    overview's workspace thumbnails showed nothing for the restored windows of workspaces not visited
+    yet. With this patch the updates of a window placed while hidden are no longer frozen: such a
+    window already has its monitor and size, either from its stored state or because mutter places
+    a hidden window as soon as it has a buffer. Windows shown when they map are unchanged.
+
+    The test restore-other-workspace of src/tests/wayland-unit-tests.c restores a window to the
+    second workspace while the first one is active, and fails without the change, as the window's
+    actor is 0x0. The tests run during the build. The session test overview-thumbnails in
+    tests/session/ checks it in GNOME Shell's overview with Ptyxis. The same symptom for windows
+    which appear while the overview is open is mutter issue 1752. Not proposed upstream yet.
