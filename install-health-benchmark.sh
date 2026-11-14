@@ -77,10 +77,12 @@ install_unit() {
 echo "=== packages ==="
 MISSING_PACKAGES=()
 # framework_tool sets the fan, perf runs the context switch and system call benchmarks, powerprofilesctl holds the
-# power profile, and taskset places the perf benchmarks on one CPU.
+# power profile, and taskset places the perf benchmarks on one CPU. smartmontools is not used by the benchmark: its
+# daemon smartd, which the package enables, records the SMART values of the SSD every 30 minutes.
 want_package framework-tool
 want_package linux-perf
 want_package power-profiles-daemon
+want_package smartmontools
 want_package util-linux
 if [ "$MODE" = apply ] && [ "${#MISSING_PACKAGES[@]}" -gt 0 ]; then
   sudo apt-get install "${MISSING_PACKAGES[@]}"

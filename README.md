@@ -499,6 +499,11 @@ wired network link up, for its best values, and marks the undocked ones.
 lists what changed since the measurement with the best performance. `sudo health-benchmark --run --note "..."`
 measures right away, which marks a reference point, for example before and after cleaning the fan.
 
+The SSD is followed by smartd from smartmontools, which `install-health-benchmark.sh` installs. Every 30 minutes it
+appends the SMART values of each drive to `/var/lib/smartmontools/attrlog.MODEL-SERIAL.nvme.csv`, among them the
+share of the rated endurance used, the spare blocks left, the amount of data written, media errors, unsafe shutdowns
+and the temperature.
+
 ### FastFlowLM reads a shared history once
 
 FastFlowLM runs language models on the NPU of the Ryzen AI processor. Its server saves the state of a model while it
