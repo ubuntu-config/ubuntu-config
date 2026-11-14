@@ -21,6 +21,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from session import REPO_DIR, TEST_EXTENSION, Checks, Session, cgroup_of, processes, unit_of, wait_for  # noqa: E402
 
+from gi.repository import GLib  # noqa: E402
+
 TESTS = {}
 
 
@@ -264,11 +266,18 @@ PTYXIS = "org.gnome.Ptyxis.desktop"
 
 
 def saved_screens(home):
-    """Returns the screens which Ptyxis saved with its session, as the bytes of their file, or b"" before it saved any."""
+    """Returns the text of each screen which Ptyxis saved with its session, or none before it saved any."""
     try:
-        return (home / ".local" / "state" / "org.gnome.Ptyxis" / "screens.gvariant").read_bytes()
+        data = (home / ".local" / "state" / "org.gnome.Ptyxis" / "screens.gvariant").read_bytes()
     except FileNotFoundError:
-        return b""
+        return []
+    return list(GLib.Variant.new_from_bytes(GLib.VariantType("a{ss}"), GLib.Bytes.new(data), False).unpack().values())
+
+
+def continued(earlier, later):
+    """Whether each of the earlier screens continues in one of the later ones, followed by the output of a new shell,
+    as a restore shows it."""
+    return bool(earlier) and all(any(screen.startswith(old + "\n") for screen in later) for old in earlier)
 
 
 def copy_terminal_text(session, window):
@@ -286,8 +295,9 @@ def copy_terminal_text(session, window):
 def ptyxis(session, checks, out_dir):
     """Ptyxis returns its windows to their workspaces, positions and sizes after logging out and in again, each with
     the screen it showed and a new shell in the directory the old one was in, without activating them, while every
-    launch from the dock opens a new window on the current workspace and focuses it. Logging out while a program runs
-    in it lists Ptyxis in GNOME's dialog."""
+    launch from the dock opens a new window on the current workspace and focuses it. The screens survive logging out
+    and in once more without using the windows. Logging out while a program runs in it lists Ptyxis in GNOME's
+    dialog."""
     # The shells run with Ubuntu's .bashrc, which the user's home received from /etc/skel.
     home = pathlib.Path.home()
     (home / "one").mkdir()
@@ -308,7 +318,7 @@ def ptyxis(session, checks, out_dir):
     # focus away from the window, so the workspace is switched only once Ptyxis saved the screen with the command's
     # output.
     checks.check("the first window ran the typed command",
-                 wait_for(lambda: b"\nfirst screen" in saved_screens(home), 15))
+                 wait_for(lambda: any("\nfirst screen" in screen for screen in saved_screens(home)), 15))
 
     session.call("activateWorkspace", 4)
     session.call("clickDockIcon", PTYXIS)
@@ -330,6 +340,7 @@ def ptyxis(session, checks, out_dir):
     dialogs = session.logout()
     listed = [d["applications"] for shown in dialogs for d in shown["dialogs"] if d["type"] == "EndSessionDialog"]
     checks.check("logging out while a program runs lists Ptyxis by name", listed == [["Terminal"]], str(dialogs))
+    ended = {"first": saved_screens(home)}
 
     session.login()
     session.call("activateWorkspace", 10)
@@ -354,6 +365,32 @@ def ptyxis(session, checks, out_dir):
     attention = [window_summary(w) for w in session.windows(PTYXIS) if w["demandsAttention"]]
     checks.check("no restored window demands attention", not attention, str(attention))
 
+    # The restored windows are left alone, and the session saves each of them again with its whole screen, followed by
+    # the prompt of its new shell.
+    checks.check("without using the restored windows, the session saves their whole screens again",
+                 wait_for(lambda: continued(ended["first"], saved_screens(home)), 15),
+                 repr({"before": ended["first"], "now": saved_screens(home)}))
+
+    # Logging out and in again without using any window brings back each window of the session before, also the one
+    # opened by the launch, with its whole screen, so that the screens survive any number of logins.
+    session.logout()
+    ended["second"] = saved_screens(home)
+    session.login()
+    session.call("activateWorkspace", 7)
+    session.call("clickDockIcon", PTYXIS)
+    again = shown_window(session, PTYXIS, lambda w: w["workspace"] == 7, 30)
+    checks.check("the launch after logging in once more opens a new window on the current workspace, focused",
+                 again and again["focused"], str(window_summary(again)))
+    returned = wait_for(lambda: (lambda ws: ws if len(ws) == len(after) + 1 else None)(session.windows(PTYXIS)), 15)
+    checks.check("logging out and in once more brings back every window",
+                 returned and sorted(w["workspace"] for w in returned) == sorted([7] + [w["workspace"] for w in after]),
+                 str([window_summary(w) for w in session.windows(PTYXIS)]))
+    checks.check("logging out and in once more without using the windows keeps their whole screens",
+                 wait_for(lambda: continued(ended["second"], saved_screens(home)), 15),
+                 repr({"before": ended["second"], "now": saved_screens(home)}))
+    restored_first = find(session.windows(PTYXIS), lambda w: w["workspace"] == 1)
+    restored_second = find(session.windows(PTYXIS), lambda w: w["workspace"] == 4)
+
     texts = {}
     for name, window, directory in (("first", restored_first, "one"), ("second", restored_second, "two")):
         if not window:
@@ -367,7 +404,7 @@ def ptyxis(session, checks, out_dir):
         checks.check(f"the {name} window's new shell is in the directory of the old one", f"{home}/{directory}\n" in text,
                      repr(text[-300:]))
     session.logout()
-    return {"before": before, "after": after, "dialogs": dialogs, "texts": texts}
+    return {"before": before, "after": after, "dialogs": dialogs, "screens": ended, "texts": texts}
 
 
 FIREFOX = "firefox.desktop"

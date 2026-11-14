@@ -8,8 +8,8 @@ run-ptyxis-session.sh set up, and receives Ptyxis's output, with its Wayland req
 mutter's as mutterN.log. The first run ends with SIGKILL of mutter and Ptyxis, as when the machine crashes, and mutter
 is started again. The second run ends with SIGTERM of Ptyxis alone, and the third by closing its windows with Alt+F4.
 The shells Ptyxis starts read OUT_DIR/home/.bashrc, written here, which in the first run moves each shell into a
-directory of its own and prints a line naming it, and in later runs prints the number of the run and the directory it
-started in. The exit status is 0 when every check passed.
+directory of its own and prints a line naming it, the first one some lines before it, and in later runs prints the
+number of the run and the directory it started in. The exit status is 0 when every check passed.
 """
 
 import os
@@ -39,7 +39,8 @@ PATTERNS = {
 TOKEN = "ptyxis-session-test-token"
 
 # The first run prints "first run, tab N" in each new shell, later runs "run N in" and the directory. The first tab
-# shows nothing for its first 5 seconds, so that Ptyxis saves its session once while no tab has a screen.
+# shows nothing for its first 5 seconds, so that Ptyxis saves its session once while no tab has a screen, and then a
+# few lines more than the others, which it has to keep in the later runs, in which it is never shown.
 BASHRC = r"""# Written by ptyxis_session.py for the shells of the Ptyxis under test.
 PS1='prompt$ '
 PROMPT_COMMAND=
@@ -47,7 +48,10 @@ if [ "$(cat "$HOME/run")" = 1 ]; then
   n=$(( $(cat "$HOME/tabs" 2>/dev/null || echo 0) + 1 ))
   echo "$n" > "$HOME/tabs"
   mkdir -p "$HOME/tab$n" && cd "$HOME/tab$n"
-  [ "$n" = 1 ] && sleep 5
+  if [ "$n" = 1 ]; then
+    sleep 5
+    printf 'tab 1, line %s\n' 1 2 3
+  fi
   echo "first run, tab $n"
 else
   echo "run $(cat "$HOME/run") in $PWD"
@@ -328,10 +332,10 @@ def main():
     activate("new-window")
     check(wait_until(lambda: "first run, tab 3" in all_screens()), "run 1: the session saved the screen of a second window")
     check(wait_until(lambda: len(gtk_windows()) == 2, timeout=40), "run 1: GTK saved the state of both windows")
-    session1 = session_windows()
     gtk1 = gtk_windows()
     mutter.crash()
     crash(proc)
+    session1 = session_windows()
     mutter = Mutter(mutter_root, os.path.join(out, "mutter2.log"))
 
     run1 = scan(log1)
@@ -353,10 +357,11 @@ def main():
     check(mode == 0o600, "the screens file is readable only by its owner (mode %o)" % mode)
 
     # Run 2: with a new mutter, and Ptyxis started with its new-window action and an activation token, as GNOME Shell
-    # may start it, restores both windows under their names of run 1, each tab with the screen it had, dimmed, above
-    # the output of a new shell started in the tab's directory, and opens a new window beside them. A tab which is not
-    # the selected one of its window starts its shell only once it is shown, so it shows just the screen of run 1. The
-    # new window receives the token and the focus, and no restored window is activated.
+    # may start it, restores both windows under their names of run 1, each tab with the whole screen it had, dimmed,
+    # above the output of a new shell started in the tab's directory, and opens a new window beside them. A tab which
+    # is not the selected one of its window starts its shell only once it is shown, so it shows just the screen of run
+    # 1, and the session saves that screen again. The new window receives the token and the focus, and no restored
+    # window is activated.
     with open(os.path.join(home, "run"), "w") as f:
         f.write("2\n")
     log2 = os.path.join(out, "run2.log")
@@ -389,6 +394,7 @@ def main():
     end_group(proc)
     check(window_dirs(session_windows()) == window_dirs(session2_end) and all_screens().count("run 2 in") == 2,
           "run 2: the session kept both windows with their screens after SIGTERM")
+    screens2_end = screens_by_dir(session_windows())
 
     run2 = scan(log2)
     summary(2, run2)
@@ -403,17 +409,18 @@ def main():
     check(window_dirs(restored2) == [tab_dirs[:2], tab_dirs[2:]], "run 2: each tab kept its window and directory")
     check(len(new2) == 1 and len(new2[0][1]) == 1, "run 2: the new window has one tab")
     screens2 = screens_by_dir(restored2)
-    for n, d in zip((1, 2, 3), tab_dirs):
-        check("first run, tab %d" % n in screens2.get(d, ""), "run 2: tab %d shows its screen of run 1" % n)
-    for n in (2, 3):
-        screen = screens2.get(tab_dirs[n - 1], "")
-        new = "run 2 in %s" % tab_dirs[n - 1]
-        check(new in screen and screen.index("first run, tab %d" % n) < screen.index(new),
-              "run 2: the shell of tab %d started in its directory, below the screen of run 1" % n)
     check("run 2" not in screens2.get(tab_dirs[0], ""), "run 2: the tab not selected has not started its shell")
+    check(screens2.get(tab_dirs[0]) == screens1.get(tab_dirs[0]) and "tab 1, line 1" in screens1.get(tab_dirs[0], ""),
+          "run 2: the tab not selected kept its whole screen of run 1 (%r)" % screens2.get(tab_dirs[0]))
+    for n in (2, 3):
+        d = tab_dirs[n - 1]
+        check(screens2.get(d, "").startswith("%s\nrun 2 in %s" % (screens1.get(d), d)),
+              "run 2: tab %d shows its whole screen of run 1, with its new shell started in its directory below" % n)
 
     # Run 3: with Ptyxis activated without an action and with an activation token, restores both windows open at the
-    # end of run 2, with their screens, and opens a new window beside them, which receives the token and the focus.
+    # end of run 2, each tab with its whole screen of run 2, which holds its screen of run 1, and opens a new window
+    # beside them, which receives the token and the focus. The tab not selected was not shown in run 2 either, so it
+    # still shows exactly its screen of run 1.
     with open(os.path.join(home, "run"), "w") as f:
         f.write("3\n")
     log3 = os.path.join(out, "run3.log")
@@ -427,11 +434,13 @@ def main():
     check(window_dirs(restored3) == window_dirs(session2_end), "run 3: the windows open at the end of run 2 were restored")
     check(len(new3) == 1, "run 3: the new window was saved beside them")
     screens3 = screens_by_dir(restored3)
+    check(screens3.get(tab_dirs[0]) == screens1.get(tab_dirs[0]),
+          "run 3: the tab not selected still has its whole screen of run 1 (%r)" % screens3.get(tab_dirs[0]))
     for n in (2, 3):
-        screen = screens3.get(tab_dirs[n - 1], "")
-        old, new = "run 2 in %s" % tab_dirs[n - 1], "run 3 in %s" % tab_dirs[n - 1]
-        check(old in screen and new in screen and screen.index(old) < screen.index(new),
-              "run 3: tab %d shows its screen of run 2 above its new shell" % n)
+        d = tab_dirs[n - 1]
+        check(screens2_end.get(d, "").startswith("%s\n" % screens1.get(d)) and
+              screens3.get(d, "").startswith("%s\nrun 3 in %s" % (screens2_end.get(d), d)),
+              "run 3: tab %d shows its whole screen of run 2, below the one of run 1, with its new shell below" % n)
     check(activated(log3, TOKEN) == ["new"], "run 3: the activation token was presented with the new window only (%s)"
           % activated(log3, TOKEN))
     check("restored" not in activated(log3), "run 3: no restored window was activated (%s)" % activated(log3))

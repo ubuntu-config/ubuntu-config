@@ -12,13 +12,15 @@ Description: Show the screen each tab had when the session ended, dimmed, when i
  save-session-on-change.patch, so closing the last window removes the screens file, and the
  screens are shown only after a session which ended with windows open. A
  terminal scrolled back shows earlier rows, so its screen is kept as it was the last time it
- was scrolled to the end.
+ was scrolled to the end. A restored tab which was not shown yet keeps the screen it was
+ restored with, because VTE finds the rows shown from the height the terminal was allocated,
+ and a terminal never allocated returns only its first row.
  .
  The dim style is SGR 2, which VTE draws with the foreground color scaled to 2/3. That greys out
  light text on a dark background but darkens dark text on a light one.
 Author: Mitar
 Forwarded: no
-Last-Update: 2026-11-11
+Last-Update: 2026-11-14
 diff --git a/src/ptyxis-application.c b/src/ptyxis-application.c
 index ac42cee..4111300 100644
 --- a/src/ptyxis-application.c
@@ -410,7 +412,7 @@ index b2aa382..dca34d3 100644
  
  G_END_DECLS
 diff --git a/src/ptyxis-tab.c b/src/ptyxis-tab.c
-index 48cd480..6f0d080 100644
+index 48cd480..6f1b994 100644
 --- a/src/ptyxis-tab.c
 +++ b/src/ptyxis-tab.c
 @@ -64,6 +64,7 @@ struct _PtyxisTab
@@ -421,7 +423,15 @@ index 48cd480..6f0d080 100644
    GdkTexture              *cached_texture;
    AdwBanner               *banner;
    GtkScrolledWindow       *scrolled_window;
-@@ -644,6 +645,16 @@ ptyxis_tab_inspect_action (GtkWidget  *widget,
+@@ -84,6 +85,7 @@ struct _PtyxisTab
+   guint                    forced_exit : 1;
+   guint                    ignore_osc_title : 1;
+   guint                    ignore_snapshot : 1;
++  guint                    terminal_allocated : 1;
+ 
+   guint                    inhibit_cookie;
+ };
+@@ -644,6 +646,28 @@ ptyxis_tab_inspect_action (GtkWidget  *widget,
    gtk_window_present (GTK_WINDOW (inspector));
  }
  
@@ -435,10 +445,22 @@ index 48cd480..6f0d080 100644
 +  ptyxis_application_queue_save_session (PTYXIS_APPLICATION_DEFAULT);
 +}
 +
++static void
++ptyxis_tab_grid_size_changed_cb (PtyxisTab      *self,
++                                 guint           columns,
++                                 guint           rows,
++                                 PtyxisTerminal *terminal)
++{
++  g_assert (PTYXIS_IS_TAB (self));
++  g_assert (PTYXIS_IS_TERMINAL (terminal));
++
++  self->terminal_allocated = TRUE;
++}
++
  static void
  ptyxis_tab_map (GtkWidget *widget)
  {
-@@ -1224,6 +1235,7 @@ ptyxis_tab_finalize (GObject *object)
+@@ -1224,6 +1248,7 @@ ptyxis_tab_finalize (GObject *object)
    PtyxisTab *self = (PtyxisTab *)object;
  
    g_clear_pointer (&self->uuid, g_free);
@@ -446,7 +468,7 @@ index 48cd480..6f0d080 100644
  
    G_OBJECT_CLASS (ptyxis_tab_parent_class)->finalize (object);
  }
-@@ -1539,6 +1551,96 @@ ptyxis_tab_init (PtyxisTab *self)
+@@ -1539,6 +1564,116 @@ ptyxis_tab_init (PtyxisTab *self)
                             G_CALLBACK (ptyxis_tab_invalidate_thumbnail),
                             self,
                             G_CONNECT_SWAPPED);
@@ -455,6 +477,16 @@ index 48cd480..6f0d080 100644
 +  g_signal_connect_object (self->terminal,
 +                           "contents-changed",
 +                           G_CALLBACK (ptyxis_tab_contents_changed_cb),
++                           self,
++                           G_CONNECT_SWAPPED);
++
++  /* The terminal emits grid-size-changed when an allocation changes the size
++   * of its grid, which is 0 columns and 0 rows until it is allocated, so its
++   * first allocation emits it too.
++   */
++  g_signal_connect_object (self->terminal,
++                           "grid-size-changed",
++                           G_CALLBACK (ptyxis_tab_grid_size_changed_cb),
 +                           self,
 +                           G_CONNECT_SWAPPED);
 +}
@@ -466,7 +498,8 @@ index 48cd480..6f0d080 100644
 + * Returns the text of the screen of the terminal, which is its last rows, as
 + * plain text without colors and without trailing whitespace. A terminal scrolled
 + * back shows earlier rows, so the screen is then the one it had the last time it
-+ * was scrolled to the end.
++ * was scrolled to the end. Until the terminal is shown for the first time, the
++ * screen is the one given to ptyxis_tab_show_previous_screen(), if any.
 + *
 + * Returns: (transfer full) (nullable): the text of the screen, or %NULL when
 + *   it is empty
@@ -479,13 +512,17 @@ index 48cd480..6f0d080 100644
 +  g_return_val_if_fail (PTYXIS_IS_TAB (self), NULL);
 +
 +  /* vte_terminal_get_text_format() returns the rows shown, which are the
-+   * screen while the terminal is scrolled to the end.
++   * screen while the terminal is scrolled to the end. VTE finds them from the
++   * height the terminal was allocated, so a terminal never allocated returns
++   * only its first row. Such a terminal still has the screen it was restored
++   * with, as its process starts only once it is shown, which allocates it.
 +   */
 +  vadjustment = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (self->terminal));
 +
-+  if (vadjustment == NULL ||
-+      gtk_adjustment_get_value (vadjustment) + gtk_adjustment_get_page_size (vadjustment) >=
-+      gtk_adjustment_get_upper (vadjustment) - .5)
++  if (self->terminal_allocated &&
++      (vadjustment == NULL ||
++       gtk_adjustment_get_value (vadjustment) + gtk_adjustment_get_page_size (vadjustment) >=
++       gtk_adjustment_get_upper (vadjustment) - .5))
 +    {
 +      g_autofree char *text = vte_terminal_get_text_format (VTE_TERMINAL (self->terminal), VTE_FORMAT_TEXT);
 +
@@ -505,38 +542,43 @@ index 48cd480..6f0d080 100644
 + * @text: the screen text saved by ptyxis_tab_dup_screen_text()
 + *
 + * Shows the screen the terminal of the tab had in an earlier run, dimmed, so
-+ * that the output of the new run starts below it and stands apart. Call it
-+ * before the terminal spawns its process.
++ * that the output of the new run starts below it and stands apart. Until the
++ * terminal is shown, it is also the screen ptyxis_tab_dup_screen_text()
++ * returns. Call it before the terminal spawns its process.
 + */
 +void
 +ptyxis_tab_show_previous_screen (PtyxisTab  *self,
 +                                 const char *text)
 +{
 +  g_autofree char *valid = NULL;
++  g_autoptr(GString) shown = NULL;
 +  g_autoptr(GString) str = NULL;
 +
 +  g_return_if_fail (PTYXIS_IS_TAB (self));
 +  g_return_if_fail (text != NULL);
 +
 +  valid = g_utf8_make_valid (text, -1);
-+  str = g_string_new ("\033[2m");
++  shown = g_string_new (NULL);
 +
 +  for (const char *iter = valid; *iter; iter = g_utf8_next_char (iter))
 +    {
 +      gunichar ch = g_utf8_get_char (iter);
 +
 +      /* Control characters would be acted on instead of shown, and the text
-+       * saved holds none but line ends, which are fed as a carriage return and
-+       * a line feed.
++       * saved holds none but line ends.
 +       */
-+      if (ch == '\n')
-+        g_string_append (str, "\r\n");
-+      else if (ch < 0x20 || (ch >= 0x7f && ch < 0xa0))
-+        g_string_append_c (str, ' ');
-+      else
-+        g_string_append_unichar (str, ch);
++      if (ch != '\n' && (ch < 0x20 || (ch >= 0x7f && ch < 0xa0)))
++        ch = ' ';
++
++      g_string_append_unichar (shown, ch);
 +    }
 +
++  g_set_str (&self->screen_text, shown->str);
++
++  /* Line ends are fed as a carriage return and a line feed */
++  str = g_string_new (shown->str);
++  g_string_replace (str, "\n", "\r\n", 0);
++  g_string_prepend (str, "\033[2m");
 +  g_string_append (str, "\033[0m\r\n");
 +
 +  vte_terminal_feed (VTE_TERMINAL (self->terminal), str->str, str->len);

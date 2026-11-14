@@ -12,12 +12,13 @@ Ptyxis session restore: run-ptyxis-session.sh and ptyxis_session.py
 
     The first run opens a window with two tabs and a second window with one, each tab in a directory of its own, and
     once Ptyxis saved its session and GTK its window state, mutter and Ptyxis are ended with SIGKILL, as in a crash of
-    the machine, and a new mutter is started. The second run restores both windows, each tab with the screen of the
-    first run above the output of a new shell, and opens a new window beside them, which has to receive the activation
-    token of the launch and the keyboard focus, while no restored window may be activated. It then closes the new
-    window with Alt+F4, and Ptyxis alone is ended with SIGTERM, which it does not handle, so it closes no window. The
-    third run restores the two windows left, each tab with its screen of the second run, and again opens a new window,
-    which receives the token and the focus. It then closes the windows with Alt+F4, the new one first, and each leaves
+    the machine, and a new mutter is started. The second run restores both windows, each tab with its whole screen of
+    the first run above the output of a new shell, and opens a new window beside them, which has to receive the
+    activation token of the launch and the keyboard focus, while no restored window may be activated. It then closes
+    the new window with Alt+F4, and Ptyxis alone is ended with SIGTERM, which it does not handle, so it closes no
+    window. The third run restores the two windows left, each tab with its whole screen of the second run, which holds
+    the one of the first run, so that the screens survive any number of restores, and again opens a new window, which
+    receives the token and the focus. It then closes the windows with Alt+F4, the new one first, and each leaves
     the session. A command runs in the last window, so Ptyxis asks whether to close it: while it asks, for longer than
     its save delay of 3 seconds, and after Escape cancels, the window stays in the session with its screen, and the
     Close button, reached with Right and Return, ends Ptyxis and leaves no window and no screens to restore. The
@@ -51,13 +52,15 @@ Ptyxis session restore: run-ptyxis-session.sh and ptyxis_session.py
     The shells read a .bashrc the test writes, which moves each shell of the first run into a directory of its own and
     prints "first run, tab N", and in later runs prints "run N in" and the directory it started in. The first tab
     prints nothing for its first 5 seconds, so that Ptyxis saves its session once while no tab has a screen, which
-    once kept all later screens from being saved. ptyxis-agent starts the shells through systemd-run --user when it
-    finds systemd-run, which needs the user's systemd manager in the runtime directory the test replaces, so a
-    systemd-run which fails comes first on PATH, and the agent starts the shells directly. The checks read Ptyxis's
-    session state and screens, GTK's window state, and the messages Ptyxis sent and received over the session
-    management protocol, which the script prints, followed by one line for each check, and finally "RESULT: OK", and
-    exits with 0. A tab which is not the selected one of its window starts its shell only once it is shown, so in the
-    second run it shows just its screen of the first run.
+    once kept all later screens from being saved, and then prints a few lines more than the others. ptyxis-agent
+    starts the shells through systemd-run --user when it finds systemd-run, which needs the user's systemd manager in
+    the runtime directory the test replaces, so a systemd-run which fails comes first on PATH, and the agent starts
+    the shells directly. The checks read Ptyxis's session state and screens, GTK's window state, and the messages
+    Ptyxis sent and received over the session management protocol, which the script prints, followed by one line for
+    each check, and finally "RESULT: OK", and exits with 0. A tab which is not the selected one of its window starts
+    its shell only once it is shown, so in the second and third runs the first tab shows just its screen of the first
+    run, which the session has to save again exactly. Its terminal is then never allocated, and VTE returns only the
+    first row of the text of such a terminal, so Ptyxis has to save the screen it restored instead.
 
     The full WAYLAND_DEBUG output of each run is in the output directory as run1.log to run4.log, and the output of
     the two mutters as mutter1.log and mutter2.log. The D-Bus and portal messages printed on the way, and

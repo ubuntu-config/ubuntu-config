@@ -35,8 +35,10 @@ The tests:
                   where the user is, and the documents never saved have the text typed into them, also the text typed
                   right before logging out.
   ptyxis          The same for Ptyxis, whose windows return also to their positions and sizes, each with the screen it
-                  showed and a new shell in the directory of the old one, with Ubuntu's .bashrc. Logging out while a
-                  program runs in it lists it, as Terminal, in GNOME Shell's dialog.
+                  showed and a new shell in the directory of the old one, with Ubuntu's .bashrc. Logging out and in
+                  once more without using the windows brings each of them back again with its whole screen, followed
+                  by the prompt of the shell before. Logging out while a program runs in it lists it, as Terminal, in
+                  GNOME Shell's dialog.
   firefox         The same for Firefox, with links opened from a terminal with xdg-open, each opening in a new window
                   on the current workspace, and each window returning with its page. Logging out has to end Firefox
                   cleanly, with its session saved, before GNOME Shell shuts down, also after xdg-desktop-portal

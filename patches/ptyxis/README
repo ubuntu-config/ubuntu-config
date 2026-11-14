@@ -84,7 +84,10 @@ restore-screens.patch
     ~/.local/state/org.gnome.Ptyxis/screens.gvariant, readable only by you, and they are shown
     only after a session which ended with windows open: a window leaves the session with its
     screens once it is closed, see save-session-on-change.patch, so closing the last window
-    removes the file. A terminal scrolled back keeps the screen
+    removes the file. A restored screen is part of the tab's screen from then on, so after every
+    restore the tab shows its screen of the run before, with the output of that run's shell below
+    the screens of earlier runs, as long as they fit on the screen. A restored tab which was not
+    shown keeps exactly the screen it was restored with. A terminal scrolled back keeps the screen
     it had the last time it was scrolled to the end. The dim style is VTE's, which scales the
     foreground to 2/3: on tango-black it turns the text grey, while on a light palette it would
     darken the text instead.
@@ -153,4 +156,7 @@ so the windows are placed from the second start on.
 After a version bump, check that ptyxis_window_close_request and
 update_visible_and_maybe_close in src/ptyxis-window.c are still the only places that save the
 session, and that ptyxis_session_restore in src/ptyxis-session.c still creates each window with
-ptyxis_window_new_empty before adding its tabs.
+ptyxis_window_new_empty before adding its tabs. Check also that ptyxis_terminal_size_allocate in
+src/ptyxis-terminal.c still emits grid-size-changed at the first allocation of a terminal, as its
+n_columns and n_rows start at 0, since restore-screens.patch reads the screen of a terminal only
+after that signal, and without it saves no screen at all.
