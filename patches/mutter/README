@@ -165,3 +165,15 @@ hidden-window-updates.patch
     actor is 0x0. The tests run during the build. The session test overview-thumbnails in
     tests/session/ checks it in GNOME Shell's overview with Ptyxis. The same symptom for windows
     which appear while the overview is open is mutter issue 1752. Not proposed upstream yet.
+
+keymap-state-before-key-events.patch
+    Mutter's input thread queues the keymap state resulting from a key event before the event, but
+    the main thread can still handle the event first, since GLib releases its lock while it checks
+    a source, and then mutter sends no wl_keyboard.modifiers for a modifier key. The client keeps
+    its previous modifiers until the next key or button event, so scrolling and pointer motion
+    carry them, as with Alt in mutter issue 4315. With this patch the backend's event source waits
+    until the queued keymap state is applied.
+
+    Without it, the build's test wayland-keyboard, whose client waits for that event after each
+    modifier key, hangs in about 2.5% of its runs under load until meson kills it after 360
+    seconds. Reported as mutter issue 5216, with the fix not proposed upstream yet.

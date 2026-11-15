@@ -1,0 +1,161 @@
+Description: Handle input events only after the keymap state queued before them is applied.
+ The input thread queues the keymap state resulting from a key event to the main thread with an idle source of
+ G_PRIORITY_HIGH before it queues the event, which the backend's event source of G_PRIORITY_DEFAULT dispatches.
+ GLib releases its lock while it checks a source, so the idle source can be attached after the sources of higher
+ priority were checked in an iteration whose check of the backend's event source then finds the event, and the
+ event is handled with the previous keymap state. For a modifier key, the Wayland keyboard then sends no
+ wl_keyboard.modifiers, and the client keeps its previous modifiers until the next key or button event.
+ .
+ The native keymap now counts the updates it queued and did not apply yet, and the backend's event source is
+ ready only when there are none, so the update is applied in the next iteration, before the event is handled.
+ .
+ The test wayland-keyboard, whose client waits for wl_keyboard.modifiers after each modifier key, hung in 5 of 200
+ runs with 16 in parallel without the change, and passed 600 of 600 with it.
+Author: Mitar
+Bug: https://gitlab.gnome.org/GNOME/mutter/-/work_items/5216
+Last-Update: 2026-11-15
+diff --git a/src/backends/meta-backend.c b/src/backends/meta-backend.c
+index 9e9ece8..5d4bf02 100644
+--- a/src/backends/meta-backend.c
++++ b/src/backends/meta-backend.c
+@@ -89,6 +89,7 @@
+ 
+ #ifdef HAVE_NATIVE_BACKEND
+ #include "backends/native/meta-backend-native.h"
++#include "backends/native/meta-keymap-native.h"
+ #endif
+ 
+ 
+@@ -1149,19 +1150,47 @@ dispatch_clutter_event (MetaBackend *backend)
+  * of the queue and dispatching them before we block for new events.
+  */
+ 
++static gboolean
++clutter_source_events_ready (GSource *source)
++{
++#ifdef HAVE_NATIVE_BACKEND
++  MetaBackendSource *backend_source = (MetaBackendSource *) source;
++  ClutterSeat *seat = meta_backend_get_default_seat (backend_source->backend);
++  ClutterKeymap *keymap = clutter_seat_get_keymap (seat);
++#endif
++
++  if (!clutter_events_pending ())
++    return FALSE;
++
++#ifdef HAVE_NATIVE_BACKEND
++  /* The input thread queues keymap state updates with a source of higher
++   * priority before the events which caused them. GLib releases its lock while
++   * it checks a source, so such an update can be attached after the sources of
++   * higher priority were checked in the same iteration. An event handled then
++   * would be handled with the previous keymap state, so events wait until the
++   * queued updates are applied.
++   */
++  if (META_IS_KEYMAP_NATIVE (keymap) &&
++      meta_keymap_native_has_pending_updates (META_KEYMAP_NATIVE (keymap)))
++    return FALSE;
++#endif
++
++  return TRUE;
++}
++
+ static gboolean
+ clutter_source_prepare (GSource *source,
+                         int     *timeout)
+ {
+   *timeout = -1;
+ 
+-  return clutter_events_pending ();
++  return clutter_source_events_ready (source);
+ }
+ 
+ static gboolean
+ clutter_source_check (GSource *source)
+ {
+-  return clutter_events_pending ();
++  return clutter_source_events_ready (source);
+ }
+ 
+ static gboolean
+diff --git a/src/backends/native/meta-keymap-native.c b/src/backends/native/meta-keymap-native.c
+index 30962f6..d847c85 100644
+--- a/src/backends/native/meta-keymap-native.c
++++ b/src/backends/native/meta-keymap-native.c
+@@ -57,6 +57,10 @@ struct _MetaKeymapNative
+     MetaSeatImpl *seat_impl;
+     struct xkb_keymap *keymap;
+   } impl;
++
++  /* Keymap and keymap state updates queued from the input thread and not yet
++   * applied in the main thread. */
++  int pending_updates;
+ };
+ 
+ typedef struct
+@@ -212,6 +216,7 @@ update_keymap_data_free (gpointer user_data)
+ {
+   UpdateKeymapData *data = user_data;
+ 
++  g_atomic_int_add (&data->keymap_native->pending_updates, -1);
+   meta_keymap_description_unref (data->keymap_description);
+   g_strfreev (data->display_names);
+   g_strfreev (data->short_names);
+@@ -264,6 +269,7 @@ meta_keymap_native_set_keymap_in_impl (MetaKeymapNative      *keymap,
+   data->display_names = g_steal_pointer (&display_names);
+   data->short_names = g_steal_pointer (&short_names);
+ 
++  g_atomic_int_inc (&keymap->pending_updates);
+   meta_seat_impl_queue_main_thread_idle (seat_impl,
+                                          update_keymap_in_main,
+                                          data, update_keymap_data_free);
+@@ -282,6 +288,15 @@ typedef struct
+   ModifierState modifier_state;
+ } UpdateLockedModifierStateData;
+ 
++static void
++update_state_data_free (gpointer user_data)
++{
++  UpdateLockedModifierStateData *data = user_data;
++
++  g_atomic_int_add (&data->keymap_native->pending_updates, -1);
++  g_free (data);
++}
++
+ static gboolean
+ update_state_in_main (gpointer user_data)
+ {
+@@ -303,9 +318,24 @@ meta_keymap_native_update_in_impl (MetaKeymapNative *keymap_native,
+   data->keymap_native = keymap_native;
+   data->modifier_state = calculate_modifier_state (xkb_state);
+ 
++  g_atomic_int_inc (&keymap_native->pending_updates);
+   meta_seat_impl_queue_main_thread_idle (keymap_native->impl.seat_impl,
+                                          update_state_in_main,
+-                                         data, g_free);
++                                         data, update_state_data_free);
++}
++
++/**
++ * meta_keymap_native_has_pending_updates:
++ * @keymap_native: a #MetaKeymapNative
++ *
++ * Returns: whether keymap or keymap state updates queued from the input
++ *   thread are not yet applied in the main thread. The input thread queues
++ *   them before the events which caused them.
++ */
++gboolean
++meta_keymap_native_has_pending_updates (MetaKeymapNative *keymap_native)
++{
++  return g_atomic_int_get (&keymap_native->pending_updates) > 0;
+ }
+ 
+ MetaKeymapNative *
+diff --git a/src/backends/native/meta-keymap-native.h b/src/backends/native/meta-keymap-native.h
+index 2b37769..41015e5 100644
+--- a/src/backends/native/meta-keymap-native.h
++++ b/src/backends/native/meta-keymap-native.h
+@@ -27,3 +27,5 @@ META_EXPORT_TEST
+ G_DECLARE_FINAL_TYPE (MetaKeymapNative, meta_keymap_native,
+                       META, KEYMAP_NATIVE,
+                       ClutterKeymap)
++
++gboolean meta_keymap_native_has_pending_updates (MetaKeymapNative *keymap_native);
