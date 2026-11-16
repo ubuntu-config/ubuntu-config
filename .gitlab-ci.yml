@@ -240,6 +240,7 @@ test_session:
           - workspace-attention
           - portal-inhibit
           - overview-thumbnails
+          - restore-monitors
 
   script:
     - apt-get update -q

@@ -1,20 +1,24 @@
-Description: Let a window placed while hidden update its actor before it is shown.
+Description: Let a hidden window with a known monitor and size update its actor before it is shown.
  Mutter freezes the updates of a Wayland window until the window is shown for the first time, since only then did
  it know which monitor the window is on, and thus its size. While they are frozen, the window's actor neither
  follows the window's geometry nor shows the content the client committed, so it stays 0x0. A window which is
  hidden from the start, like one a session restores to another workspace, is shown only when that workspace is
  activated, and until then previews of it, like the overview's workspace thumbnails, show nothing where it is.
  .
- A window placed while hidden already has its monitor and size: mutter places a hidden window as soon as it has a
- buffer so that previews of hidden windows know where they are, and a restored window is placed from its stored
- state. The updates of a Wayland window are now frozen only until it is shown or placed while hidden, and the
+ A hidden window which is placed or not floating already has its monitor and size: mutter places a hidden floating
+ window as soon as it has a buffer so that previews of hidden windows know where they are, a restored floating
+ window is placed from its stored state, and a maximized, tiled or fullscreen window has the size the constraints
+ give it on its monitor, which for a restored one is the monitor of its stored state. The updates of a Wayland
+ window are now frozen only until it is shown, or while it is hidden, until it is placed or not floating, and the
  frozen state is synced after a window is hidden. Windows shown when they map are unchanged.
  .
- The test restore-other-workspace restores a window to the second workspace while the first one is active and
- checks that the window is hidden and that its actor has the size of the window's buffer, which fails without the
- change, as the actor is 0x0.
+ The tests restore-other-workspace, restore-maximized-other-workspace and restore-tiled-other-workspace restore a
+ window, floating, or maximized or tiled on a second monitor, to the second workspace while the first one is active,
+ and check that the window is hidden, on its monitor, and that its actor has the position and size of the window's
+ buffer, which fails without the change, as the actor is 0x0. They then activate the second workspace and check that
+ the window is shown with the same geometry and its actor following it.
 Author: Mitar
-Last-Update: 2026-11-14
+Last-Update: 2026-11-16
 diff --git a/src/core/window.c b/src/core/window.c
 index 312a2de..de4c8f9 100644
 --- a/src/core/window.c
@@ -33,13 +37,69 @@ index 312a2de..de4c8f9 100644
          sync_client_window_mapped (window);
      }
 diff --git a/src/tests/wayland-unit-tests.c b/src/tests/wayland-unit-tests.c
-index a87c576..231a001 100644
+index a87c576..74ffd58 100644
 --- a/src/tests/wayland-unit-tests.c
 +++ b/src/tests/wayland-unit-tests.c
-@@ -1435,6 +1435,88 @@ toplevel_sessions_restore_changed (void)
+@@ -1435,6 +1435,267 @@ toplevel_sessions_restore_changed (void)
    meta_wayland_test_client_finish (wayland_test_client2);
  }
  
++/* Checks that the actor of a window has the position and size of the window's
++ * buffer, as an actor following the window's geometry and content has */
++static void
++assert_window_actor_follows_buffer (MetaWindow *window)
++{
++  MetaWindowActor *window_actor = meta_window_actor_from_window (window);
++  MtkRectangle buffer_rect;
++  float actor_x, actor_y, actor_width, actor_height;
++
++  meta_window_get_buffer_rect (window, &buffer_rect);
++  clutter_actor_get_position (CLUTTER_ACTOR (window_actor), &actor_x, &actor_y);
++  clutter_actor_get_size (CLUTTER_ACTOR (window_actor),
++                          &actor_width, &actor_height);
++  g_assert_cmpint (buffer_rect.width, >, 0);
++  g_assert_cmpint (buffer_rect.height, >, 0);
++  g_assert_cmpfloat (actor_x, ==, buffer_rect.x);
++  g_assert_cmpfloat (actor_y, ==, buffer_rect.y);
++  g_assert_cmpfloat (actor_width, ==, buffer_rect.width);
++  g_assert_cmpfloat (actor_height, ==, buffer_rect.height);
++}
++
++/* Activates the workspace of a restored window not shown yet, checks that the
++ * window is shown with the geometry it had while hidden and its actor
++ * following it, and activates the first workspace again */
++static void
++check_restored_window_shown (MetaWindow *window)
++{
++  MetaBackend *backend = meta_context_get_backend (test_context);
++  ClutterActor *stage = meta_backend_get_stage (backend);
++  MetaDisplay *display = meta_context_get_display (test_context);
++  MetaWorkspaceManager *workspace_manager =
++    meta_display_get_workspace_manager (display);
++  MetaWindowActor *window_actor = meta_window_actor_from_window (window);
++  MtkRectangle hidden_rect, shown_rect;
++
++  hidden_rect = meta_window_config_get_rect (window->config);
++
++  meta_workspace_activate (meta_window_get_workspace (window),
++                           meta_display_get_current_time_roundtrip (display));
++  wait_for_paint (stage);
++  meta_wait_for_effects (window);
++
++  g_assert_false (window->hidden);
++  g_assert_true (clutter_actor_is_mapped (CLUTTER_ACTOR (window_actor)));
++  shown_rect = meta_window_config_get_rect (window->config);
++  g_assert_cmpint (shown_rect.x, ==, hidden_rect.x);
++  g_assert_cmpint (shown_rect.y, ==, hidden_rect.y);
++  g_assert_cmpint (shown_rect.width, ==, hidden_rect.width);
++  g_assert_cmpint (shown_rect.height, ==, hidden_rect.height);
++  assert_window_actor_follows_buffer (window);
++
++  meta_workspace_activate (meta_workspace_manager_get_workspace_by_index (workspace_manager, 0),
++                           meta_display_get_current_time_roundtrip (display));
++  wait_for_paint (stage);
++}
++
 +static void
 +toplevel_sessions_restore_other_workspace (void)
 +{
@@ -51,9 +111,6 @@ index a87c576..231a001 100644
 +    meta_display_get_workspace_manager (display);
 +  MetaWaylandTestClient *wayland_test_client;
 +  MetaWindow *window;
-+  MetaWindowActor *window_actor;
-+  MtkRectangle buffer_rect;
-+  float actor_width, actor_height;
 +  g_autofree char *session_id = NULL;
 +
 +  meta_workspace_manager_update_num_workspaces (
@@ -101,15 +158,9 @@ index a87c576..231a001 100644
 +  g_assert_cmpint (meta_workspace_index (meta_window_get_workspace (window)),
 +                   ==, 1);
 +  g_assert_true (window->hidden);
++  assert_window_actor_follows_buffer (window);
 +
-+  window_actor = meta_window_actor_from_window (window);
-+  meta_window_get_buffer_rect (window, &buffer_rect);
-+  clutter_actor_get_size (CLUTTER_ACTOR (window_actor),
-+                          &actor_width, &actor_height);
-+  g_assert_cmpint (buffer_rect.width, >, 0);
-+  g_assert_cmpint (buffer_rect.height, >, 0);
-+  g_assert_cmpfloat (actor_width, ==, buffer_rect.width);
-+  g_assert_cmpfloat (actor_height, ==, buffer_rect.height);
++  check_restored_window_shown (window);
 +
 +  g_signal_handlers_disconnect_by_func (session_manager,
 +                                        on_session_instantiated,
@@ -122,10 +173,142 @@ index a87c576..231a001 100644
 +    workspace_manager, meta_display_get_current_time_roundtrip (display), 1);
 +}
 +
++typedef enum
++{
++  RESTORED_STATE_MAXIMIZED,
++  RESTORED_STATE_TILED_LEFT,
++} RestoredState;
++
++/* Restores a window maximized or tiled on the second monitor and on the
++ * second workspace while the first one is active, and checks that it is on
++ * the second monitor, hidden, with its actor following its geometry and
++ * content, as previews of the second workspace show it. */
++static void
++check_toplevel_sessions_restore_hidden (RestoredState restored_state)
++{
++  MetaSessionManager *session_manager;
++  g_autoptr (MetaVirtualMonitor) second_virtual_monitor = NULL;
++  MetaBackend *backend = meta_context_get_backend (test_context);
++  ClutterActor *stage = meta_backend_get_stage (backend);
++  MetaDisplay *display = meta_context_get_display (test_context);
++  MetaWorkspaceManager *workspace_manager =
++    meta_display_get_workspace_manager (display);
++  MetaWaylandTestClient *wayland_test_client;
++  MetaWindow *window;
++  MetaWindowWayland *wl_window;
++  MtkRectangle frame_rect, monitor_layout;
++  int expected_width;
++  uint32_t state_change_serial = 0U;
++  g_autofree char *session_id = NULL;
++
++  monitor_layout = get_primary_logical_monitor_layout ();
++  expected_width = restored_state == RESTORED_STATE_MAXIMIZED ? 800 : 400;
++
++  second_virtual_monitor = meta_create_test_monitor (test_context,
++                                                     800, 600, 60.0);
++
++  meta_workspace_manager_update_num_workspaces (
++    workspace_manager, meta_display_get_current_time_roundtrip (display), 2);
++  g_assert_cmpint (meta_workspace_manager_get_active_workspace_index (workspace_manager),
++                   ==, 0);
++
++  session_manager = meta_context_get_session_manager (test_context);
++  g_signal_connect (session_manager, "session-instantiated",
++                    G_CALLBACK (on_session_instantiated), &session_id);
++
++  /* Launch client once, maximize or tile the window on the second monitor,
++   * and move it to the second workspace */
++  wayland_test_client =
++    meta_wayland_test_client_new (test_context, "xdg-session-management-restore");
++
++  wait_for_sync_point (0);
++  wait_for_paint (stage);
++
++  window = find_client_window ("toplevel1");
++  g_assert_nonnull (window);
++
++  meta_window_move_resize_frame (window, FALSE,
++                                 monitor_layout.width + 123, 123, 100, 100);
++  wait_for_paint (stage);
++
++  if (restored_state == RESTORED_STATE_MAXIMIZED)
++    meta_window_maximize (window);
++  else
++    meta_window_tile (window, META_TILE_LEFT);
++
++  wl_window = META_WINDOW_WAYLAND (window);
++  meta_window_wayland_get_pending_serial (wl_window, &state_change_serial);
++  g_assert_cmpint (state_change_serial, !=, 0U);
++  while (meta_window_wayland_peek_configuration (wl_window, state_change_serial))
++    g_main_context_iteration (NULL, TRUE);
++
++  frame_rect = meta_window_config_get_rect (window->config);
++  g_assert_cmpint (frame_rect.x, ==, monitor_layout.width);
++  g_assert_cmpint (frame_rect.y, ==, 0);
++  g_assert_cmpint (frame_rect.width, ==, expected_width);
++  g_assert_cmpint (frame_rect.height, ==, 600);
++
++  meta_window_change_workspace_by_index (window, 1, FALSE);
++  wait_for_paint (stage);
++
++  meta_wayland_test_driver_emit_sync_event (test_driver, 0);
++  meta_wayland_test_client_finish (wayland_test_client);
++
++  g_assert_nonnull (session_id);
++
++  /* Launch client again */
++  wayland_test_client =
++    meta_wayland_test_client_new_with_args (test_context,
++                                            "xdg-session-management-restore",
++                                            session_id,
++                                            NULL);
++
++  wait_for_sync_point (0);
++  wait_for_paint (stage);
++
++  window = find_client_window ("toplevel1");
++  g_assert_nonnull (window);
++
++  g_assert_cmpint (meta_workspace_index (meta_window_get_workspace (window)),
++                   ==, 1);
++  g_assert_true (window->hidden);
++
++  frame_rect = meta_window_config_get_rect (window->config);
++  g_assert_cmpint (frame_rect.x, ==, monitor_layout.width);
++  g_assert_cmpint (frame_rect.y, ==, 0);
++  g_assert_cmpint (frame_rect.width, ==, expected_width);
++  g_assert_cmpint (frame_rect.height, ==, 600);
++  assert_window_actor_follows_buffer (window);
++
++  check_restored_window_shown (window);
++
++  g_signal_handlers_disconnect_by_func (session_manager,
++                                        on_session_instantiated,
++                                        &session_id);
++
++  meta_wayland_test_driver_emit_sync_event (test_driver, 0);
++  meta_wayland_test_client_finish (wayland_test_client);
++
++  meta_workspace_manager_update_num_workspaces (
++    workspace_manager, meta_display_get_current_time_roundtrip (display), 1);
++}
++
++static void
++toplevel_sessions_restore_maximized_other_workspace (void)
++{
++  check_toplevel_sessions_restore_hidden (RESTORED_STATE_MAXIMIZED);
++}
++
++static void
++toplevel_sessions_restore_tiled_other_workspace (void)
++{
++  check_toplevel_sessions_restore_hidden (RESTORED_STATE_TILED_LEFT);
++}
++
  static void
  toplevel_sessions_restore_fullscreen (void)
  {
-@@ -2512,6 +2594,8 @@ init_tests (void)
+@@ -2512,11 +2773,15 @@ init_tests (void)
                     toplevel_sessions_restore_session_destroyed);
    g_test_add_func ("/wayland/toplevel/sessions/restore-changed",
                     toplevel_sessions_restore_changed);
@@ -134,11 +317,29 @@ index a87c576..231a001 100644
  #ifdef MUTTER_PRIVILEGED_TEST
    (void)(toplevel_sessions_restore_maximized);
    (void)(toplevel_sessions_restore_tiled);
+   (void)(toplevel_sessions_restore_fullscreen);
+   (void)(toplevel_sessions_restore_fullscreen_monitor_removed);
++  (void)(toplevel_sessions_restore_maximized_other_workspace);
++  (void)(toplevel_sessions_restore_tiled_other_workspace);
+   (void)(toplevel_bounds_struts);
+   (void)(toplevel_bounds_monitors);
+ #else
+@@ -2528,6 +2793,10 @@ init_tests (void)
+                    toplevel_sessions_restore_fullscreen);
+   g_test_add_func ("/wayland/toplevel/sessions/restore-fullscreen-monitor-removed",
+                    toplevel_sessions_restore_fullscreen_monitor_removed);
++  g_test_add_func ("/wayland/toplevel/sessions/restore-maximized-other-workspace",
++                   toplevel_sessions_restore_maximized_other_workspace);
++  g_test_add_func ("/wayland/toplevel/sessions/restore-tiled-other-workspace",
++                   toplevel_sessions_restore_tiled_other_workspace);
+   g_test_add_func ("/wayland/toplevel/bounds/struts",
+                    toplevel_bounds_struts);
+   g_test_add_func ("/wayland/toplevel/bounds/monitors",
 diff --git a/src/wayland/meta-window-wayland.c b/src/wayland/meta-window-wayland.c
-index 6d20598..91e81b0 100644
+index 6d20598..7d9da59 100644
 --- a/src/wayland/meta-window-wayland.c
 +++ b/src/wayland/meta-window-wayland.c
-@@ -986,7 +986,12 @@ meta_window_wayland_are_updates_frozen (MetaWindow *window)
+@@ -986,7 +986,17 @@ meta_window_wayland_are_updates_frozen (MetaWindow *window)
  {
    MetaWindowWayland *wl_window = META_WINDOW_WAYLAND (window);
  
@@ -146,9 +347,14 @@ index 6d20598..91e81b0 100644
 +  if (wl_window->has_been_shown)
 +    return FALSE;
 +
-+  /* A window placed while hidden, as on another workspace, has its monitor and
-+   * size, and previews of it, like workspace thumbnails, need its content. */
-+  return !(window->placed && window->hidden);
++  if (!window->hidden)
++    return TRUE;
++
++  /* A hidden window, as on another workspace, which is placed or maximized,
++   * tiled or fullscreen has its monitor and size, and previews of it, like
++   * workspace thumbnails, need its content. A restored window is placed if
++   * it is floating, and has its target monitor otherwise. */
++  return !(window->placed || !meta_window_config_is_floating (window->config));
  }
  
  static gboolean

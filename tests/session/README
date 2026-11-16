@@ -2,12 +2,13 @@ These tests require a whole GNOME session. They run in a container, by hand and 
 
 The tests run the real session, as Ubuntu ships it, with the packages patched here. In place of GDM, they start
 gnome-session --session=ubuntu, which has the user's service manager start gnome-session's services and GNOME Shell,
-headless with one virtual monitor of 1920x1080, with the Ubuntu Dock and Ubuntu's other extensions. The tests log in
-and out of it, as many times as they need, and drive it through GNOME Shell: session_tests.py calls the methods of the
-extension session-test@mitar.tnode.com over GNOME Shell's Eval D-Bus method, which the extension allows by turning on
-GNOME Shell's unsafe mode, only ever in the test session. The extension clicks icons in the Ubuntu Dock, as the mouse
-does, runs commands as the Alt+F2 dialog does, types on a virtual keyboard, moves windows and switches workspaces, and
-reports the windows with their workspaces, positions, sizes and focus, the open dialogs and the clipboard.
+headless with one virtual monitor of 1920x1080 (two for restore-monitors), with the Ubuntu Dock and Ubuntu's other
+extensions. The tests log in and out of it, as many times as they need, and drive it through GNOME Shell:
+session_tests.py calls the methods of the extension session-test@mitar.tnode.com over GNOME Shell's Eval D-Bus
+method, which the extension allows by turning on GNOME Shell's unsafe mode, only ever in the test session. The
+extension clicks icons in the Ubuntu Dock, as the mouse does, runs commands as the Alt+F2 dialog does, types on a
+virtual keyboard, moves windows and switches workspaces, and reports the windows with their workspaces, positions,
+sizes and focus, the open dialogs and the clipboard.
 
 The session has the settings which configure-gnome-desktop.sh sets with set_key, as far as their schemas are
 installed: 12 static workspaces, and the Ubuntu Dock opening a new window of an application when clicked on a
@@ -68,6 +69,15 @@ The tests:
   overview-thumbnails
                   After logging in again, the overview's workspace thumbnails show the Ptyxis windows restored to
                   workspaces not visited yet, each with its size, which needs patches/mutter/hidden-window-updates.patch.
+  restore-monitors
+                  With a second monitor, Ptyxis windows maximized and tiled on either monitor return to their
+                  monitors, workspaces, states and geometries after logging in again, also on workspaces not visited
+                  yet, the overview's workspace thumbnails show them, and visiting their workspaces shows them
+                  unchanged, which needs restore-target-monitor.patch, restore-maximized-client-monitor.patch and
+                  hidden-window-updates.patch of patches/mutter/. GNOME Shell has the second virtual monitor from a
+                  drop-in the test writes for the test user, and the test tiles with mutter's keybindings, with
+                  tiling-assistant disabled as configure-gnome-desktop.sh disables it, since tiling-assistant leaves
+                  a tiled window floating.
 
 The tests text-editor, ptyxis and firefox also check that no restored window demands attention. The test chromium
 only records such windows in its result.json: Chromium asks mutter to activate every window it restores, without an
@@ -94,7 +104,8 @@ the packages of the local repository:
       cp /repo/sources.list.d/xtradeb-ubuntu-apps-resolute.sources /etc/apt/sources.list.d/ &&
       /repo/tests/session/prepare-container.sh /debs &&
       /repo/tests/session/run-session-tests.sh /out/run spawn-scopes text-editor ptyxis firefox chromium \
-        chromium-quit shutdown lock-screen workspace-attention portal-inhibit overview-thumbnails'
+        chromium-quit shutdown lock-screen workspace-attention portal-inhibit overview-thumbnails \
+        restore-monitors'
 
 A later DEBS_DIR replaces packages of the same name of an earlier one, so a build to test can follow the local
 repository. prepare-container.sh can run again on a prepared container, for example without DEBS_DIR to install a

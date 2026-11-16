@@ -156,15 +156,21 @@ hidden-window-updates.patch
     and until then the window's actor stays 0x0, without the client's content. A window restored to
     another workspace is shown only when that workspace is activated, so after logging in, the
     overview's workspace thumbnails showed nothing for the restored windows of workspaces not visited
-    yet. With this patch the updates of a window placed while hidden are no longer frozen: such a
-    window already has its monitor and size, either from its stored state or because mutter places
-    a hidden window as soon as it has a buffer. Windows shown when they map are unchanged.
+    yet. With this patch the updates of a hidden window which is placed or not floating are no longer
+    frozen: such a window already has its monitor and size. A floating window has them from its
+    stored state or because mutter places a hidden window as soon as it has a buffer, and a
+    maximized, tiled or fullscreen one from the constraints on its monitor, which for a restored
+    window is the monitor of its stored state. Windows shown when they map are unchanged.
 
-    The test restore-other-workspace of src/tests/wayland-unit-tests.c restores a window to the
-    second workspace while the first one is active, and fails without the change, as the window's
-    actor is 0x0. The tests run during the build. The session test overview-thumbnails in
-    tests/session/ checks it in GNOME Shell's overview with Ptyxis. The same symptom for windows
-    which appear while the overview is open is mutter issue 1752. Not proposed upstream yet.
+    The tests restore-other-workspace, restore-maximized-other-workspace (also with a client which
+    requests being maximized itself, as GTK does) and restore-tiled-other-workspace of
+    src/tests/wayland-unit-tests.c restore a window, floating, maximized or tiled on a second
+    monitor, to the second workspace while the first one is active, and fail without the change, as
+    the window's actor is 0x0. They then activate the second workspace and check that the window is
+    shown unchanged, with its actor following it. The tests run during the build. The session tests
+    overview-thumbnails and restore-monitors in tests/session/ check it in GNOME Shell's overview
+    with Ptyxis. The same symptom for windows which appear while the overview is open is mutter issue
+    1752. Not proposed upstream yet.
 
 keymap-state-before-key-events.patch
     Mutter's input thread queues the keymap state resulting from a key event before the event, but
@@ -177,3 +183,23 @@ keymap-state-before-key-events.patch
     Without it, the build's test wayland-keyboard, whose client waits for that event after each
     modifier key, hangs in about 2.5% of its runs under load until meson kills it after 360
     seconds. Reported as mutter issue 5216, with the fix not proposed upstream yet.
+
+restore-target-monitor.patch
+    Upstream's change from mutter 50.2, which gives a window a target monitor, the monitor window
+    management operations act on. Restoring a maximized, tiled or fullscreen window sets it from the
+    stored rectangle, and the constraints fall back to it, where 50.1 moved the window to the stored
+    rectangle first and fell back to the monitor the window was created on. The patch also has the
+    fix from mutter 50.3 for a crash after a display reconfiguration, which the target monitor
+    introduced (mutter issue 4891). restore-maximized-client-monitor.patch builds on it. Drop the
+    patch once Ubuntu ships mutter 50.3 or newer.
+
+restore-maximized-client-monitor.patch
+    GTK requests being maximized before it restores a window it restores maximized, so mutter has
+    maximized the window on the monitor it was created on by the time the restore sets its target
+    monitor, and maximizing it again leaves it there: a Ptyxis window saved maximized on a second
+    monitor returned maximized on the first one, also with restore-target-monitor.patch. With this
+    patch restoring moves a window which already is maximized or fullscreen to the monitor of its
+    stored state. The test restore-maximized-other-workspace-client-maximized of
+    src/tests/wayland-unit-tests.c, whose client requests being maximized before restoring, as GTK
+    does, fails without it, and the session test restore-monitors in tests/session/ checks it with
+    Ptyxis on two monitors. Not checked against upstream's main, not proposed upstream yet.

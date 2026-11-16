@@ -1,0 +1,152 @@
+Description: Move a window maximized or fullscreen before its session restore to the monitor of its stored state.
+ A client can request being maximized or fullscreen before it restores its toplevel, and GTK does so for a window it
+ restores maximized. Mutter then maximizes the window on the monitor it was created on before restoring it, and
+ restoring it sets its target monitor and maximizes it again, which leaves it where it is. A Ptyxis window saved
+ maximized on a second monitor returned maximized on the first one, also with restore-target-monitor.patch.
+ .
+ Restoring now moves a window which already is maximized or fullscreen to the monitor of its stored state.
+ .
+ The test restore-maximized-other-workspace-client-maximized restores a window maximized on a second monitor, whose
+ client requests being maximized before it restores its toplevel, and fails without the change, as the window is
+ maximized on the first monitor.
+Author: Mitar
+Last-Update: 2026-11-16
+diff --git a/src/tests/wayland-test-clients/xdg-session-management-restore.c b/src/tests/wayland-test-clients/xdg-session-management-restore.c
+index 4f9d2f5..f3cd8f9 100644
+--- a/src/tests/wayland-test-clients/xdg-session-management-restore.c
++++ b/src/tests/wayland-test-clients/xdg-session-management-restore.c
+@@ -125,7 +125,8 @@ on_toplevel_configured (WaylandSurface       *surface,
+ static void
+ simple (WaylandDisplay *display,
+         const char     *session_id,
+-        gboolean        destroy_session)
++        gboolean        destroy_session,
++        gboolean        maximized)
+ {
+   TestDisplayState *test_state = display->test_state;
+   g_autoptr (WaylandSurface) toplevel1 = NULL;
+@@ -154,6 +155,11 @@ simple (WaylandDisplay *display,
+   else
+     g_assert_true (state.received_created);
+ 
++  /* Request being maximized before restoring the toplevel, as GTK does for a
++   * window it restores maximized */
++  if (maximized)
++    xdg_toplevel_set_maximized (toplevel1->xdg_toplevel);
++
+   toplevel_session1 = xdg_session_v1_restore_toplevel (session,
+                                                        toplevel1->xdg_toplevel,
+                                                        "toplevel1");
+@@ -201,11 +207,14 @@ main (int    argc,
+   TestDisplayState *test_state;
+   const char *session_id = NULL;
+   gboolean destroy_session = FALSE;
++  gboolean maximized = FALSE;
+ 
+   for (int i = 1; i < argc; i++)
+     {
+       if (g_strcmp0 (argv[i], "--destroy-session") == 0)
+         destroy_session = TRUE;
++      else if (g_strcmp0 (argv[i], "--maximized") == 0)
++        maximized = TRUE;
+       else
+         session_id = argv[i];
+     }
+@@ -224,7 +233,7 @@ main (int    argc,
+ 
+   g_assert_nonnull (test_state->session_manager);
+ 
+-  simple (display, session_id, destroy_session);
++  simple (display, session_id, destroy_session, maximized);
+ 
+   return EXIT_SUCCESS;
+ }
+diff --git a/src/tests/wayland-unit-tests.c b/src/tests/wayland-unit-tests.c
+index 74ffd58..2a09d01 100644
+--- a/src/tests/wayland-unit-tests.c
++++ b/src/tests/wayland-unit-tests.c
+@@ -1573,9 +1573,12 @@ typedef enum
+ /* Restores a window maximized or tiled on the second monitor and on the
+  * second workspace while the first one is active, and checks that it is on
+  * the second monitor, hidden, with its actor following its geometry and
+- * content, as previews of the second workspace show it. */
++ * content, as previews of the second workspace show it. With
++ * client_maximizes, the restored client requests being maximized before it
++ * restores its toplevel, as GTK does. */
+ static void
+-check_toplevel_sessions_restore_hidden (RestoredState restored_state)
++check_toplevel_sessions_restore_hidden (RestoredState restored_state,
++                                        gboolean      client_maximizes)
+ {
+   MetaSessionManager *session_manager;
+   g_autoptr (MetaVirtualMonitor) second_virtual_monitor = NULL;
+@@ -1652,6 +1655,7 @@ check_toplevel_sessions_restore_hidden (RestoredState restored_state)
+     meta_wayland_test_client_new_with_args (test_context,
+                                             "xdg-session-management-restore",
+                                             session_id,
++                                            client_maximizes ? "--maximized" : NULL,
+                                             NULL);
+ 
+   wait_for_sync_point (0);
+@@ -1687,13 +1691,19 @@ check_toplevel_sessions_restore_hidden (RestoredState restored_state)
+ static void
+ toplevel_sessions_restore_maximized_other_workspace (void)
+ {
+-  check_toplevel_sessions_restore_hidden (RESTORED_STATE_MAXIMIZED);
++  check_toplevel_sessions_restore_hidden (RESTORED_STATE_MAXIMIZED, FALSE);
++}
++
++static void
++toplevel_sessions_restore_maximized_other_workspace_client_maximized (void)
++{
++  check_toplevel_sessions_restore_hidden (RESTORED_STATE_MAXIMIZED, TRUE);
+ }
+ 
+ static void
+ toplevel_sessions_restore_tiled_other_workspace (void)
+ {
+-  check_toplevel_sessions_restore_hidden (RESTORED_STATE_TILED_LEFT);
++  check_toplevel_sessions_restore_hidden (RESTORED_STATE_TILED_LEFT, FALSE);
+ }
+ 
+ static void
+@@ -2781,6 +2791,7 @@ init_tests (void)
+   (void)(toplevel_sessions_restore_fullscreen);
+   (void)(toplevel_sessions_restore_fullscreen_monitor_removed);
+   (void)(toplevel_sessions_restore_maximized_other_workspace);
++  (void)(toplevel_sessions_restore_maximized_other_workspace_client_maximized);
+   (void)(toplevel_sessions_restore_tiled_other_workspace);
+   (void)(toplevel_bounds_struts);
+   (void)(toplevel_bounds_monitors);
+@@ -2795,6 +2806,8 @@ init_tests (void)
+                    toplevel_sessions_restore_fullscreen_monitor_removed);
+   g_test_add_func ("/wayland/toplevel/sessions/restore-maximized-other-workspace",
+                    toplevel_sessions_restore_maximized_other_workspace);
++  g_test_add_func ("/wayland/toplevel/sessions/restore-maximized-other-workspace-client-maximized",
++                   toplevel_sessions_restore_maximized_other_workspace_client_maximized);
+   g_test_add_func ("/wayland/toplevel/sessions/restore-tiled-other-workspace",
+                    toplevel_sessions_restore_tiled_other_workspace);
+   g_test_add_func ("/wayland/toplevel/bounds/struts",
+diff --git a/src/wayland/meta-wayland-xdg-session-state.c b/src/wayland/meta-wayland-xdg-session-state.c
+index cce5d5f..5750aa1 100644
+--- a/src/wayland/meta-wayland-xdg-session-state.c
++++ b/src/wayland/meta-wayland-xdg-session-state.c
+@@ -435,7 +435,17 @@ meta_wayland_xdg_session_state_restore_window (MetaSessionState *state,
+ 
+       target_monitor = determine_monitor_for_rect (window, rect);
+       if (target_monitor)
+-        g_set_object (&window->target_monitor, target_monitor);
++        {
++          g_set_object (&window->target_monitor, target_monitor);
++
++          /* A client can request being maximized or fullscreen before it
++           * restores its toplevel, as GTK does, and the window then already is
++           * maximized or fullscreen on the monitor it was created on, where
++           * maximizing it or making it fullscreen below would leave it. */
++          if (!meta_window_config_is_floating (window->config) &&
++              window->monitor != target_monitor)
++            meta_window_move_to_monitor (window, target_monitor->number);
++        }
+     }
+ 
+   if (toplevel_state->workspace_idx >= 0)

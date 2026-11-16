@@ -7,3 +7,5 @@ save-toplevels-on-change.patch
 wayland-keyboard-test-sync-point.patch
 hidden-window-updates.patch
 keymap-state-before-key-events.patch
+restore-target-monitor.patch
+restore-maximized-client-monitor.patch

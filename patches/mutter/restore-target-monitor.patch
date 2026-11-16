@@ -1,0 +1,672 @@
+Description: Give a window a target monitor, which restoring sets from the stored state, as mutter 50.2 does.
+ Mutter 50.1 restores a maximized, tiled or fullscreen window by moving it to its stored rectangle and then
+ maximizing, tiling or making it fullscreen, and the constraints fall back to the monitor the window was created on
+ when a move or resize has no valid rectangle. Mutter 50.2 gives a window a target monitor, the monitor window
+ management operations act on, which restoring sets from the stored rectangle and the constraints fall back to.
+ restore-maximized-client-monitor.patch builds on it for a window GTK maximizes before restoring it.
+ .
+ This is upstream's merge request 4960 for issue 4158, without its test of resized tiled windows, which needs test
+ helpers 50.1 does not have: 5d6d76bb, 645bd87a, 6bee1e5b, a475ba48, 6aaeacc6, 8e273315, 27870756, 17d85057,
+ d0633d77 and 5338fbb2, with the stacking tests added to the list in src/tests/meson.build by hand. It also has
+ 371973f3, which fixes a crash after a display reconfiguration with a window whose target monitor was removed, issue
+ 4891, and which is 07461c96 of mutter 50.3.
+Origin: upstream, https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/4960
+Bug: https://gitlab.gnome.org/GNOME/mutter/-/issues/4158
+Applied-Upstream: 50.3
+Last-Update: 2026-11-16
+diff --git a/src/compositor/meta-window-drag.c b/src/compositor/meta-window-drag.c
+index a9aeaa8..54233cc 100644
+--- a/src/compositor/meta-window-drag.c
++++ b/src/compositor/meta-window-drag.c
+@@ -1493,12 +1493,8 @@ update_move (MetaWindowDrag          *window_drag,
+                     }
+                   else
+                     {
+-                      meta_window_maximize_internal (window,
+-                                                     META_MAXIMIZE_BOTH,
+-                                                     &window->saved_rect);
+-                      meta_window_move_to_monitor_internal (window,
+-                                                            META_MOVE_RESIZE_USER_ACTION,
+-                                                            monitor);
++                      meta_window_set_target_monitor_from_number (window, monitor);
++                      meta_window_maximize (window);
+                     }
+ 
+                   window_drag->target_monitor_number = monitor;
+diff --git a/src/compositor/plugins/default.c b/src/compositor/plugins/default.c
+index 0326222..7de2647 100644
+--- a/src/compositor/plugins/default.c
++++ b/src/compositor/plugins/default.c
+@@ -43,6 +43,7 @@ typedef enum
+   ANIMATION_DESTROY,
+   ANIMATION_MINIMIZE,
+   ANIMATION_MAP,
++  ANIMATION_SIZE_CHANGE,
+   ANIMATION_SWITCH,
+ } Animation;
+ 
+@@ -50,6 +51,7 @@ static unsigned int animation_durations[] = {
+   100, /* destroy */
+   250, /* minimize */
+   250, /* map */
++  250, /* size_change */
+   500, /* switch */
+ };
+ 
+@@ -87,6 +89,13 @@ static void minimize   (MetaPlugin      *plugin,
+                         MetaWindowActor *actor);
+ static void map        (MetaPlugin      *plugin,
+                         MetaWindowActor *actor);
++static void size_change (MetaPlugin      *plugin,
++                         MetaWindowActor *actor,
++                         MetaSizeChange   which_change,
++                         MtkRectangle    *old_frame_rect,
++                         MtkRectangle    *old_buffer_rect);
++static void size_changed (MetaPlugin      *plugin,
++                          MetaWindowActor *actor);
+ static void destroy    (MetaPlugin      *plugin,
+                         MetaWindowActor *actor);
+ 
+@@ -134,6 +143,10 @@ typedef struct _ActorPrivate
+   ClutterTimeline *tml_minimize;
+   ClutterTimeline *tml_destroy;
+   ClutterTimeline *tml_map;
++  ClutterTimeline *tml_size_changed;
++
++  MtkRectangle old_buffer_rect;
++  ClutterActor *actor_clone;
+ } ActorPrivate;
+ 
+ /* callback data for when animations complete */
+@@ -172,6 +185,8 @@ meta_default_plugin_class_init (MetaDefaultPluginClass *klass)
+   plugin_class->start            = start;
+   plugin_class->map              = map;
+   plugin_class->minimize         = minimize;
++  plugin_class->size_change      = size_change;
++  plugin_class->size_changed     = size_changed;
+   plugin_class->destroy          = destroy;
+   plugin_class->switch_workspace = switch_workspace;
+   plugin_class->show_tile_preview = show_tile_preview;
+@@ -695,6 +710,139 @@ minimize (MetaPlugin *plugin, MetaWindowActor *window_actor)
+     meta_plugin_minimize_completed (plugin, window_actor);
+ }
+ 
++static void
++size_change (MetaPlugin      *plugin,
++             MetaWindowActor *window_actor,
++             MetaSizeChange   which_change,
++             MtkRectangle    *old_frame_rect,
++             MtkRectangle    *old_buffer_rect)
++{
++  MetaWindow *meta_window = meta_window_actor_get_meta_window (window_actor);
++  ActorPrivate *apriv = get_actor_private (window_actor);
++  g_autoptr (ClutterContent) actor_content = NULL;
++  g_autoptr (ClutterActor) actor_clone = NULL;
++  MetaWindowType type;
++
++  type = meta_window_get_window_type (meta_window);
++  if (type != META_WINDOW_NORMAL)
++    {
++      meta_plugin_size_change_completed (plugin, window_actor);
++      return;
++    }
++
++  if (mtk_rectangle_is_empty (old_frame_rect))
++    {
++      meta_plugin_size_change_completed (plugin, window_actor);
++      return;
++    }
++
++  apriv = get_actor_private (window_actor);
++
++  actor_content = meta_window_actor_paint_to_content (window_actor, NULL, NULL);
++  actor_clone = clutter_actor_new ();
++  clutter_actor_set_content (actor_clone, actor_content);
++  clutter_actor_set_offscreen_redirect (actor_clone, CLUTTER_OFFSCREEN_REDIRECT_ALWAYS);
++  clutter_actor_set_position (actor_clone,
++                              old_buffer_rect->x,
++                              old_buffer_rect->y);
++  clutter_actor_set_size (actor_clone,
++                          old_buffer_rect->width,
++                          old_buffer_rect->height);
++  meta_window_actor_freeze (window_actor);
++
++  apriv->old_buffer_rect = *old_buffer_rect;
++  apriv->actor_clone = g_steal_pointer (&actor_clone);
++}
++
++static void
++on_size_changed_effect_stopped (ClutterTimeline    *timeline,
++                                gboolean            is_finished,
++                                EffectCompleteData *data)
++{
++  MetaPlugin *plugin = data->plugin;
++  MetaWindowActor *window_actor = META_WINDOW_ACTOR (data->actor);
++  ActorPrivate *apriv = get_actor_private (window_actor);
++
++  apriv->tml_size_changed = NULL;
++  g_clear_pointer (&apriv->actor_clone, clutter_actor_destroy);
++
++  meta_plugin_size_change_completed (plugin, window_actor);
++  g_free (data);
++}
++
++static void
++size_changed (MetaPlugin      *plugin,
++              MetaWindowActor *window_actor)
++{
++  MetaDisplay *display = meta_plugin_get_display (plugin);
++  MetaCompositor *compositor = meta_display_get_compositor (display);
++  ClutterActor *stage = CLUTTER_ACTOR (meta_compositor_get_stage (compositor));
++  ClutterActor *actor = CLUTTER_ACTOR (window_actor);
++  ActorPrivate *apriv = get_actor_private (window_actor);
++  MtkRectangle rect;
++  MetaWindow *window;
++  float scale_x;
++  float scale_y;
++
++  if (!apriv->actor_clone)
++    return;
++
++  if (clutter_actor_get_parent (apriv->actor_clone))
++    return;
++
++  clutter_actor_add_child (stage, apriv->actor_clone);
++  meta_window_actor_thaw (window_actor);
++
++  window = meta_window_actor_get_meta_window (window_actor);
++  meta_window_get_buffer_rect (window, &rect);
++
++  actor_animate (apriv->actor_clone,
++                 CLUTTER_EASE_OUT_QUAD,
++                 ANIMATION_SIZE_CHANGE,
++                 "x", (float) rect.x,
++                 "y", (float) rect.y,
++                 "width", (float) rect.width,
++                 "height", (float) rect.height,
++                 "opacity", 0,
++                 NULL);
++
++  scale_x = (float) rect.width / apriv->old_buffer_rect.width;
++  scale_y = (float) rect.height / apriv->old_buffer_rect.height;
++  clutter_actor_set_pivot_point (actor, 0.0, 0.0);
++  clutter_actor_set_translation (actor,
++                                 -rect.x + apriv->old_buffer_rect.x,
++                                 -rect.y + apriv->old_buffer_rect.y,
++                                 0.0);
++  clutter_actor_set_scale (actor,
++                           1.0 / scale_x,
++                           1.0 / scale_y);
++
++  apriv->tml_size_changed = actor_animate (actor,
++                                           CLUTTER_EASE_OUT_QUAD,
++                                           ANIMATION_SIZE_CHANGE,
++                                           "scale-x", 1.0,
++                                           "scale-y", 1.0,
++                                           "translation-x", 0.0f,
++                                           "translation-y", 0.0f,
++                                           NULL);
++  if (apriv->tml_size_changed)
++    {
++      EffectCompleteData *data;
++
++      data = g_new0 (EffectCompleteData, 1);
++      data->actor = actor;
++      data->plugin = plugin;
++
++      g_signal_connect (apriv->tml_size_changed, "stopped",
++                        G_CALLBACK (on_size_changed_effect_stopped),
++                        data);
++    }
++  else
++    {
++      meta_plugin_size_change_completed (plugin, window_actor);
++    }
++}
++
+ static void
+ on_map_effect_stopped (ClutterTimeline    *timeline,
+                        gboolean            is_finished,
+diff --git a/src/core/constraints.c b/src/core/constraints.c
+index d7589d6..54046ed 100644
+--- a/src/core/constraints.c
++++ b/src/core/constraints.c
+@@ -469,8 +469,9 @@ setup_constraint_info (MetaBackend         *backend,
+ 
+       if (!logical_monitor)
+         {
+-          meta_topic (META_DEBUG_GEOMETRY, "Constraining using window monitor");
+-          logical_monitor = window->monitor;
++          meta_topic (META_DEBUG_GEOMETRY,
++                      "Constraining using window target monitor");
++          logical_monitor = window->target_monitor;
+         }
+     }
+ 
+diff --git a/src/core/window-private.h b/src/core/window-private.h
+index 0621cb0..32221e6 100644
+--- a/src/core/window-private.h
++++ b/src/core/window-private.h
+@@ -240,6 +240,7 @@ struct _MetaWindow
+   uint64_t id;
+   guint64 stamp;
+   MetaLogicalMonitor *monitor;
++  MetaLogicalMonitor *target_monitor;
+   MetaLogicalMonitor *highest_scale_monitor;
+   MetaWorkspace *workspace;
+   MetaWindowClientType client_type;
+@@ -668,10 +669,6 @@ void        meta_window_restore_tile       (MetaWindow        *window,
+                                             MetaTileMode       mode,
+                                             int                width,
+                                             int                height);
+-void        meta_window_maximize_internal  (MetaWindow        *window,
+-                                            MetaMaximizeFlags  directions,
+-                                            MtkRectangle      *saved_rect);
+-
+ void        meta_window_queue_auto_maximize (MetaWindow       *window);
+ 
+ void        meta_window_make_fullscreen_internal (MetaWindow    *window);
+@@ -959,3 +956,9 @@ void meta_window_set_a11y_properties (MetaWindow *window,
+ gboolean meta_window_get_a11y_properties (MetaWindow  *window,
+                                           const char **a11y_dbus_name,
+                                           const char **toplevel_object_path);
++
++void meta_window_set_target_monitor (MetaWindow         *window,
++                                     MetaLogicalMonitor *logical_monitor);
++
++void meta_window_set_target_monitor_from_number (MetaWindow *window,
++                                                 int         number);
+diff --git a/src/core/window.c b/src/core/window.c
+index de4c8f9..6a78a78 100644
+--- a/src/core/window.c
++++ b/src/core/window.c
+@@ -391,6 +391,7 @@ meta_window_finalize (GObject *object)
+   g_clear_pointer (&window->preferred_logical_monitor,
+                    meta_logical_monitor_id_free);
+   g_clear_object (&window->monitor);
++  g_clear_object (&window->target_monitor);
+   g_clear_object (&window->highest_scale_monitor);
+   g_clear_object (&window->config);
+ 
+@@ -1518,6 +1519,7 @@ meta_window_constructed (GObject *object)
+       highest_scale_monitor = main_monitor;
+     }
+   g_set_object (&window->monitor, main_monitor);
++  g_set_object (&window->target_monitor, main_monitor);
+   g_set_object (&window->highest_scale_monitor, highest_scale_monitor);
+ 
+   if (window->monitor)
+@@ -3095,7 +3097,7 @@ meta_window_save_rect (MetaWindow *window)
+   META_WINDOW_GET_CLASS (window)->save_rect (window);
+ }
+ 
+-void
++static void
+ meta_window_maximize_internal (MetaWindow        *window,
+                                MetaMaximizeFlags  directions,
+                                MtkRectangle      *saved_rect)
+@@ -3206,9 +3208,8 @@ meta_window_set_maximize_flags (MetaWindow        *window,
+       flags = (META_MOVE_RESIZE_MOVE_ACTION |
+                META_MOVE_RESIZE_RESIZE_ACTION |
+                META_MOVE_RESIZE_STATE_CHANGED |
+-               META_MOVE_RESIZE_CONSTRAIN);
+-      if (!window->unconstrained_rect_valid)
+-        flags |= META_MOVE_RESIZE_RECT_INVALID;
++               META_MOVE_RESIZE_CONSTRAIN |
++               META_MOVE_RESIZE_RECT_INVALID);
+ 
+       meta_window_move_resize (window, flags, window->unconstrained_rect);
+     }
+@@ -3618,7 +3619,14 @@ meta_window_tile_internal (MetaWindow   *window,
+   else if (meta_window_config_get_tile_monitor_number (window->config) < 0)
+     {
+       meta_window_config_set_tile_monitor_number (window->config,
+-                                                  window->monitor->number);
++                                                  window->target_monitor->number);
++    }
++  else
++    {
++      int number;
++
++      number = meta_window_config_get_tile_monitor_number (window->config);
++      meta_window_set_target_monitor_from_number (window, number);
+     }
+ 
+   if (tile_mode == META_TILE_MAXIMIZED)
+@@ -3990,9 +3998,8 @@ meta_window_make_fullscreen (MetaWindow  *window)
+       flags = (META_MOVE_RESIZE_MOVE_ACTION |
+                META_MOVE_RESIZE_RESIZE_ACTION |
+                META_MOVE_RESIZE_STATE_CHANGED |
+-               META_MOVE_RESIZE_CONSTRAIN);
+-      if (!window->unconstrained_rect_valid)
+-        flags |= META_MOVE_RESIZE_RECT_INVALID;
++               META_MOVE_RESIZE_CONSTRAIN |
++               META_MOVE_RESIZE_RECT_INVALID);
+       meta_window_move_resize (window, flags, window->unconstrained_rect);
+     }
+ }
+@@ -4383,7 +4390,7 @@ meta_window_update_for_monitors_changed (MetaWindow *window)
+   MetaMonitorManager *monitor_manager =
+     meta_backend_get_monitor_manager (backend);
+ #endif
+-  const MetaLogicalMonitor *old, *new;
++  MetaLogicalMonitor *old, *new;
+ 
+   if (meta_window_has_fullscreen_monitors (window))
+     meta_window_clear_fullscreen_monitors (window);
+@@ -4392,6 +4399,7 @@ meta_window_update_for_monitors_changed (MetaWindow *window)
+     {
+       meta_window_update_monitor (window,
+                                   META_WINDOW_UPDATE_MONITOR_FLAGS_FORCE);
++      g_set_object (&window->target_monitor, window->monitor);
+       goto out;
+     }
+ 
+@@ -4411,6 +4419,8 @@ meta_window_update_for_monitors_changed (MetaWindow *window)
+                                                   new_monitor_number);
+     }
+ 
++  g_set_object (&window->target_monitor, new);
++
+   if (new && old)
+     {
+       /* This will eventually reach meta_window_update_monitor that
+@@ -4512,6 +4522,9 @@ meta_window_move_resize_internal (MetaWindow          *window,
+    * to the client.
+    */
+ 
++  MetaBackend *backend = backend_from_window (window);
++  MetaMonitorManager *monitor_manager =
++    meta_backend_get_monitor_manager (backend);
+   MetaWorkspaceManager *workspace_manager = window->display->workspace_manager;
+   gboolean did_placement;
+   MtkRectangle unconstrained_rect;
+@@ -4522,6 +4535,7 @@ meta_window_move_resize_internal (MetaWindow          *window,
+   int rel_y = 0;
+   MetaMoveResizeResultFlags result = 0;
+   gboolean moved_or_resized = FALSE;
++  MetaLogicalMonitor *old_monitor;
+   MetaWindowUpdateMonitorFlags update_monitor_flags;
+   MetaGravity gravity;
+ 
+@@ -4621,9 +4635,6 @@ meta_window_move_resize_internal (MetaWindow          *window,
+            !mtk_rectangle_is_empty (&unconstrained_rect) &&
+            !meta_window_config_is_floating (window->config))
+     {
+-      MetaBackend *backend = backend_from_window (window);
+-      MetaMonitorManager *monitor_manager =
+-        meta_backend_get_monitor_manager (backend);
+       MetaLogicalMonitor *from;
+       MetaLogicalMonitor *to;
+ 
+@@ -4715,6 +4726,7 @@ meta_window_move_resize_internal (MetaWindow          *window,
+   if (flags & META_MOVE_RESIZE_FORCE_UPDATE_MONITOR)
+     update_monitor_flags |= META_WINDOW_UPDATE_MONITOR_FLAGS_FORCE;
+ 
++  old_monitor = window->monitor;
+   if (window->monitor)
+     {
+       g_autoptr (MetaLogicalMonitorId) old_id = NULL;
+@@ -4738,6 +4750,9 @@ meta_window_move_resize_internal (MetaWindow          *window,
+       meta_window_update_monitor (window, update_monitor_flags);
+     }
+ 
++  if (old_monitor != window->monitor)
++    meta_window_set_target_monitor (window, window->monitor);
++
+   meta_window_foreach_transient (window, maybe_move_attached_window, NULL);
+ 
+   meta_stack_update_window_tile_matches (window->display->stack,
+@@ -4848,7 +4863,6 @@ meta_window_move_between_rects (MetaWindow          *window,
+                                 const MtkRectangle  *new_area)
+ {
+   move_rect_between_rects (&window->unconstrained_rect, old_area, new_area);
+-  window->unconstrained_rect_valid = TRUE;
+ 
+   meta_window_move_resize (window,
+                            (move_resize_flags |
+@@ -4898,6 +4912,8 @@ meta_window_move_to_monitor_internal (MetaWindow          *window,
+ {
+   MtkRectangle old_area, new_area;
+ 
++  meta_window_set_target_monitor_from_number (window, monitor);
++
+   if (meta_window_config_get_tile_mode (window->config) != META_TILE_NONE)
+     meta_window_config_set_tile_monitor_number (window->config, monitor);
+ 
+@@ -4971,7 +4987,8 @@ meta_window_idle_move_resize (MetaWindow *window)
+   flags = (META_MOVE_RESIZE_MOVE_ACTION |
+            META_MOVE_RESIZE_RESIZE_ACTION |
+            META_MOVE_RESIZE_CONSTRAIN);
+-  if (!window->unconstrained_rect_valid)
++  if (!window->unconstrained_rect_valid ||
++      !meta_window_config_is_floating (window->config))
+     flags |= META_MOVE_RESIZE_RECT_INVALID;
+   meta_window_move_resize (window, flags, window->unconstrained_rect);
+ }
+@@ -9250,3 +9267,26 @@ meta_window_get_max_size (MetaWindow *window,
+       return FALSE;
+     }
+ }
++
++void
++meta_window_set_target_monitor (MetaWindow         *window,
++                                MetaLogicalMonitor *logical_monitor)
++{
++  g_return_if_fail (logical_monitor);
++  g_set_object (&window->target_monitor, logical_monitor);
++}
++
++void
++meta_window_set_target_monitor_from_number (MetaWindow *window,
++                                            int         number)
++{
++  MetaBackend *backend = backend_from_window (window);
++  MetaMonitorManager *monitor_manager =
++    meta_backend_get_monitor_manager (backend);
++  MetaLogicalMonitor *logical_monitor;
++
++  logical_monitor =
++    meta_monitor_manager_get_logical_monitor_from_number (monitor_manager,
++                                                          number);
++  meta_window_set_target_monitor (window, logical_monitor);
++}
+diff --git a/src/tests/meson.build b/src/tests/meson.build
+index 94446ac..5f1fe6f 100644
+--- a/src/tests/meson.build
++++ b/src/tests/meson.build
+@@ -1238,6 +1238,8 @@ stacking_tests = [
+   'move-to-smaller-monitor',
+   'move-to-monitor-minimized',
+   'move-maximized-to-monitor',
++  'fullscreen-after-tiled',
++  'shake-loose-and-insta-maximize',
+ ]
+ 
+ foreach stacking_test: stacking_tests
+diff --git a/src/tests/stacking/fullscreen-after-tiled.metatest b/src/tests/stacking/fullscreen-after-tiled.metatest
+new file mode 100644
+index 0000000..a7b43db
+--- /dev/null
++++ b/src/tests/stacking/fullscreen-after-tiled.metatest
+@@ -0,0 +1,49 @@
++resize_monitor default 800 600
++add_monitor secondary 800 600
++set_pref edge-tiling true
++
++new_client w wayland
++create w/1 csd
++resize w/1 400 400
++show w/1
++wait
++move w/1 700 100
++
++fullscreen w/1
++wait_reconfigure w/1
++assert_size w/1 800 600
++assert_position w/1 800 0
++
++unfullscreen w/1
++wait_reconfigure w/1
++assert_size w/1 400 400
++assert_position w/1 700 100
++
++wait_for_effects w/1
++move_cursor_to 710 110
++
++# Trigger move grab that tiles it on the default monitor's right edge
++key_press KEY_LEFTMETA
++click_and_hold
++move_cursor_to 799 110 1s
++release_click
++key_release KEY_LEFTMETA
++
++wait_reconfigure w/1
++assert_size w/1 400 600
++assert_position w/1 400 0
++
++fullscreen w/1
++wait_reconfigure w/1
++assert_size w/1 800 600
++assert_position w/1 0 0
++
++unfullscreen w/1
++wait_reconfigure w/1
++assert_size w/1 400 600
++assert_position w/1 400 0
++
++untile w/1
++wait_reconfigure w/1
++assert_size w/1 400 400
++assert_position w/1 700 100
+diff --git a/src/tests/stacking/shake-loose-and-insta-maximize.metatest b/src/tests/stacking/shake-loose-and-insta-maximize.metatest
+new file mode 100644
+index 0000000..66a5792
+--- /dev/null
++++ b/src/tests/stacking/shake-loose-and-insta-maximize.metatest
+@@ -0,0 +1,35 @@
++resize_monitor default 800 600
++add_monitor secondary 640 480
++set_pref edge-tiling false
++
++new_client w wayland
++create w/1 csd
++resize w/1 200 200
++show w/1
++
++# Maximize
++
++maximize w/1
++wait_reconfigure w/1
++assert_size w/1 800 600
++assert_position w/1 0 0
++
++# Shake loose by dragging downwards
++
++wait_for_effects w/1
++move_cursor_to 400 10
++click_and_hold
++move_cursor_to 400 400 500ms
++wait_reconfigure w/1
++assert_size w/1 200 200
++assert_position w/1 300 396
++
++# Move window back to the top
++move_cursor_to 400 10 500ms
++
++# Move window horizontally, to trigger immediate remaximize
++
++move_cursor_to 1000 0 500ms
++wait_reconfigure w/1
++assert_size w/1 640 480
++assert_position w/1 800 0
+diff --git a/src/wayland/meta-wayland-xdg-session-state.c b/src/wayland/meta-wayland-xdg-session-state.c
+index 958554d..cce5d5f 100644
+--- a/src/wayland/meta-wayland-xdg-session-state.c
++++ b/src/wayland/meta-wayland-xdg-session-state.c
+@@ -405,7 +405,6 @@ meta_wayland_xdg_session_state_restore_window (MetaSessionState *state,
+     META_WAYLAND_XDG_SESSION_STATE (state);
+   MetaWaylandXdgToplevelState *toplevel_state;
+   MtkRectangle *rect = NULL;
+-  MetaLogicalMonitor *target_monitor = NULL;
+ 
+   toplevel_state = g_hash_table_lookup (xdg_session_state->toplevels, name);
+   if (!toplevel_state)
+@@ -427,13 +426,16 @@ meta_wayland_xdg_session_state_restore_window (MetaSessionState *state,
+     case WINDOW_STATE_TILED_LEFT:
+     case WINDOW_STATE_TILED_RIGHT:
+       rect = &toplevel_state->tiled.rect;
++      break;
++    }
++
++  if (rect)
++    {
++      MetaLogicalMonitor *target_monitor;
++
+       target_monitor = determine_monitor_for_rect (window, rect);
+       if (target_monitor)
+-        {
+-          meta_window_config_set_tile_monitor_number (window->config,
+-                                                      target_monitor->number);
+-        }
+-      break;
++        g_set_object (&window->target_monitor, target_monitor);
+     }
+ 
+   if (toplevel_state->workspace_idx >= 0)
+@@ -443,7 +445,6 @@ meta_wayland_xdg_session_state_restore_window (MetaSessionState *state,
+                                              TRUE);
+     }
+ 
+-
+   switch (toplevel_state->window_state)
+     {
+     case WINDOW_STATE_NONE:
+@@ -458,39 +459,15 @@ meta_wayland_xdg_session_state_restore_window (MetaSessionState *state,
+                                *rect);
+       break;
+     case WINDOW_STATE_TILED_LEFT:
+-      meta_window_move_resize (window,
+-                               (META_MOVE_RESIZE_FORCE_MOVE |
+-                                META_MOVE_RESIZE_MOVE_ACTION |
+-                                META_MOVE_RESIZE_RESIZE_ACTION |
+-                                META_MOVE_RESIZE_CONSTRAIN),
+-                               *rect);
+       meta_window_tile (window, META_TILE_LEFT);
+       break;
+     case WINDOW_STATE_TILED_RIGHT:
+-      meta_window_move_resize (window,
+-                               (META_MOVE_RESIZE_FORCE_MOVE |
+-                                META_MOVE_RESIZE_MOVE_ACTION |
+-                                META_MOVE_RESIZE_RESIZE_ACTION |
+-                                META_MOVE_RESIZE_CONSTRAIN),
+-                               *rect);
+       meta_window_tile (window, META_TILE_RIGHT);
+       break;
+     case WINDOW_STATE_MAXIMIZED:
+-      meta_window_move_resize (window,
+-                               (META_MOVE_RESIZE_FORCE_MOVE |
+-                                META_MOVE_RESIZE_MOVE_ACTION |
+-                                META_MOVE_RESIZE_RESIZE_ACTION |
+-                                META_MOVE_RESIZE_CONSTRAIN),
+-                               *rect);
+       meta_window_maximize (window);
+       break;
+     case WINDOW_STATE_FULLSCREEN:
+-      meta_window_move_resize (window,
+-                               (META_MOVE_RESIZE_FORCE_MOVE |
+-                                META_MOVE_RESIZE_MOVE_ACTION |
+-                                META_MOVE_RESIZE_RESIZE_ACTION |
+-                                META_MOVE_RESIZE_CONSTRAIN),
+-                               *rect);
+       meta_window_make_fullscreen (window);
+       break;
+     }
+@@ -498,7 +475,6 @@ meta_wayland_xdg_session_state_restore_window (MetaSessionState *state,
+   if (toplevel_state->is_minimized)
+     meta_window_minimize (window);
+ 
+-
+   if (meta_is_topic_enabled (META_DEBUG_SESSION_MANAGEMENT))
+     {
+       g_autofree char *state_str = NULL;

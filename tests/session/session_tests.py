@@ -474,6 +474,133 @@ def overview_thumbnails(session, checks, out_dir):
     return {"overview": shown}
 
 
+MONITORS = """[...Array(global.display.get_n_monitors()).keys()].map(i => {
+  const rect = global.display.get_monitor_geometry(i);
+  return [rect.x, rect.y, rect.width, rect.height];
+})"""
+
+# GNOME Shell of the test session with a second virtual monitor, right of the first one.
+TWO_MONITORS = """[Service]
+ExecStart=
+ExecStart=/usr/bin/gnome-shell --headless --virtual-monitor 1920x1080 --virtual-monitor 1920x1080 --mode=%i
+"""
+
+
+SHOWN_WINDOWS = """global.get_window_actors().filter(actor => actor.meta_window.get_wm_class() === 'org.gnome.Ptyxis').map(actor => {
+  const window = actor.meta_window;
+  const buffer = window.get_buffer_rect();
+  return {
+    id: window.get_id(),
+    workspace: window.get_workspace()?.index() ?? null,
+    hidden: window.is_hidden(),
+    mapped: actor.mapped,
+    followsBuffer: actor.x === buffer.x && actor.y === buffer.y && actor.width === buffer.width && actor.height === buffer.height,
+  };
+})"""
+
+
+def placement(window):
+    return {k: window[k] for k in ("workspace", "monitor", "maximized", "x", "y", "width", "height")} if window else None
+
+
+@test
+def restore_monitors(session, checks, out_dir):
+    """With two monitors, Ptyxis windows maximized and tiled on either of them return to their monitors, workspaces,
+    states and geometries after logging in again, also on workspaces not visited yet, the overview's workspace
+    thumbnails show them, and visiting their workspaces shows them unchanged. The maximized window on the second
+    monitor needs restore-target-monitor.patch and
+    restore-maximized-client-monitor.patch of patches/mutter/, the thumbnails of maximized and tiled windows need
+    hidden-window-updates.patch. The windows are tiled with mutter's keybindings, with tiling-assistant disabled as
+    configure-gnome-desktop.sh disables it: tiling-assistant leaves a tiled window floating."""
+    dropin = pathlib.Path.home() / ".config/systemd/user/org.gnome.Shell@ubuntu.service.d"
+    dropin.mkdir(parents=True, exist_ok=True)
+    (dropin / "95-two-monitors.conf").write_text(TWO_MONITORS)
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    session.gsettings("org.gnome.shell", "favorite-apps", f"['{PTYXIS}']")
+    session.gsettings("org.gnome.shell", "disabled-extensions", "['tiling-assistant@ubuntu.com']")
+    session.gsettings("org.gnome.mutter.keybindings", "toggle-tiled-left", "['<Super>Left']")
+    session.gsettings("org.gnome.mutter.keybindings", "toggle-tiled-right", "['<Super>Right']")
+    session.login()
+    monitors = session.eval(MONITORS)
+    checks.check("GNOME Shell has two monitors side by side", monitors and len(monitors) == 2 and monitors[1][0] == monitors[0][2],
+                 str(monitors))
+    if not monitors or len(monitors) != 2:
+        session.logout()
+        return {}
+    # workspace, monitor, state
+    layout = [(1, 1, "maximized"), (4, 1, "tiled left"), (6, 0, "tiled right")]
+    arranged = []
+    for workspace, monitor, state in layout:
+        session.call("activateWorkspace", workspace)
+        # The dock lists the windows of the active workspace a moment after a switch, and a click before that activates
+        # the window of the previous workspace.
+        time.sleep(1)
+        session.call("clickDockIcon", PTYXIS)
+        window = shown_window(session, PTYXIS, lambda w, workspace=workspace: w["workspace"] == workspace)
+        if not window:
+            break
+        session.call("moveResizeWindow", window["id"], monitors[monitor][0] + 100, monitors[monitor][1] + 100, 800, 600)
+        time.sleep(0.5)
+        if state == "maximized":
+            session.call("maximizeWindow", window["id"])
+        else:
+            session.press("Left" if state == "tiled left" else "Right", "Super_L")
+        time.sleep(1)
+        arranged.append(find(session.windows(PTYXIS), lambda w, id=window["id"]: w["id"] == id))
+    expected = [(workspace, monitor, state == "maximized") for workspace, monitor, state in layout]
+    checks.check("Ptyxis has a window maximized on the second monitor on workspace 2, one tiled left on the second "
+                 "monitor on workspace 5 and one tiled right on the first monitor on workspace 7",
+                 len(arranged) == 3 and all(arranged) and
+                 [(w["workspace"], w["monitor"], w["maximized"]) for w in arranged] == expected and
+                 all(w["width"] < monitors[w["monitor"]][2] for w in arranged[1:]),
+                 str([placement(w) for w in arranged]))
+    if len(arranged) != 3 or not all(arranged):
+        session.logout()
+        return {}
+    # Ptyxis saves its session a few seconds after a change.
+    time.sleep(5)
+    session.logout()
+
+    session.login()
+    session.call("activateWorkspace", 0)
+    session.call("clickDockIcon", PTYXIS)
+    wait_for(lambda: (lambda ws: ws if {w["workspace"] for w in ws} >= {1, 4, 6} else None)(session.windows(PTYXIS)), 30)
+    # The restored windows draw their first content right after they are restored.
+    time.sleep(3)
+    restored = []
+    for before, (workspace, monitor, state) in zip(arranged, layout):
+        after = find(session.windows(PTYXIS), lambda w, workspace=workspace: w["workspace"] == workspace)
+        restored.append(after)
+        checks.check(f"the window {state} on monitor {monitor + 1} returns to workspace {workspace + 1}, not visited yet, "
+                     "on its monitor with its state and geometry", placement(after) == placement(before),
+                     f"before {placement(before)}, after {placement(after)}")
+    session.eval("Main.overview.show(); true")
+    wait_for(lambda: session.eval("Main.overview.visible && !Main.overview.animationInProgress"), 10)
+    shown = session.eval(OVERVIEW_THUMBNAILS)
+    session.eval("Main.overview.hide(); true")
+    for workspace, monitor, state in layout:
+        window = find(shown, lambda w, workspace=workspace: w["workspace"] == workspace)
+        checks.check(f"the window {state} on workspace {workspace + 1}, not visited yet, shows in its thumbnail with its size",
+                     window and window["inThumbnail"] and window["width"] > 0 and window["height"] > 0, str(window))
+    # The first time a restored window is shown is when its workspace is visited, after it was hidden with its actor
+    # following its geometry and content.
+    visited = []
+    for before, (workspace, monitor, state) in zip(arranged, layout):
+        session.call("activateWorkspace", workspace)
+        actor = wait_for(lambda workspace=workspace: find(session.eval(SHOWN_WINDOWS),
+                                                          lambda w: w["workspace"] == workspace and not w["hidden"] and w["mapped"]), 10)
+        # The map animation of the window ends a moment after the switch.
+        time.sleep(1)
+        actor = find(session.eval(SHOWN_WINDOWS), lambda w, workspace=workspace: w["workspace"] == workspace)
+        after = find(session.windows(PTYXIS), lambda w, workspace=workspace: w["workspace"] == workspace)
+        visited.append({"actor": actor, "window": after})
+        checks.check(f"visiting workspace {workspace + 1} shows the window {state} there unchanged, with its actor following it",
+                     actor and not actor["hidden"] and actor["mapped"] and actor["followsBuffer"] and
+                     placement(after) == placement(before), f"before {placement(before)}, after {placement(after)}, actor {actor}")
+    session.logout()
+    return {"monitors": monitors, "arranged": arranged, "restored": restored, "overview": shown, "visited": visited}
+
+
 FIREFOX = "firefox.desktop"
 WEB_PORT = 8000
 
