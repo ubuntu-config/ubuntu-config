@@ -1,0 +1,44 @@
+Description: Do not crash when the child of a Wayland client subprocess exits right after it started.
+ meta_wayland_client_new_subprocess() reads the pid of the child with g_subprocess_get_identifier() and passes it to
+ g_ascii_strtoll(). GLib's worker thread reaps the child as soon as it exits, after which the identifier is NULL, and
+ g_ascii_strtoll() dereferences it. A child killed right after it started can be reaped before the main thread reads
+ the identifier: at a logout, systemd sends SIGTERM to every process of GNOME Shell's unit, also to the desktop icons
+ process DING has just started, and GNOME Shell crashed with SIGSEGV in a CI run of the session test lock-screen.
+ .
+ The pid of a client whose child is already reaped is left 0, and the client is returned with its subprocess as for
+ any other child.
+ .
+ With a library preloaded into GNOME Shell which delays g_subprocess_get_identifier() by 50 ms, so that GLib reaps a
+ child running /bin/true before mutter reads the identifier, GNOME Shell crashed at the first such start without the
+ change, and with it returned 20 of 20 such clients with pid 0, their subprocesses reporting the exit status. Without
+ the delay, a loop which starts /bin/true this way every millisecond and logs out crashed GNOME Shell in 2 of 29
+ logouts without the change.
+Author: Mitar
+Bug-Ubuntu: https://bugs.launchpad.net/bugs/2126624
+Last-Update: 2026-11-16
+diff --git a/src/wayland/meta-wayland-client.c b/src/wayland/meta-wayland-client.c
+--- a/src/wayland/meta-wayland-client.c
++++ b/src/wayland/meta-wayland-client.c
+@@ -228,6 +228,7 @@ meta_wayland_client_new_subprocess (MetaContext          *context,
+   int client_fd[2];
+   MetaWaylandClient *client;
+   g_autoptr (GSubprocess) subprocess = NULL;
++  const char *identifier;
+ 
+   g_return_val_if_fail (META_IS_CONTEXT (context), NULL);
+   g_return_val_if_fail (G_IS_SUBPROCESS_LAUNCHER (launcher), NULL);
+@@ -255,8 +256,12 @@ meta_wayland_client_new_subprocess (MetaContext          *context,
+   client = g_object_new (META_TYPE_WAYLAND_CLIENT, NULL);
+   client->context = context;
+   client->kind = META_WAYLAND_CLIENT_KIND_SUBPROCESS;
+-  client->pid =
+-    g_ascii_strtoll (g_subprocess_get_identifier (subprocess), NULL, 0);
++  /* GLib reaps the child in its worker thread, and a subprocess has no
++   * identifier once its child is reaped, which can already be the case
++   * for a child killed right after it started. */
++  identifier = g_subprocess_get_identifier (subprocess);
++  if (identifier)
++    client->pid = g_ascii_strtoll (identifier, NULL, 0);
+   client->subprocess.subprocess = g_steal_pointer (&subprocess);
+ 
+   wayland_client = wl_client_create (compositor->wayland_display, client_fd[0]);

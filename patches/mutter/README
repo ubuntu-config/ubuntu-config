@@ -203,3 +203,16 @@ restore-maximized-client-monitor.patch
     src/tests/wayland-unit-tests.c, whose client requests being maximized before restoring, as GTK
     does, fails without it, and the session test restore-monitors in tests/session/ checks it with
     Ptyxis on two monitors. Not checked against upstream's main, not proposed upstream yet.
+
+wayland-client-exited-subprocess.patch
+    Mutter's function for starting a program as a Wayland client, which DING uses for its desktop
+    icons process, crashed GNOME Shell with SIGSEGV when the program was killed right after it
+    started: the function reads the program's pid from GLib, which no longer knows it once its
+    worker thread has reaped the program. At a logout systemd kills every process of GNOME Shell's
+    unit, so a DING process started at that moment, as DING does when it is enabled again after
+    unlocking, crashed GNOME Shell in a CI run of the session test lock-screen. With this patch
+    such a client is left without a pid. With a library preloaded into GNOME Shell which delays
+    GLib's answer, so that GLib has reaped a program which exits at once, GNOME Shell crashed at the
+    first such start without the patch, and survived 20 of 20 with it. Ubuntu's Error Tracker has
+    the same crash from gnome-shell 49 (Launchpad bug 2126624). Upstream's main has the same code,
+    the fix is not proposed upstream yet.

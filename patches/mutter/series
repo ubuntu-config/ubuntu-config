@@ -9,3 +9,4 @@ hidden-window-updates.patch
 keymap-state-before-key-events.patch
 restore-target-monitor.patch
 restore-maximized-client-monitor.patch
+wayland-client-exited-subprocess.patch
