@@ -1,4 +1,4 @@
-Description: Save a prefix cache snapshot at the start of the last user message too.
+Description: Save a prefix cache snapshot at the start of the last user turn too.
  The prefix cache saved a snapshot at the end of the system prompt and tools, and one at the end of each prompt. A new
  prompt resumes only from a snapshot whose tokens begin it, because the recurrent state of Qwen3.5, Qwen3.6 and Qwen3.8
  cannot be rewound to an earlier position. Prompts which share everything but their last user message, like the same
@@ -6,13 +6,13 @@ Description: Save a prefix cache snapshot at the start of the last user message 
  shared only the system prompt, and only when it was at least 512 tokens long, and every prompt read the shared history
  again.
  .
- The history before the last user message is now saved as well, as a boundary snapshot, when the prompt before shared
- it and went on with another last message, as prompts with the same few-shot examples do. Reading up to it takes a
- prefill pass of its own, which on qwen3.6-moe:35b-a3b costs about 3.5 seconds whatever its length, so a chat, whose
- every turn only continues the turn before, does not save it. It is saved when it is at least 512 tokens into the
- prompt and adds at least --prefix-min-gain tokens to the system prompt and tools and to what the prompt resumed from.
- The end snapshots saved after it hold only the rows after it. Qwen3.8, which keeps only the shared start of a
- conversation, keeps it as well.
+ The history before the last user turn (a user message, or tool results) is now saved as well, as a boundary snapshot,
+ when the prompt before shared it and went on with another last message, as prompts with the same few-shot examples do.
+ Saving it needs a prefill pass of its own, which on qwen3.6-moe:35b-a3b costs about 3.5 seconds whatever its length,
+ so a chat, whose every turn only continues the turn before, does not save it. It is saved when it is at least 512
+ tokens into the prompt and adds at least --prefix-min-gain tokens to the system prompt and tools and to what the
+ prompt resumed from. The end snapshots saved after it hold only the rows after it. Qwen3.8, which keeps only the
+ shared start of a conversation, keeps it as well.
  .
  With a short system prompt and 3,500 tokens of few-shot examples, on a Ryzen AI 9 HX 370, every prompt from the third
  one on read only its own last message, in about 5 seconds instead of 18 on qwen3.6-moe:35b-a3b and in 4.5 seconds
@@ -20,10 +20,10 @@ Description: Save a prefix cache snapshot at the start of the last user message 
  .
  Two tests of the prefix cache cover a shared history and a chat.
 Author: Mitar
-Forwarded: no
+Forwarded: https://github.com/ROCm/FastFlowLM/pull/1056
 ---
 diff --git a/docs/docs/instructions/server/prefix_cache.md b/docs/docs/instructions/server/prefix_cache.md
-index ee80cb5..18385fa 100644
+index ee80cb59..2d0d7a03 100644
 --- a/docs/docs/instructions/server/prefix_cache.md
 +++ b/docs/docs/instructions/server/prefix_cache.md
 @@ -37,7 +37,7 @@ The other supported models gain the same way. Measured on shorter prompts (about
@@ -40,7 +40,7 @@ index ee80cb5..18385fa 100644
  ## 🧠 How it works
  
 -1. While FLM reads a prompt it saves a **snapshot** of the model's state at the end of the system prompt and tools, and another one at the end of the prompt.
-+1. While FLM reads a prompt it saves a **snapshot** of the model's state at the end of the system prompt and tools, and another one at the end of the prompt. When the prompt before shared everything up to the last user message and went on with another one, it also saves one at the start of that message, which serves prompts that share everything but their last message, like the same few-shot examples or the same document followed by different questions. A chat, whose every turn only continues the turn before, does not save it, since reading up to it takes a pass of its own. Each of the first two is saved when it is at least 512 tokens into the prompt, and the one at the last user message only when it adds at least `--prefix-min-gain` tokens to the first and to what the prompt resumed from.
++1. While FLM reads a prompt it saves a **snapshot** of the model's state at the end of the system prompt and tools (when they are at least 512 tokens long), and another one at the end of the prompt. When the prompt before shared everything up to the last user turn (a user message, or tool results) and went on with another one, it also saves one at the start of that turn. This snapshot serves prompts which share everything but their last message, like the same few-shot examples or the same document followed by different questions. A chat, whose every turn only continues the turn before, does not save it, since saving it needs a prefill pass of its own. It is saved only when it is at least 512 tokens into the prompt and adds at least `--prefix-min-gain` tokens to the system prompt snapshot and to what the prompt resumed from.
  2. For a new request, FLM looks for the **longest saved snapshot whose text is exactly the beginning of the new prompt**. It restores that snapshot and reads only the rest.
  3. Snapshots are matched on the exact tokens, so two different conversations that start with the same system prompt reuse the same snapshot of it. Images are matched by their content: the same picture is reused, a different picture is read again (the text before it is still reused).
  4. A short request with its own system prompt (for example the title call some agents send after each turn) does not erase the snapshots of the main conversation.
@@ -49,12 +49,12 @@ index ee80cb5..18385fa 100644
  - **Answers are not bit-for-bit identical to a cold run.** Resuming from a snapshot gives the same quality, but with greedy decoding some answers differ in wording (for example the order of a list) from what the same prompt gives when read from scratch: about 1 in 5 on Qwen3.5 and about 1 in 3 on Qwen3.6 in our replay tests. The cache that came before it behaves the same way.
  - **Hermes sub-agents.** Sub-agents reuse the parent's system-prompt snapshot only when every task's `context` field is empty. A per-task context is placed in the sub-agent's system prompt, which makes each sub-agent a different prompt that is read from scratch. Larger models (4B and up) leave it empty in practice; `qwen3.5:2b` sometimes fills it in.
 -- **Qwen3.8-27B keeps the shared system prompt only.** A saved prompt of this model is large (about 150 MiB plus 84 KiB per token), so it saves the shared start of a conversation (system prompt + tools) and nothing after it, for text prompts. A conversation that keeps going is still continued from the end of its last turn with the older single-checkpoint reuse, as before; the saved system prompt is used when another conversation ran in between, so several agents that share one system prompt do not read it again each time.
-+- **Qwen3.8-27B keeps the shared start only.** A saved prompt of this model is large (about 150 MiB plus 84 KiB per token), so it saves the shared start of a conversation (system prompt + tools, and the history before the last user message) and nothing after it, for text prompts. A conversation that keeps going is still continued from the end of its last turn with the older single-checkpoint reuse, as before; the saved system prompt is used when another conversation ran in between, so several agents that share one system prompt do not read it again each time.
++- **Qwen3.8-27B keeps the shared start only.** A saved prompt of this model is large (about 150 MiB plus 84 KiB per token), so it saves the shared start of a conversation (system prompt + tools, and the history before the last user turn) and nothing after it, for text prompts. A conversation that keeps going is still continued from the end of its last turn with the older single-checkpoint reuse, as before; the saved system prompt is used when another conversation ran in between, so several agents that share one system prompt do not read it again each time.
  - **Gemma 3 has no shared system-prompt snapshot.** Its chat template puts the system prompt inside the first user turn, so two conversations that differ in their first message have no text in common to save as a shared start. Each conversation still reuses its own earlier turns.
  - **Models with a sliding window or a convolution state** (Gemma 3 and 4, gpt-oss, the LFM2 family) save a state that cannot be rewound, so a saved prompt is resumed only when the new prompt starts with all of it, and a prompt that shares just the first part of a saved one resumes at the saved system-prompt start instead.
  - **Pictures and audio.** The Qwen-VL models, Qwen3.5 and MiniCPM-V reuse prompts that contain pictures. The Gemma 4 models (and the `nemotron3.5-bolt` model built on them) reuse text prompts through the prefix cache; a prompt with a picture or audio keeps the older single-checkpoint reuse. `qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b` are text only.
 diff --git a/docs/docs/models/qwen.md b/docs/docs/models/qwen.md
-index 22fd082..14d385b 100644
+index 22fd0825..16129a85 100644
 --- a/docs/docs/models/qwen.md
 +++ b/docs/docs/models/qwen.md
 @@ -605,7 +605,7 @@ The `-r` option determines the image's height:
@@ -62,12 +62,12 @@ index 22fd082..14d385b 100644
  - **Think:** Yes
  - **Tool Calling Support:** Yes  
 -- **Prefix cache (server mode):** Partly: the shared system prompt of text conversations is saved; a conversation that keeps going uses the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
-+- **Prefix cache (server mode):** Partly: the shared start of text conversations (the system prompt, and the history before the last user message) is saved; a conversation that keeps going uses the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
++- **Prefix cache (server mode):** Partly: the shared start of text conversations (the system prompt, and the history before the last user turn) is saved; a conversation that keeps going uses the older single-checkpoint reuse (see [Prefix Cache (Prompt Reuse)](https://fastflowlm.com/docs/instructions/server/prefix_cache/))
  - **Speculative Decoding:** Yes — built-in MTP draft head (see note below)
  - **Base Model:** [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
  - **Quantization:** Q4_K
 diff --git a/src/common/AutoModel/automodel.cpp b/src/common/AutoModel/automodel.cpp
-index 158198a..fd43e52 100644
+index 158198ab..fd43e529 100644
 --- a/src/common/AutoModel/automodel.cpp
 +++ b/src/common/AutoModel/automodel.cpp
 @@ -504,34 +504,53 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
@@ -155,7 +155,7 @@ index 158198a..fd43e52 100644
      meta_info.prefix_cache = cache.report();
      return true;
 diff --git a/src/common/prefix_slot_cache.cpp b/src/common/prefix_slot_cache.cpp
-index b6a85dd..23e427a 100644
+index b6a85dd9..23e427ac 100644
 --- a/src/common/prefix_slot_cache.cpp
 +++ b/src/common/prefix_slot_cache.cpp
 @@ -92,6 +92,12 @@ void PrefixSlotCache::attach(void* engine, const flm_state_api* api) {
@@ -172,7 +172,7 @@ index b6a85dd..23e427a 100644
  
  int PrefixSlotCache::end_kv_from(const std::vector<int>& tokens, size_t boundary) const {
 diff --git a/src/include/AutoModel/automodel.hpp b/src/include/AutoModel/automodel.hpp
-index d470456..0e55fff 100644
+index 6a01f8a3..ec7586d7 100644
 --- a/src/include/AutoModel/automodel.hpp
 +++ b/src/include/AutoModel/automodel.hpp
 @@ -352,9 +352,10 @@ protected:
@@ -199,7 +199,7 @@ index d470456..0e55fff 100644
  	                         std::function<bool()> is_cancelled, std::optional<int> requested_max_new_tokens = std::nullopt);
  
 diff --git a/src/include/prefix_slot_cache.hpp b/src/include/prefix_slot_cache.hpp
-index c1fc2db..6b99e68 100644
+index c1fc2dbd..6b99e68d 100644
 --- a/src/include/prefix_slot_cache.hpp
 +++ b/src/include/prefix_slot_cache.hpp
 @@ -62,7 +62,7 @@ struct prefix_cache_report_t {
@@ -264,7 +264,7 @@ index c1fc2db..6b99e68 100644
      int cache_mb_ = -1;
      int slots_ = -1;
 diff --git a/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp b/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
-index c219fa3..40ad728 100644
+index c219fa3a..40ad728a 100644
 --- a/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
 +++ b/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
 @@ -90,17 +90,30 @@ std::vector<int> cat(std::vector<int> a, const std::vector<int>& b) {

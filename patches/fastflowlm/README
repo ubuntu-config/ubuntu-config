@@ -24,17 +24,17 @@ prefix-cache-shared-history.patch
     only from a snapshot whose tokens begin it. Prompts which share everything but their last user message, like the
     same few-shot examples followed by different inputs, therefore read the examples again every time.
 
-    The patch saves a snapshot at the start of the last user message too, as a boundary snapshot, when the prompt before
-    shared everything up to it and went on with another last message. Reading up to that point is a prefill pass of its
-    own, which on qwen3.6-moe:35b-a3b costs about 3.5 seconds whatever its length. A chat turn only continues the turn
-    before and never reuses that point, and would pay for the pass every turn, so it is saved only when another prompt
-    went on from it. It is saved when it is at least 512 tokens into the prompt and at least --prefix-min-gain tokens
-    (128 by default) past the end of the system prompt and tools and past what the prompt resumed from. The end
-    snapshots saved after it hold only the rows after it. Qwen3.8, which keeps only the shared start of a conversation,
-    keeps this one as well.
+    The patch saves a snapshot at the start of the last user turn (a user message, or tool results) too, as a boundary
+    snapshot, when the prompt before shared everything up to it and went on with another last message. Reading up to
+    that point is a prefill pass of its own, which on qwen3.6-moe:35b-a3b costs about 3.5 seconds whatever its length. A
+    chat turn only continues the turn before and never reuses that point, and would pay for the pass every turn, so it
+    is saved only when another prompt went on from it. It is saved when it is at least 512 tokens into the prompt and at
+    least --prefix-min-gain tokens (128 by default) past the end of the system prompt and tools and past what the prompt
+    resumed from. The end snapshots saved after it hold only the rows after it. Qwen3.8, which keeps only the shared
+    start of a conversation, keeps this one as well.
 
-    The patch adds two tests to src/test/prefix_slot_cache, and updates the documentation of the prefix cache in
-    docs/. It is meant to be proposed upstream as it is, and has not been yet.
+    The patch adds two tests to src/test/prefix_slot_cache, and updates the documentation of the prefix cache in docs/.
+    It is proposed upstream as https://github.com/ROCm/FastFlowLM/pull/1056. Drop it once a release includes it.
 
 keep-prebuilt-libraries.patch (debian-series)
     dpkg-source leaves files named like build output, *.so and *.a among them, out of a source package of format 3.0
