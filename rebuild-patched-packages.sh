@@ -159,7 +159,10 @@
 #
 # Patch changes are noticed through a fingerprint of everything a build reads from patches/<source-package>/: both
 # series files, the patches they list, the optional files above and the keys extra-repositories names, recorded with
-# every build. The README is not part of it, so editing only the documentation does not cause a rebuild.
+# every build. Text which does not change the build is left out of it: the README, comments in the series files and
+# in the optional files except build-options, and the header of each patch, the description before its first diff.
+# Editing only documentation, like the description or the Forwarded field of a patch, therefore does not cause a
+# rebuild.
 #
 #
 # Unattended upgrades
@@ -542,26 +545,43 @@ built_version() {
   cat "$STATE_DIR/$1.built" 2>/dev/null || true
 }
 
-# A fingerprint of the files a build reads from patches/<source-package>/: both series files and the patches they list
-# in order, the optional settings, and the keys extra-repositories names.
+# A patch without its header: the lines from its first "diff" line, or from its first "---" line directly followed by
+# a "+++" line, to its end. A patch in which neither is found is printed whole.
+patch_body() {
+  # awk exits with 1 when it finds no start of a diff, and then it has printed nothing.
+  awk '
+    found { print; next }
+    /^diff / { found = 1; print; next }
+    /^\+\+\+ / && previous ~ /^--- / { found = 1; print previous; print; next }
+    { previous = $0 }
+    END { if (!found) exit 1 }
+  ' "$1" || cat "$1"
+}
+
+# A fingerprint of the files a build reads from patches/<source-package>/: the patches both series files list, in order
+# and without their headers, the optional settings, and the keys extra-repositories names. Comment and empty lines are
+# left out of the series files and of the optional settings read line by line. build-options is read whole.
 patches_digest() {
   local src=$1 dir=$PATCH_DIR/$1 p f line
   {
-    cat "$dir/series"
     while read -r p; do
       [ -n "$p" ] || continue
       case "$p" in \#*) continue ;; esac
       echo "=== $p"
-      cat "$dir/$p" 2>/dev/null || true
+      patch_body "$dir/$p" 2>/dev/null || true
     done < "$dir/series"
     while read -r p; do
       echo "=== debian-series $p"
-      cat "$dir/$p" 2>/dev/null || true
+      patch_body "$dir/$p" 2>/dev/null || true
     done < <(package_setting "$src" debian-series)
-    for f in build-options debian-series source-from source-git extra-repositories sbuild-options; do
+    if [ -r "$dir/build-options" ]; then
+      echo "=== build-options"
+      cat "$dir/build-options"
+    fi
+    for f in debian-series source-from source-git extra-repositories sbuild-options; do
       if [ -r "$dir/$f" ]; then
         echo "=== $f"
-        cat "$dir/$f"
+        package_setting "$src" "$f"
       fi
     done
     while read -r line; do
