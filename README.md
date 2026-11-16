@@ -2,7 +2,7 @@
 
 Scripts which turn an Ubuntu desktop installation into a
 [malleable computer](https://world.hey.com/dhh/the-malleable-computer-7c187a9b): a system whose behavior is
-changed to fit its user, not only its settings. On Linux the whole system is open source, so when a setting is
+changed to fit its user, not only through its settings. On Linux the whole system is open source, so when a setting is
 not enough, the program itself can be changed. With AI assistance, doing so has become practical even for parts
 of the system one has never looked into, like the terminal or the window manager.
 
