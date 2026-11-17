@@ -33,10 +33,12 @@ variables:
   before_script:
     - install -d -m 1777 cores
     - ulimit -c unlimited
-    # The services of the systemd user instances which the tests start would otherwise have a limit of 0, which
-    # Debian's systemd sets in /usr/lib/systemd/user.conf.d/10-coredump-debian.conf.
-    - mkdir -p /etc/systemd/user.conf.d
+    # Once a job installs systemd, Debian's systemd sets the soft limit to 0 for the services of the systemd user
+    # instances which the tests start, in /usr/lib/systemd/user.conf.d/10-coredump-debian.conf, and for the processes
+    # which su starts, in /etc/security/limits.d/10-coredump-debian.conf, which pam_limits reads before 90-cores.conf.
+    - mkdir -p /etc/systemd/user.conf.d /etc/security/limits.d
     - printf '[Manager]\nDefaultLimitCORE=infinity\n' > /etc/systemd/user.conf.d/90-cores.conf
+    - printf '*\t-\tcore\tunlimited\nroot\t-\tcore\tunlimited\n' > /etc/security/limits.d/90-cores.conf
     # Only on GitLab, as a local emulation of the job would change the pattern of the machine it runs on.
     - '[ "$GITLAB_CI" != true ] || echo "$CI_PROJECT_DIR/cores/core.%e.%p.%t" > /proc/sys/kernel/core_pattern'
 
