@@ -15,8 +15,8 @@ Description: Keep the window opened for a launch as it was opened and restore th
  On Wayland every window opened during startup session restore waits hidden until it is restored, and a window
  which is not restored is shown when session restore finishes (wayland-session-restore-show-waiting-windows.patch).
  The window opened for the launch is thus shown after the restored ones, so the compositor places it on the current
- workspace and focuses it after any restored window there. wayland-launch-activation-token.patch passes it the
- activation token of the launch.
+ workspace and focuses it after any restored window there. wayland-session-restore-no-activation.patch passes it
+ the activation token of the launch.
  .
  Related to Mozilla bug 1565050: with external links opening in a tab, the URL opens in the first window of the
  saved session rather than in the last used one.

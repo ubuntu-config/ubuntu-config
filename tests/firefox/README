@@ -63,7 +63,7 @@ Session restore: run-session.sh and driver.py
     OK" and exits with 0. A value which differs is marked with FAIL, and the script exits with 1. With ubuntu:GNOME,
     an unpatched Firefox restores its windows without session management, so the checks of windows restored by the
     compositor and of the window given the ID above fail, and without session-restore-launch-window.patch and
-    wayland-launch-activation-token.patch also those of the new window and the token. The session requests are in the
+    wayland-session-restore-no-activation.patch also those of the new window and the token. The session requests are in the
     WAYLAND_DEBUG output of each run in the output directory:
 
       grep -h -o -E '(add|restore)_toplevel\([^)]*"[^"]*"|toplevel_session_v1#[0-9]+\.restored\(\)|activate\("[^"]*", wl_surface#[0-9]+\)' /tmp/session-test/run*.log

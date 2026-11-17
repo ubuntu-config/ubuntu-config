@@ -2,9 +2,8 @@ wayland-session-restore-new-ids.patch
 wayland-session-restore-show-waiting-windows.patch
 wayland-session-restore-on-gnome.patch
 wayland-session-restore-uuid-ids.patch
-wayland-launch-activation-token.patch
+wayland-session-restore-no-activation.patch
 session-restore-launch-window.patch
 sigterm-handler-after-app-shell.patch
 quit-at-session-end.patch
-wayland-session-restore-no-activation.patch
 local-handler-through-gio.patch

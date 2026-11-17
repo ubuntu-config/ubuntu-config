@@ -704,9 +704,9 @@ request, so mutter marked these windows as demanding attention: GNOME Shell show
 them first when switching windows. Firefox is patched to ask for no activation of a restored window while it restores
 its session (`patches/firefox/wayland-session-restore-no-activation.patch`). The restored window which Firefox shows
 first also received the activation token of the launch, which made mutter mark it as demanding attention in the
-session tests, and Firefox is patched to give the token to the window it opens for the launch
-(`patches/firefox/wayland-launch-activation-token.patch`). Chromium still asks to activate the windows it restores, so
-mutter marks them as demanding attention ([Chromium issue 582928432](https://issues.chromium.org/issues/582928432)).
+session tests, and the same patch gives the token to the window Firefox opens for the launch. Chromium still asks to
+activate the windows it restores, so mutter marks them as demanding attention
+([Chromium issue 582928432](https://issues.chromium.org/issues/582928432)).
 
 #### Documents and terminal tabs return also after a crash
 

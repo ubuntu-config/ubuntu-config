@@ -68,32 +68,48 @@ wayland-session-restore-uuid-ids.patch
     Firefox 162, merged from D340286 on phabricator.services.mozilla.com. Drop the patch once the PPA's Firefox is
     162 or newer.
 
-wayland-launch-activation-token.patch
+wayland-session-restore-no-activation.patch
+    Keeps the windows restored from the session from demanding attention, and gives the activation token of the
+    launch to the window opened for the launch. GTK 3 activates the first window it shows with the token of the
+    launch, which during session restore is a restored window, so the token was gone for the window opened for the
+    launch. On Wayland, Firefox also asks the compositor to activate every other window it shows, and session restore
+    focuses each window it restores, to stack the windows as they were. While session restore runs at startup, no
+    event of the user is behind these requests, so mutter cannot activate the windows and marks them as demanding
+    attention instead. GNOME Shell then shows a notification for each of these windows, also in Do Not Disturb,
+    keeps it in its notification list until the window is focused, and lists these windows first when switching
+    windows. Desktop Icons NG moved to the workspace of one of them at the next workspace switch (see
+    patches/gnome-shell-ubuntu-extensions/).
+
+    The patch hands the token to Firefox's own widget code instead of GTK. A window created while session restore
+    runs is marked until session restore finishes, and a window shown before then, which is a restored one, neither
+    uses the token nor asks for activation. The window opened for the launch is shown when session restore finishes
+    (wayland-session-restore-show-waiting-windows.patch) and uses the token then, and a token which no window used,
+    because every window was restored, is dropped. Links opened from Ptyxis carry a token too, which Ptyxis passes to
+    the portal through libportal with patches/libportal/.
+
+    The requests are in nsWindowWaylandToplevel::NativeShow in widget/gtk/nsWindowWayland.cpp and nsWindow::SetFocus
+    in widget/gtk/nsWindow.cpp. The session test in tests/session/ checks that no restored window demands attention,
+    and tests/firefox/run-session.sh checks the token with every scenario, see tests/firefox/README. Proposed as
+    D340739 on phabricator.services.mozilla.com, for Mozilla bug 2090734.
+
 session-restore-launch-window.patch
     Make a start of Firefox behave like a launch while it runs: the saved windows return to their places, and the
     page the launch opens appears in a new window on the current workspace, which has the focus: a URL from another
     application or, without one, the start page.
 
     The session store restores the first saved window into the window Firefox opens for the launch, so a URL becomes a
-    tab of that window, on whichever workspace it returns to, and a launch from the dock opens nothing new. With
-    session-restore-launch-window.patch, every saved window is restored into a window of its own and the window opened
-    for the launch keeps the page it opened. With a URL this follows where external links open: in a new window when
+    tab of that window, on whichever workspace it returns to, and a launch from the dock opens nothing new. With the
+    patch, every saved window is restored into a window of its own and the window opened for the launch keeps the page
+    it opened. With a URL this follows where external links open: in a new window when
     browser.link.open_newwindow.override.external is 2, otherwise the URL still becomes a tab of the first saved
     window (Mozilla bug 1565050). Without a URL it holds for every start by the user, also a recovery after a crash,
     but not for a restart by Firefox itself, such as after an update, which restores the windows as they were. The
-    window opened for the launch is shown when session restore finishes (the second patch above), after the restored
-    ones, so GNOME places it on the current workspace.
+    window opened for the launch is shown when session restore finishes
+    (wayland-session-restore-show-waiting-windows.patch), after the restored ones, so GNOME places it on the current
+    workspace, and wayland-session-restore-no-activation.patch gives it the activation token of the launch.
 
-    GTK 3 activates the first window it shows with the activation token of the launch, which during session restore is
-    a restored window. mutter does not activate it and marks it as demanding attention instead, and the token is gone
-    for the window opened for the launch. wayland-launch-activation-token.patch hands the token to Firefox's own
-    widget code instead, keeps restored windows from using it and drops it when every window was restored. Links
-    opened from Ptyxis carry a token too, which Ptyxis passes to the portal through libportal with patches/libportal/.
-
-    tests/firefox/run-session.sh checks both with every scenario, see tests/firefox/README.
-    wayland-launch-activation-token.patch is proposed as D340739 on phabricator.services.mozilla.com, for Mozilla bug
-    2090734, together with wayland-session-restore-no-activation.patch. For session-restore-launch-window.patch,
-    Mozilla bug 2090730 asks whether and in which form Mozilla would accept the change, which is not proposed yet.
+    tests/firefox/run-session.sh checks it with every scenario, see tests/firefox/README. Mozilla bug 2090730 asks
+    whether and in which form Mozilla would accept the change, which is not proposed yet.
 
 sigterm-handler-after-app-shell.patch
 quit-at-session-end.patch
@@ -125,22 +141,6 @@ quit-at-session-end.patch
     first patch once bug 2086801 is fixed, and the second once Firefox creates a session monitor itself. After a
     version bump, check that XREMain::XRE_mainRun in toolkit/xre/nsAppRunner.cpp still runs after XPCOM is
     initialized.
-
-wayland-session-restore-no-activation.patch
-    Keeps the windows restored from the session from demanding attention. On Wayland, Firefox asks the compositor
-    to activate every window it shows, and session restore also focuses each window it restores, to stack the
-    windows as they were. While session restore runs at startup, no event of the user is behind these requests, so
-    mutter cannot activate the window and marks it as demanding attention instead. GNOME Shell then shows a
-    notification for each of these windows, also in Do Not Disturb, keeps it in its notification list until the
-    window is focused, and lists these windows first when switching windows. Desktop Icons NG moved to the
-    workspace of one of them at the next workspace switch (see patches/gnome-shell-ubuntu-extensions/). A window
-    restored from the session now asks for no activation while session restore runs at startup. The window opened
-    for the launch still receives the activation token of the launch.
-
-    The requests are in nsWindowWaylandToplevel::NativeShow in widget/gtk/nsWindowWayland.cpp and nsWindow::SetFocus
-    in widget/gtk/nsWindow.cpp, and the patch builds on wayland-launch-activation-token.patch, which records which
-    windows are restored from the session. The session test in tests/session/ checks that no restored window demands
-    attention. Proposed as D340740 on phabricator.services.mozilla.com, for Mozilla bug 2090734, on top of D340739.
 
 local-handler-through-gio.patch
     Launches an executable chosen as a handler through GIO, as Firefox launches applications from desktop entries,
