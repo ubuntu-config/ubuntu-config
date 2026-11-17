@@ -22,6 +22,27 @@ variables:
   FF_SCRIPT_SECTIONS: 1
   FF_TIMESTAMPS: 1
   DEBIAN_FRONTEND: noninteractive
+  # tests/backtrace-cores.sh downloads debug symbols, for which GitLab's default of 5 minutes can be too short.
+  RUNNER_AFTER_SCRIPT_TIMEOUT: 1h
+
+# Every job keeps the core files of processes which crashed in it as artifacts, in cores/, with their backtraces, which
+# tests/backtrace-cores.sh writes after the job's script. The kernel writes them as files, since a core_pattern which
+# pipes them to a program runs that program outside of the container. The pattern applies to the whole runner VM, which
+# runs only this job. All processes of the job inherit the limit on the size of core files.
+.cores:
+  before_script:
+    - install -d -m 1777 cores
+    - ulimit -c unlimited
+    # The services of the systemd user instances which the tests start would otherwise have a limit of 0, which
+    # Debian's systemd sets in /usr/lib/systemd/user.conf.d/10-coredump-debian.conf.
+    - mkdir -p /etc/systemd/user.conf.d
+    - printf '[Manager]\nDefaultLimitCORE=infinity\n' > /etc/systemd/user.conf.d/90-cores.conf
+    # Only on GitLab, as a local emulation of the job would change the pattern of the machine it runs on.
+    - '[ "$GITLAB_CI" != true ] || echo "$CI_PROJECT_DIR/cores/core.%e.%p.%t" > /proc/sys/kernel/core_pattern'
+
+default:
+  after_script:
+    - tests/backtrace-cores.sh cores build/*/
 
 # The source is fetched and patched by rebuild-patched-packages.sh, as for a local build, and built as an unprivileged
 # user, as sbuild does, since some test suites check what root is allowed regardless, like reading a file without
@@ -36,6 +57,7 @@ variables:
     LC_ALL: C.UTF-8
 
   before_script:
+    - !reference [.cores, before_script]
     # GitLab's hosted runners set vm.overcommit_memory to 1, so the kernel grants any allocation, while Ubuntu's default
     # is 0, with which it refuses one larger than memory and swap together. Test suites expect such allocations to fail,
     # like GTK 4's gtk:image, whose bad-image-data/bug793470-crasher.png makes the PNG loader ask for 800 GB. meson runs
@@ -73,13 +95,16 @@ variables:
     # kept as build/$PACKAGE.build, and only its end is printed when the build fails.
     - su builder -c "cd build/$PACKAGE/*/ && dpkg-buildpackage --build=binary --no-sign --jobs=$(nproc)" > "build/$PACKAGE.build" 2>&1 || { tail -n 200 "build/$PACKAGE.build"; exit 1; }
 
-  # The packages are for the tests of the same pipeline. Debug symbols are left out, which are 825 MB of the 952 MB of
-  # packages a build of Firefox produces.
+  # The packages are for the tests of the same pipeline, and their debug symbols, in the .ddeb files, for the backtraces
+  # of core files there. Firefox's debug symbols are left out, which are 825 MB of the 952 MB of packages a build of
+  # Firefox produces.
   artifacts:
     when: always
     paths:
       - build/*/*.deb
+      - build/*/*.ddeb
       - build/*.build
+      - cores/
     exclude:
       - build/*/*-dbg_*.deb
       - build/*/*-mozsymbols_*.deb
@@ -132,6 +157,7 @@ build_large:
   image: registry.gitlab.com/tozd/docker/base:ubuntu-resolute
 
   before_script:
+    - !reference [.cores, before_script]
     - apt-get update -q
     - apt-get install -y -q --no-install-recommends ca-certificates
     - for source in $TEST_SOURCES; do cp "sources.list.d/$source" /etc/apt/sources.list.d/ && apt-get update -q; done
@@ -147,6 +173,7 @@ build_large:
     when: always
     paths:
       - out/
+      - cores/
     exclude:
       - out/**/mesa_shader_cache/**/*
       - out/**/standard-input.txt
@@ -178,6 +205,9 @@ test_glib_scope:
         matrix:
           - PACKAGE: glib2.0
 
+  before_script:
+    - !reference [.cores, before_script]
+
   script:
     - apt-get update -q
     - apt-get install -y -q --no-install-recommends dbus dbus-user-session python3 python3-gi gir1.2-glib-2.0 systemd util-linux
@@ -190,6 +220,7 @@ test_glib_scope:
     when: always
     paths:
       - out/
+      - cores/
     expire_in: never
 
 # Each test runs in a GNOME session of its own, with a systemd user instance, journald and a system bus, for which it
@@ -242,6 +273,9 @@ test_session:
           - overview-thumbnails
           - restore-monitors
 
+  before_script:
+    - !reference [.cores, before_script]
+
   script:
     - apt-get update -q
     - apt-get install -y -q --no-install-recommends ca-certificates
@@ -253,6 +287,7 @@ test_session:
     when: always
     paths:
       - out/
+      - cores/
     expire_in: never
 
 # Chromium runs with its sandbox, which needs the namespaces a privileged container allows, as on GitLab's hosted
@@ -389,6 +424,7 @@ test_firefox_wasm:
           - PACKAGE: firefox
 
   before_script:
+    - !reference [.cores, before_script]
     - apt-get update -q
     - apt-get install -y -q --no-install-recommends ca-certificates ffmpeg fonts-sil-andika python3 ./build/firefox/firefox_*.deb
     - useradd --create-home --shell /bin/bash tester
@@ -410,6 +446,7 @@ test_firefox_local_handler:
           - PACKAGE: firefox
 
   before_script:
+    - !reference [.cores, before_script]
     - apt-get update -q
     - apt-get install -y -q --no-install-recommends ca-certificates python3 ./build/firefox/firefox_*.deb
     - useradd --create-home --shell /bin/bash tester
@@ -431,6 +468,7 @@ test_firefox_container_tab_window:
           - PACKAGE: firefox
 
   before_script:
+    - !reference [.cores, before_script]
     - apt-get update -q
     - apt-get install -y -q --no-install-recommends ca-certificates patch python3 ./build/firefox/firefox_*.deb
     - useradd --create-home --shell /bin/bash tester

@@ -136,7 +136,8 @@ build downloads its dependencies, with build dependencies installed only inside 
 to set up the chroot, so everything runs as an unprivileged system user, and a package's build scripts and test suite
 cannot change the system. Builds run in `/tmp`, whose limit on the number of files is raised, since a Firefox build
 holds more files there than systemd's default allows (`systemd/tmp.mount.d/`). GitLab CI builds the patched packages too
-and runs the tests in `tests/<source-package>/` against them (`.gitlab-ci.yml`).
+and runs the tests in `tests/<source-package>/` against them (`.gitlab-ci.yml`). Processes which crash in a CI job leave
+their core files in the artifacts of the job, with a backtrace of each (`tests/backtrace-cores.sh`).
 
 Tests which require a whole desktop, such as windows returning to their workspaces after logging out and in, or the
 logout dialog, run in a GNOME session in a container (`tests/session/`): the real gnome-session and GNOME Shell,
