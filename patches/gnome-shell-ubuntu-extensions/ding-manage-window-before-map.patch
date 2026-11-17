@@ -1,0 +1,42 @@
+Description: Desktop Icons NG: Manage the desktop window before it is mapped, so that it receives no keyboard focus.
+ Desktop Icons NG makes the window of its desktop process a desktop window, kept below the other windows and out of
+ the window list, once mutter has mapped it. When mutter maps it, it is still a normal window, which mutter focuses,
+ so the desktop had the keyboard focus for a moment whenever Desktop Icons NG started its process: at login, after
+ the process ended, and when the process showed no window within 3 seconds. Keys typed into the focused window at
+ that moment went to the desktop. The window is now managed when mutter creates it, before it is mapped.
+ .
+ The change backports commit 135d5440 of Desktop Icons NG by Marco Trevisan (fe64c11b of Ubuntu's Desktop Icons NG),
+ released in 51.0.9 of its GTK 4 port, to the GTK 3 version of Ubuntu 26.04.
+Author: Mitar
+Origin: backport, https://gitlab.com/rastersoft/desktop-icons-ng/-/commit/135d54400253b2dfbf300dc12e283cdd2180338f
+Forwarded: not-needed
+Last-Update: 2026-11-17
+---
+--- a/subprojects/desktop-icons-ng/emulateX11WindowType.js
++++ b/subprojects/desktop-icons-ng/emulateX11WindowType.js
+@@ -297,11 +297,12 @@
+         if (this._isX11) {
+             return;
+         }
+-        this._idMap = global.window_manager.connect_after('map', (obj, windowActor) => {
+-            let window = windowActor.get_meta_window();
++        this._idCreated = global.display.connect('window-created', (display, window) => {
+             if (this._waylandClient && this._waylandClient.query_window_belongs_to(window)) {
+                 this.addWindow(window);
+             }
++        });
++        this._idMap = global.window_manager.connect_after('map', () => {
+             this._refreshWindows(false);
+         });
+         this._idDestroy = global.window_manager.connect_after('destroy', (wm, windowActor) => {
+@@ -346,6 +347,10 @@
+         this._windowList = [];
+ 
+         // disconnect signals
++        if (this._idCreated) {
++            global.display.disconnect(this._idCreated);
++            this._idCreated = null;
++        }
+         if (this._idMap) {
+             global.window_manager.disconnect(this._idMap);
+             this._idMap = null;

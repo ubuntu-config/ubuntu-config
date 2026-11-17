@@ -20,3 +20,20 @@ ding-skip-windows-of-other-workspaces.patch
     The patch adds no test, as the package has no tests of Desktop Icons NG. The session test workspace-attention
     in tests/session/ marks a window on another workspace as demanding attention, and switches to a workspace
     without windows and to one with a window, each of which has to stay active.
+
+ding-manage-window-before-map.patch
+    Keeps the desktop window of Desktop Icons NG from receiving the keyboard focus. Desktop Icons NG makes the window
+    of its desktop process a desktop window, below the other windows and out of the window list, only once mutter has
+    mapped it, and mutter focuses the window when it maps it, as the normal window it still is then. Whenever Desktop
+    Icons NG started its process, at login, after the process ended, and when the process showed no window within 3
+    seconds, the desktop had the keyboard focus for a moment, and keys typed into the focused window went to the
+    desktop. In a CI run of the session test text-editor, the text typed into the first window was lost this way. The
+    window is now managed when mutter creates it, before it is mapped.
+
+    The patch backports commit 135d5440 of Desktop Icons NG by Marco Trevisan, also fe64c11b of Ubuntu's Desktop Icons
+    NG, from version 51.0.9 of its GTK 4 port to the GTK 3 version Ubuntu 26.04 ships. Drop the patch once Ubuntu
+    26.04 ships a Desktop Icons NG which manages its windows on the window-created signal of the display.
+
+    The package has no tests of Desktop Icons NG. In the session test container, with a focused Text Editor window,
+    each of 8 restarts of the desktop process moved the focus to the desktop for a moment without the patch, and none
+    of 8 did with it. The desktop window stays a desktop window on every workspace and out of the window list.
