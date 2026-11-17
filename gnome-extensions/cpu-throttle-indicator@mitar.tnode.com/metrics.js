@@ -77,6 +77,37 @@ const UNSET_UINT16 = 0xffff;
 // Counters wrap at the range of the unsigned 32 bit fields that hold them, after about 49.7 days of uptime.
 const COUNTER_MODULUS = 2 ** 32;
 
+// The highest sustained power limit (SPL) in watts in any power table of the embedded controller of this laptop.
+// Framework sets the tables in zephyr/program/framework/azalea/src/pmf.c of its EmbeddedController repository, which
+// builds the EC of the Laptop 13 (AMD Ryzen AI 300 Series) as its lilac variant: 30 W for best performance, 25 W for
+// balanced and 15 W for best power efficiency, on AC power and on battery. The EC's other adjustments of the limits,
+// on battery and at a thermal warning, only lower them.
+const SUSTAINED_LIMIT_CEILING_W = 30;
+
+// The APU's power is averaged over this many seconds before it is compared, so that its short bursts above its limits
+// do not count.
+const OVER_LIMIT_AVERAGE_S = 60;
+
+// The average power above which the APU counts as drawing more than any sustained limit the EC sets. Held at the 30 W
+// limit under a steady load, the APU's average power stayed at 31.1 W or below in the daily health benchmark. With
+// the EC's limits not reaching it, the APU ran at its slow power limit instead: 33 W on balanced and 35 W on best
+// performance.
+const OVER_LIMIT_POWER_W = SUSTAINED_LIMIT_CEILING_W + 2;
+
+// How long the average power has to stay above OVER_LIMIT_POWER_W before the EC's limits count as not reaching the APU.
+// Every load starts at the slow power limit, which holds until the running average the sustained limit tracks has
+// risen to that limit. Under the daily health benchmark's steady load on best performance, the average stayed above
+// OVER_LIMIT_POWER_W for at most 301 seconds. With the EC's limits not reaching the APU, it stayed above for as long as
+// the load lasted, 10 minutes in each of the two loads measured.
+const OVER_LIMIT_FOR_S = 15 * 60;
+
+// The share of the time over OVER_LIMIT_AVERAGE_S in which the sustained limit has to hold the APU back, with the
+// average power at or below OVER_LIMIT_POWER_W, for the EC's limits to count as reaching the APU again.
+const SUSTAINED_LIMIT_HOLDING_PERCENT = 50;
+
+// A longer gap between two samples, in seconds, leaves the average unknown for that time, so the check starts over.
+const SAMPLE_GAP_S = 10;
+
 /**
  * The reasons the processor can be held below the speed it would otherwise run at, in the order the kernel declares
  * their counters. SPL is the sustained power limit, and FPPT and SPPT the fast and slow package power tracking
@@ -370,4 +401,70 @@ export function dominantReason(shares, threshold) {
             dominant = reason;
     }
     return dominant;
+}
+
+/**
+ * Tells from the APU's power over time whether the power limits of the embedded controller no longer reach the APU.
+ *
+ * The EC sends its power limits to the APU over AMD's SB-RMI mailbox. When the mailbox stops answering, the APU keeps
+ * the limits it had, and on this laptop it then drew its slow power limit under a steady load for as long as the load
+ * lasted, instead of falling to the EC's sustained limit after the first minutes. The check is raised once the APU's
+ * power, averaged over OVER_LIMIT_AVERAGE_S, has stayed above every sustained limit the EC sets for OVER_LIMIT_FOR_S,
+ * longer than the start of any load stays at the slow power limit. A load which does not hold the APU above that
+ * power, such as one under the power saving profile or a bursty one, does not raise it. Once raised, the check stays
+ * raised until the sustained limit is seen holding the APU at or below that power again, or until reset is called.
+ */
+export class SustainedPowerCheck {
+    constructor() {
+        this.raised = false;
+        this._restart();
+    }
+
+    /**
+     * Adds a sample of the APU's power.
+     *
+     * @param {number} time - the monotonic time of the sample in seconds
+     * @param {number} apuPower - the APU's power in watts
+     * @param {number} sustainedShare - the percentage of the time since the sample before in which the sustained power
+     *   limit held the APU back
+     */
+    add(time, apuPower, sustainedShare) {
+        const last = this._samples.at(-1);
+        if (last && time - last.time > SAMPLE_GAP_S)
+            this._restart();
+        this._samples.push({time, apuPower, sustainedShare});
+        this._firstTime ??= time;
+        while (this._samples[0].time <= time - OVER_LIMIT_AVERAGE_S)
+            this._samples.shift();
+        // Until the samples cover a whole averaging period, a burst at the start of a load could pass for the average.
+        if (time - this._firstTime < OVER_LIMIT_AVERAGE_S)
+            return;
+
+        const mean = key => this._samples.reduce((sum, sample) => sum + sample[key], 0) / this._samples.length;
+        if (mean('apuPower') > OVER_LIMIT_POWER_W) {
+            this._overSince ??= time;
+            if (time - this._overSince >= OVER_LIMIT_FOR_S)
+                this.raised = true;
+        } else {
+            this._overSince = null;
+            if (mean('sustainedShare') >= SUSTAINED_LIMIT_HOLDING_PERCENT)
+                this.raised = false;
+        }
+    }
+
+    /**
+     * Forgets the samples and lowers the check. A suspend and resume made the EC's limits reach the APU again on this
+     * laptop, so the check starts over after one, and is raised again if the APU still draws too much.
+     */
+    reset() {
+        this._restart();
+        this.raised = false;
+    }
+
+    _restart() {
+        this._samples = [];
+        this._firstTime = null;
+        // The time from which the average power has stayed above OVER_LIMIT_POWER_W, or null while it is not above.
+        this._overSince = null;
+    }
 }

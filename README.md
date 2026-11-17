@@ -455,6 +455,21 @@ same for minutes, and a reading which stopped changing there leaves the fan clos
 ask for anyway. The warning stays until the sign which raised it is gone, so until a fan spins again or a board
 reading changes.
 
+The indicator also turns red, naming the power limit which holds the APU back, and its menu shows a warning, when the
+EC's power limits no longer reach the APU. The EC sends them to the APU over AMD's SB-RMI mailbox, and after days of
+uptime the mailbox has been seen to stop answering: the EC's console then reports `SB-RMI Error: 4` every second, and
+the APU keeps the limits it had. It then ran a steady load at its slow power limit, 33 W on balanced, for as long as
+the load lasted, instead of falling to the EC's sustained limit of 25 W after the first minute, and ran 16 C hotter. A
+suspend and resume made the mailbox answer again. The EC sets a sustained limit of at most 30 W, for best performance,
+and its other adjustments only lower the limits, so the indicator raises the warning once the APU's power, averaged
+over a minute, has stayed above 32 W for 15 minutes. Every load starts at the slow power limit until the sustained
+limit's running average catches up, and under the daily health benchmark's steady load on best performance, which
+held the APU at 30 W to 31.1 W after that, the average stayed above 32 W for at most 5 minutes. A load which does not
+hold the APU above 32 W, as a bursty one or one on the power saving profile, does not raise the warning, even while
+the limits do not reach the APU. The warning stays until the sustained limit holds the APU at or below 32 W for most
+of a minute, or until a suspend, after which the indicator judges anew. The stuck mailbox is tracked in Framework's
+[issue #160](https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/160).
+
 ### Cooling, performance and battery tracked over time
 
 Every day at 04:00, if the laptop is on AC power, its screen is locked and its load is low, a measurement records

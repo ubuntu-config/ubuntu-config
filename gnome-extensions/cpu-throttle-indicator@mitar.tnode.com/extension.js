@@ -13,8 +13,8 @@ import {decodeChargingPower, findBatteryFile} from './battery.js';
 import {FAN_MAX_RPM, findApuSensor, findBoardSensorFiles, findFanFiles} from './ec.js';
 import {findMemorySensors, findSsdSensors, findWifiSensors} from './hwmon.js';
 import {
-    CORE_GROUPS, REASONS, decodeMetrics, dominantReason, findClockLimits, findGroupCpus, findMetricsFile,
-    throttleShares, unwrapDramBandwidth,
+    CORE_GROUPS, REASONS, SustainedPowerCheck, decodeMetrics, dominantReason, findClockLimits, findGroupCpus,
+    findMetricsFile, throttleShares, unwrapDramBandwidth,
 } from './metrics.js';
 
 const SAMPLE_INTERVAL_S = 2;
@@ -85,6 +85,10 @@ const CRITICAL_TEXT_STYLE_CLASS = 'cpu-throttle-indicator-critical-text';
 // limiting at a two-second pause of the GPU and let the modules reach 89 C to 90 C at the full bandwidth, which shows
 // as limited as well.
 const DRAM_THROTTLE_C = 79;
+
+// How many seconds more the wall clock has to advance than the monotonic clock between two updates for the system to
+// count as having been suspended in between. The monotonic clock does not advance while the system is suspended.
+const SUSPEND_DETECTED_S = 10;
 
 /**
  * Formats a frequency for the menu.
@@ -174,6 +178,13 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._boardStale = false;
         // The reason the top bar names, which stays for HIDE_AFTER_SAMPLES after it stops holding anything back.
         this._throttle = null;
+        this._powerCheck = new SustainedPowerCheck();
+        // The power limit named in the top bar while the power check is raised and no power limit holds the APU back.
+        // With the EC's limits not reaching the APU, a steady load holds it at its slow power limit, so that limit is
+        // named until another power limit is seen holding the APU back while the check is raised.
+        this._powerFaultReason = REASONS.find(reason => reason.key === 'sppt');
+        // The wall clock time in microseconds of the last update, to tell a suspend between two updates.
+        this._lastRealTime = null;
         this._icons = {
             power: Gio.icon_new_for_string(`${iconsPath}/cpu-throttle-power-symbolic.svg`),
             thermal: Gio.icon_new_for_string(`${iconsPath}/cpu-throttle-thermal-symbolic.svg`),
@@ -191,6 +202,8 @@ class ThrottleIndicator extends PanelMenu.Button {
 
         this._warningItem = this._addWarning('Fan does not follow the processor heat',
             ['Fan control may be stuck on old temperatures.']);
+        this._powerWarningItem = this._addWarning("APU power does not follow the EC's limits",
+            ['Power limits may be stuck on old values.']);
 
         // All sections are rows of one grid, so that their columns line up: the names, a first column of values and a
         // second one.
@@ -839,6 +852,14 @@ class ThrottleIndicator extends PanelMenu.Button {
             return;
 
         const shares = throttleShares(previous.metrics, metrics, elapsed);
+        // The power check starts over after a suspend, because a suspend and resume made the EC's limits reach the APU
+        // again.
+        const realTime = GLib.get_real_time();
+        if (this._lastRealTime !== null &&
+            (realTime - this._lastRealTime) / GLib.USEC_PER_SEC - elapsed / 1000 > SUSPEND_DETECTED_S)
+            this._powerCheck.reset();
+        this._lastRealTime = realTime;
+        this._powerCheck.add(timestamp / GLib.USEC_PER_SEC, metrics.apuPower, shares.spl);
         for (const reason of REASONS)
             this._shareLabels.get(reason.key).text = `${Math.round(shares[reason.key])}%`;
         metrics.coreGroups.forEach((group, index) => {
@@ -878,6 +899,8 @@ class ThrottleIndicator extends PanelMenu.Button {
             metrics.systemPower === null ? null : Math.max(0, metrics.systemPower - metrics.apuPower));
 
         const dominant = dominantReason(shares, THRESHOLD_PERCENT);
+        if (this._powerCheck.raised && dominant?.kind === 'power')
+            this._powerFaultReason = dominant;
         if (dominant) {
             this._samplesUnderThreshold = 0;
             this._throttle = dominant;
@@ -894,12 +917,24 @@ class ThrottleIndicator extends PanelMenu.Button {
      */
     _render() {
         const fanFault = this._boardStale || this._samplesFanOffWhileHot >= FAULT_AFTER_HOT_SAMPLES;
+        const powerFault = this._powerCheck.raised;
         this._warningItem.visible = fanFault;
+        this._powerWarningItem.visible = powerFault;
         // Without a fan which follows the heat the APU heats up until its temperature limit holds it back. The
-        // indicator therefore shows that limit instead of the reason which holds the APU back right now.
+        // indicator therefore shows that limit instead of the reason which holds the APU back right now. This goes
+        // before the power check, because an APU which overheats is the more urgent of the two.
         if (fanFault) {
             this._icon.gicon = this._icons.thermal;
             this._reasonLabel.text = 'THM';
+            this.add_style_class_name(WARNING_PANEL_STYLE_CLASS);
+            this.show();
+            return;
+        }
+        // While the EC's power limits do not reach the APU, the indicator stays in red also when nothing holds the APU
+        // back, because the next load runs without them again. It names the power limit which holds the APU back.
+        if (powerFault) {
+            this._icon.gicon = this._icons.power;
+            this._reasonLabel.text = (this._throttle?.kind === 'power' ? this._throttle : this._powerFaultReason).short;
             this.add_style_class_name(WARNING_PANEL_STYLE_CLASS);
             this.show();
             return;
