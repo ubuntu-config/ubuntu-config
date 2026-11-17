@@ -738,8 +738,14 @@ fetch_patched_source() {
   if [ -n "$(source_git "$src")" ]; then
     clone_source "$src" "$version" "$dir"
   else
-    ( cd "$dir" && apt-get source --only-source "$src=$version" ) >/dev/null 2>&1 \
-      || fail "$src: apt-get source failed for $version (is deb-src enabled?)"
+    # Launchpad's file server, which serves the PPAs, answers some requests with 503 Service Unavailable when it is
+    # loaded, and apt gives up on a file after 3 attempts by default, so apt tries up to 10 times, waiting longer
+    # before each attempt.
+    local output
+    output=$(cd "$dir" && apt-get source -o Acquire::Retries=10 --only-source "$src=$version" 2>&1) || {
+      printf '%s\n' "$output" | tail -n 5 >&2
+      fail "$src: apt-get source failed for $version"
+    }
 
     TREE=$(find "$dir" -maxdepth 1 -mindepth 1 -type d | head -1)
     [ -n "$TREE" ] || fail "$src: apt-get source produced no source tree"

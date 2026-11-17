@@ -42,6 +42,13 @@ variables:
     # Only on GitLab, as a local emulation of the job would change the pattern of the machine it runs on.
     - '[ "$GITLAB_CI" != true ] || echo "$CI_PROJECT_DIR/cores/core.%e.%p.%t" > /proc/sys/kernel/core_pattern'
 
+# Launchpad's file server, which serves the PPAs, answers some requests with 503 Service Unavailable when it is loaded,
+# and apt gives up on a file after 3 attempts by default. Every job lets apt try up to 10 times, waiting longer before
+# each attempt.
+.apt:
+  before_script:
+    - echo 'Acquire::Retries "10";' > /etc/apt/apt.conf.d/80-retries
+
 default:
   after_script:
     - tests/backtrace-cores.sh cores build/*/
@@ -60,6 +67,7 @@ default:
 
   before_script:
     - !reference [.cores, before_script]
+    - !reference [.apt, before_script]
     # GitLab's hosted runners set vm.overcommit_memory to 1, so the kernel grants any allocation, while Ubuntu's default
     # is 0, with which it refuses one larger than memory and swap together. Test suites expect such allocations to fail,
     # like GTK 4's gtk:image, whose bad-image-data/bug793470-crasher.png makes the PNG loader ask for 800 GB. meson runs
@@ -160,6 +168,7 @@ build_large:
 
   before_script:
     - !reference [.cores, before_script]
+    - !reference [.apt, before_script]
     - apt-get update -q
     - apt-get install -y -q --no-install-recommends ca-certificates
     - for source in $TEST_SOURCES; do cp "sources.list.d/$source" /etc/apt/sources.list.d/ && apt-get update -q; done
@@ -209,6 +218,7 @@ test_glib_scope:
 
   before_script:
     - !reference [.cores, before_script]
+    - !reference [.apt, before_script]
 
   script:
     - apt-get update -q
@@ -277,6 +287,7 @@ test_session:
 
   before_script:
     - !reference [.cores, before_script]
+    - !reference [.apt, before_script]
 
   script:
     - apt-get update -q
@@ -427,6 +438,7 @@ test_firefox_wasm:
 
   before_script:
     - !reference [.cores, before_script]
+    - !reference [.apt, before_script]
     - apt-get update -q
     - apt-get install -y -q --no-install-recommends ca-certificates ffmpeg fonts-sil-andika python3 ./build/firefox/firefox_*.deb
     - useradd --create-home --shell /bin/bash tester
@@ -449,6 +461,7 @@ test_firefox_local_handler:
 
   before_script:
     - !reference [.cores, before_script]
+    - !reference [.apt, before_script]
     - apt-get update -q
     - apt-get install -y -q --no-install-recommends ca-certificates python3 ./build/firefox/firefox_*.deb
     - useradd --create-home --shell /bin/bash tester
@@ -471,6 +484,7 @@ test_firefox_container_tab_window:
 
   before_script:
     - !reference [.cores, before_script]
+    - !reference [.apt, before_script]
     - apt-get update -q
     - apt-get install -y -q --no-install-recommends ca-certificates patch python3 ./build/firefox/firefox_*.deb
     - useradd --create-home --shell /bin/bash tester
