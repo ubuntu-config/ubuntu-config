@@ -407,15 +407,7 @@ temperature is the skin temperature from the table, which AMD's firmware interfa
 temperature the APU and the sensors on the chassis report. A temperature turns red when it reaches the critical limit
 its hwmon device reports: 85 C for the memory modules, 93.85 C for the SSD, and 114.85 C for the APU's temperature
 which the EC reads, the threshold at which the EC throttles the APU. The table carries no limits for the temperatures
-of the laptop, the CPU, the GPU and the SoC, and the wireless card reports none, so these never turn red. The DRAM row
-of the usage turns red while the hotter memory module is at 79 C or above, from which the memory controller limits the
-bandwidth of the memory. Nothing reports that limit: the clocks of the memory, the data fabric and the SoC stay the
-same, and the table's throttle counters do not count it. It was measured under a large language model on the GPU,
-whose reads fell from about 69 GB/s to about 3/4 and 1/2 of that once the hotter module reached 79 C, while the
-controller held the module at 79 C to 80.5 C. With the GPU fully busy, the reads were under 58 GB/s in 35% of the
-seconds with the hotter module at 78.75 C, in 90% at 79 C and in 99% at 79.25 C. Once, the controller stopped limiting
-at a short pause of the GPU and let the modules reach 89 C to 90 C at the full bandwidth, which the row shows as
-limited as well.
+of the laptop, the CPU, the GPU and the SoC, and the wireless card reports none, so these never turn red.
 
 The menu also shows the fan's speed and the target speed the embedded controller (EC) is bringing it to, both as the
 EC reports them through `cros_ec`'s hwmon device. The target is 0 while the fan is off. While

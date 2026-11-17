@@ -59,7 +59,7 @@
     spacing: 12px;
 }
 
-/* A row with a critical temperature or a limited memory bandwidth, in the same red as the warning, and its text. */
+/* A row with a critical temperature, in the same red as the warning, and its text. */
 .cpu-throttle-indicator-critical {
     background-color: #c7162b;
 }

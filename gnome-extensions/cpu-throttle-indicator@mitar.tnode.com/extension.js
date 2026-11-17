@@ -70,21 +70,9 @@ const FAN_FULL_TARGET_SHARE = 0.95;
 // screen. Borrowing it keeps the warning in the theme's colors, light or dark.
 const WARNING_PANEL_STYLE_CLASS = 'screen-recording-indicator';
 
-// The style classes of the background and of the labels of a menu row which shows a critical temperature or a limited
-// memory bandwidth.
+// The style classes of the background and of the labels of a menu row which shows a critical temperature.
 const CRITICAL_ROW_STYLE_CLASS = 'cpu-throttle-indicator-critical';
 const CRITICAL_TEXT_STYLE_CLASS = 'cpu-throttle-indicator-critical-text';
-
-// The temperature of the hotter memory module in degrees Celsius from which the memory controller limits the bandwidth
-// of the memory. Nothing reports the limit nor the limiting: the clocks of the memory, the data fabric and the SoC stay
-// the same, and the throttle counters of the metrics table do not count it. It was measured under a large language
-// model on the GPU, which read about 69 GB/s from cool modules. Once the hotter module reached this temperature, the
-// reads fell in steps to about 3/4 and 1/2 of that, and the controller then held the module at 79 C to 80.5 C. The
-// sensors of the modules report in steps of 0.25 C, and with the GPU fully busy the reads were under 58 GB/s in 35% of
-// the seconds with the hotter module at 78.75 C, in 90% at 79 C and in 99% at 79.25 C. Once, the controller stopped
-// limiting at a two-second pause of the GPU and let the modules reach 89 C to 90 C at the full bandwidth, which shows
-// as limited as well.
-const DRAM_THROTTLE_C = 79;
 
 // How many seconds more the wall clock has to advance than the monotonic clock between two updates for the system to
 // count as having been suspended in between. The monotonic clock does not advance while the system is suspended.
@@ -137,10 +125,9 @@ class ThrottleIndicator extends PanelMenu.Button {
      * @param {{file: Gio.File, critical: number|null}|null} devices.apuSensor - the APU's sensor, as findApuSensor
      *   returned it
      * @param {Gio.File|null} devices.batteryFile - the battery's state, as findBatteryFile returned it
-     * @param {{name: string, file: Gio.File, critical: number|null, memory?: boolean}[]} devices.temperatureSensors
-     *   - the other hwmon temperature sensors to show in the menu, each with the name to show it under, its critical
-     *   limit in degrees Celsius, or null when it has none, and whether it is the sensor of a memory module, which is
-     *   false when left out
+     * @param {{name: string, file: Gio.File, critical: number|null}[]} devices.temperatureSensors - the other hwmon
+     *   temperature sensors to show in the menu, each with the name to show it under and its critical limit in degrees
+     *   Celsius, or null when it has none
      */
     _init(iconsPath, {
         metricsFile, clockLimits, groupCpus, fanFiles, boardSensorFiles, apuSensor, batteryFile, temperatureSensors,
@@ -226,13 +213,11 @@ class ThrottleIndicator extends PanelMenu.Button {
 
         this._addColumnsHeading(grid, row++, null, 'Usage', 'Frequency');
         const clockRows = [...CORE_GROUPS.map(group => `${group.name} cores`), 'GPU', 'NPU', 'DRAM']
-            .map(name => this._addRow(grid, row++, name));
-        this._memoryRow = clockRows.at(-1);
-        const clockLabels = clockRows.map(clockRow => clockRow.values);
-        this._usageLabels = clockLabels.slice(0, CORE_GROUPS.length).map(([usage]) => usage);
-        this._frequencyLabels = clockLabels.slice(0, CORE_GROUPS.length).map(([, frequency]) => frequency);
+            .map(name => this._addRow(grid, row++, name).values);
+        this._usageLabels = clockRows.slice(0, CORE_GROUPS.length).map(([usage]) => usage);
+        this._frequencyLabels = clockRows.slice(0, CORE_GROUPS.length).map(([, frequency]) => frequency);
         [[this._graphicsUsageLabel, this._graphicsFrequencyLabel], [this._npuUsageLabel, this._npuFrequencyLabel],
-            [this._memoryUsageLabel, this._memoryFrequencyLabel]] = clockLabels.slice(CORE_GROUPS.length);
+            [this._memoryUsageLabel, this._memoryFrequencyLabel]] = clockRows.slice(CORE_GROUPS.length);
 
         if (fanFiles.length)
             this._addColumnsHeading(grid, row++, 'Fans', 'Speed', 'Target');
@@ -282,20 +267,11 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._batteryRow = addPart('Battery');
         this._setRowVisible(this._batteryRow, false);
         this._otherRow = addPart('Other');
-        // The temperature of a sensor is undefined until it has been read, and null while it cannot be read.
-        const addSensor = (sensor, part) => ({
-            file: sensor.file,
-            critical: sensor.critical,
-            memory: sensor.memory ?? false,
-            row: part,
-            reading: false,
-            temperature: undefined,
-        });
+        const addSensor = (sensor, part) => ({file: sensor.file, critical: sensor.critical, row: part, reading: false});
         this._temperatureSensors = [
             ...(apuSensor ? [addSensor(apuSensor, this._apuRow)] : []),
             ...temperatureSensors.map(sensor => addSensor(sensor, addPart(sensor.name, true))),
         ];
-        this._memorySensors = this._temperatureSensors.filter(sensor => sensor.memory);
 
         // The hwmon temperature sensors and the battery are shown only in the menu, so they are read only while it is
         // open, and once right as it opens. A read of the sensor of an NVMe drive or of a wireless card sends a command
@@ -521,38 +497,16 @@ class ThrottleIndicator extends PanelMenu.Button {
      */
     _showTemperature(row, temperature, critical) {
         row.temperature.text = temperature === null ? 'error' : `${temperature.toFixed(1)} C`;
-        this._markRow(row, critical);
-    }
-
-    /**
-     * Marks a row of the grid in red, or removes the mark.
-     *
-     * @param {object} row - the row _addRow returned
-     * @param {boolean} marked - whether the row is marked
-     */
-    _markRow(row, marked) {
-        if (marked)
+        if (critical)
             row.background.add_style_class_name(CRITICAL_ROW_STYLE_CLASS);
         else
             row.background.remove_style_class_name(CRITICAL_ROW_STYLE_CLASS);
         for (const label of row.labels) {
-            if (marked)
+            if (critical)
                 label.add_style_class_name(CRITICAL_TEXT_STYLE_CLASS);
             else
                 label.remove_style_class_name(CRITICAL_TEXT_STYLE_CLASS);
         }
-    }
-
-    /**
-     * Marks the DRAM row of the usage while the hotter memory module is at DRAM_THROTTLE_C or above, from which the
-     * memory controller limits the bandwidth of the memory, and removes the mark otherwise. The mark follows the last
-     * readings of the sensors of the modules, and a sensor which has not been read yet or cannot be read is left out.
-     */
-    _showMemoryThrottle() {
-        const temperatures = this._memorySensors
-            .map(sensor => sensor.temperature)
-            .filter(temperature => typeof temperature === 'number');
-        this._markRow(this._memoryRow, temperatures.length > 0 && Math.max(...temperatures) >= DRAM_THROTTLE_C);
     }
 
     /**
@@ -722,13 +676,10 @@ class ThrottleIndicator extends PanelMenu.Button {
                         return;
                     }
                 }
-                if (this._cancellable.is_cancelled())
-                    return;
-                sensor.temperature = temperature;
-                this._showTemperature(sensor.row, temperature,
-                    sensor.critical !== null && temperature !== null && temperature >= sensor.critical);
-                if (sensor.memory)
-                    this._showMemoryThrottle();
+                if (!this._cancellable.is_cancelled()) {
+                    this._showTemperature(sensor.row, temperature,
+                        sensor.critical !== null && temperature !== null && temperature >= sensor.critical);
+                }
             });
         }
     }
@@ -964,7 +915,7 @@ export default class CpuThrottleIndicatorExtension extends Extension {
         // reports no fan leaves the menu without its fans. The warning about the fan not following the heat then
         // rests on whichever of the fans and the board temperatures the EC does report. The menu lists the sensors of
         // the memory modules, the SSDs and the wireless cards this system has, numbered only when there are several
-        // of a kind to tell apart. Without sensors of the memory modules, the DRAM row of the usage is never marked.
+        // of a kind to tell apart.
         const named = (name, sensors) => sensors.map((sensor, index) => ({
             ...sensor,
             name: sensors.length === 1 ? name : `${name} ${index + 1}`,
@@ -978,7 +929,7 @@ export default class CpuThrottleIndicatorExtension extends Extension {
             apuSensor: findApuSensor(),
             batteryFile: findBatteryFile(),
             temperatureSensors: [
-                ...named('DRAM', findMemorySensors()).map(sensor => ({...sensor, memory: true})),
+                ...named('DRAM', findMemorySensors()),
                 ...named('SSD', findSsdSensors()),
                 ...named('Wi-Fi', findWifiSensors()),
             ],
