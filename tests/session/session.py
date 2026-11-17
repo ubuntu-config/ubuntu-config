@@ -165,6 +165,11 @@ class Session:
 
         if not wait_for(ready, timeout):
             raise RuntimeError(f"GNOME Shell did not start within {timeout} seconds, last error: {last_error}, see the journal")
+        # Desktop Icons NG launches its process again when the process shows no desktop window within 3 seconds, as on
+        # a slow machine, and the desktop window has the keyboard focus for a moment when it maps, so keys typed then
+        # are lost. The login is complete once the desktop window shows.
+        if not wait_for(lambda: self.call("desktopIconsShown"), timeout):
+            raise RuntimeError(f"Desktop Icons NG showed no desktop window within {timeout} seconds, see the journal")
         # The virtual keyboard is set up before a test types, which loses the first keys otherwise.
         self.press("Shift_L")
 

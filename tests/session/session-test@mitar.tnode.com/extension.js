@@ -50,6 +50,16 @@ class SessionTest {
     }
 
     /**
+     * @returns {boolean} whether Desktop Icons NG shows its desktop window, true also when the extension is not active
+     */
+    desktopIconsShown() {
+        if (Main.extensionManager.lookup('ding@rastersoft.com')?.state !== ExtensionState.ACTIVE)
+            return true;
+        // Desktop Icons NG leaves its windows out of global.get_window_actors(), but not out of the display's list.
+        return global.display.list_all_windows().some(w => w.get_window_type() === Meta.WindowType.DESKTOP);
+    }
+
+    /**
      * @returns {object[]} the normal windows and dialogs, each with the properties the tests check
      */
     windows() {
