@@ -476,10 +476,11 @@ cooldown after it gives the time constant with which the temperature falls. Both
 fan runs at full speed throughout, so that dust shows in these two and not in the scores. Nothing is recorded when
 other processes used more than 1% of the CPU time during any of the phases, since that would have cost the scores
 about as much, nor when anything powered the NPU, which heats the same package and shares its power budget, nor when
-the screen is unlocked, AC power is disconnected or the laptop suspends during the measurement. Such a day is
-skipped, while a measurement which fails, for example because the EC stopped reading its sensors (see
-[Processor throttling](#processor-throttling)), leaves `health-benchmark.service` failed, which the
-[daily mail](#daily-mail-of-failures-and-errors) then reports.
+the screen is unlocked, AC power is disconnected or the laptop suspends during the measurement. A scheduled
+measurement first measures the load for a minute and skips the day when it was higher than 1%, before it discharges
+the battery or runs the fan at full speed. Such a day is skipped, while a measurement which fails, for example
+because the EC stopped reading its sensors (see [Processor throttling](#processor-throttling)), leaves
+`health-benchmark.service` failed, which the [daily mail](#daily-mail-of-failures-and-errors) then reports.
 
 For the battery, each measurement records the values the battery's fuel gauge reports: the full capacity it
 estimates, the design capacity and the charge cycles. The gauge recalculates the full capacity only after the battery

@@ -30,20 +30,22 @@ Usage
 -----
   health-benchmark                       report the latest measurement against the best ones
   health-benchmark --run [--note TEXT]   measure now, once the load has dropped (root)
-  health-benchmark --scheduled           measure if started between 04:00 and 04:05, with the laptop on AC power
-                                         and the screen locked, and skip otherwise (root, run once a day at 04:00
-                                         by health-benchmark.timer)
+  health-benchmark --scheduled           measure if started between 04:00 and 04:05, with the laptop on AC power,
+                                         the screen locked and the load low, and skip otherwise (root, run once a
+                                         day at 04:00 by health-benchmark.timer)
   health-benchmark --restore             return the battery to automatic charging and the fan to the EC's automatic
                                          control, when a measurement which ended abnormally left the battery
                                          discharging or the fan at a fixed duty cycle (root, run at every boot by
                                          health-benchmark-restore.service)
 
 A note marks a measurement in the report, for example "after cleaning the fan". A manual measurement first waits for
-the load to drop. A measurement is not recorded when other processes used more than 1% of the CPU time during any of
-its phases, since that would have cost the scores about as much, or when anything powered the NPU, which heats the
-same package and shares its power budget. It is also abandoned when the screen is unlocked during a scheduled
-measurement, AC power is disconnected, or the laptop suspends. These end it with a message and a successful exit
-status, while failures, such as an EC which stopped reading its sensors, exit with an error.
+the load to drop, and a scheduled one first measures the load for a minute and skips when it was higher than 1%, so
+that it neither discharges the battery nor runs the fan at full speed for a measurement it would discard. A
+measurement is not recorded when other processes used more than 1% of the CPU time during any of its phases, since
+that would have cost the scores about as much, or when anything powered the NPU, which heats the same package and
+shares its power budget. It is also abandoned when the screen is unlocked during a scheduled measurement, AC power is
+disconnected, or the laptop suspends. These end it with a message and a successful exit status, while failures, such
+as an EC which stopped reading its sensors, exit with an error.
 
 
 Comparability
@@ -101,6 +103,9 @@ FOREIGN_CPU_PERCENT = 1
 # The time the load has to stay that low before a manual measurement starts, and the longest wait for it.
 IDLE_REQUIRED_S = 180
 IDLE_TIMEOUT_S = 1800
+# A scheduled measurement does not wait, but skips when the load was higher over this long before it starts, so that
+# a busy system is not discharged and run with the fan at full speed for an idle phase which would be discarded.
+SCHEDULED_IDLE_CHECK_S = 60
 CLOCK_TICKS = os.sysconf('SC_CLK_TCK')
 
 # The idle phase runs the fan at full speed for IDLE_PHASE_S, so that the temperatures settle as they do under the
@@ -1082,6 +1087,16 @@ def wait_for_idle():
             return 'AC power was disconnected'
 
 
+def busy_percent(seconds):
+    """Waits the given number of seconds and returns the share of all CPU time which was busy during them, in
+    percent."""
+    total, idle = read_cpu_times()
+    time.sleep(seconds)
+    total_after, idle_after = read_cpu_times()
+    elapsed = total_after - total
+    return 100 * (elapsed - (idle_after - idle)) / elapsed if elapsed > 0 else 0.0
+
+
 def launch(trigger, note):
     """Runs a measurement in a child process which holds the power profile at performance while it runs, and returns
     its exit code. The battery and the fan are restored here too, in case the child could not do it itself."""
@@ -1127,8 +1142,8 @@ def run_manual(note):
 
 
 def run_scheduled():
-    """Measures if it starts within SCHEDULED_LATE_S after SCHEDULED_AT, with the laptop on AC power and the screen
-    locked, and otherwise skips, until the next day."""
+    """Measures if it starts within SCHEDULED_LATE_S after SCHEDULED_AT, with the laptop on AC power, the screen
+    locked and the load low, and otherwise skips, until the next day."""
     require_root()
     os.umask(0o022)
     with measurement_lock() as acquired:
@@ -1147,6 +1162,11 @@ def run_scheduled():
             return
         if unlocked_session():
             print('not measuring: the screen is unlocked', flush=True)
+            return
+        busy = busy_percent(SCHEDULED_IDLE_CHECK_S)
+        if busy > FOREIGN_CPU_PERCENT:
+            print(f'not measuring: the CPUs were {busy:.1f}% busy over {SCHEDULED_IDLE_CHECK_S} seconds, more than '
+                  f'{FOREIGN_CPU_PERCENT}%', flush=True)
             return
         sys.exit(launch('scheduled', None))
 
