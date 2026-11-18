@@ -267,11 +267,14 @@ class ThrottleIndicator extends PanelMenu.Button {
 
         // The hwmon temperature sensors and the battery are shown only in the menu, so they are read only while it is
         // open, and once right as it opens. A read of the sensor of an NVMe drive or of a wireless card sends a command
-        // to the device, which wakes it from a power saving state.
+        // to the device, which wakes it from a power saving state. The indicator stays shown while the menu is open,
+        // so once the menu closes it hides if nothing deserves attention by then.
         this.menu.connect('open-state-changed', (menu, open) => {
             if (open) {
                 this._sampleTemperatures();
                 this._sampleBattery();
+            } else {
+                this._render();
             }
         });
 
@@ -831,13 +834,15 @@ class ThrottleIndicator extends PanelMenu.Button {
     }
 
     /**
-     * Shows in the top bar what currently deserves attention, and hides the indicator when nothing does.
+     * Shows in the top bar what currently deserves attention. When nothing does, it hides the indicator, or while its
+     * menu is open shows NONE.
      */
     _render() {
         const fanFault = this._boardStale || this._samplesFanOffWhileHot >= FAULT_AFTER_HOT_SAMPLES;
         const powerFault = this._powerCheck.raised;
         this._warningItem.visible = fanFault;
         this._powerWarningItem.visible = powerFault;
+        this._icon.show();
         // Without a fan which follows the heat the APU heats up until its temperature limit holds it back. The
         // indicator therefore shows that limit instead of the reason which holds the APU back right now. This goes
         // before the power check, because an APU which overheats is the more urgent of the two.
@@ -862,8 +867,12 @@ class ThrottleIndicator extends PanelMenu.Button {
             this._icon.gicon = this._icons[this._throttle.kind];
             this._reasonLabel.text = this._throttle.short;
             this.show();
+        } else if (this.menu.isOpen) {
+            // Hiding the indicator would close its menu under the reader, so it waits until the menu closes. Until then
+            // it says that nothing holds the processor back, without an icon, which would name a kind of limit.
+            this._icon.hide();
+            this._reasonLabel.text = 'NONE';
         } else if (this.visible) {
-            this.menu.close();
             this.hide();
         }
     }

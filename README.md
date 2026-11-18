@@ -367,9 +367,10 @@ installed.
 An indicator appears in the top bar while the processor is being held below the speed it would otherwise run at, and
 names the limit which holds it there. Its menu breaks that down into the share of the last interval each limit
 accounted for, alongside the frequencies of the cores, the GPU, the NPU and the memory, the usage of the cores, the
-GPU and the NPU, the fan speed, the temperatures and the power. It is always the first of the indicators on the
-right of the top bar, so the icons of applications, which the AppIndicators extension shows there, follow it
-whichever started first.
+GPU and the NPU, the fan speed, the temperatures and the power. While the menu is open the indicator stays in the top
+bar also when nothing holds the processor back any more, and then shows NONE; it hides once the menu closes. It is
+always the first of the indicators on the right of the top bar, so the icons of applications, which the AppIndicators
+extension shows there, follow it whichever started first.
 
 The interfaces the usual tools read for this are Intel's and AMD publishes no equivalent, so the indicator
 reads the APU's own metrics table at `/sys/class/drm/card*/device/gpu_metrics` instead. That table counts the
