@@ -390,15 +390,15 @@ the kernel reports for the battery, as the laptop's power does not include it. T
 are given as a share of the top of the clock levels amdgpu lists in `pp_dpm_sclk` and `pp_dpm_mclk`, and the NPU's as
 a share of 1800 MHz, the top of the NPU's clock table in the kernel's `amdxdna` driver. The usage of each group of
 cores comes from `/proc/stat`, for the logical CPUs whose maximum frequency in cpufreq is the group's. The usage of
-the DRAM is the bandwidth of its reads and writes, as a share of 89.6 GB/s, the bandwidth of the two 64 bit channels
-at the top of the memory clock. The table holds the bandwidth in 16 bit fields of MB/s, which wrap at 65.5 GB/s, and
-the reads go above that under a large language model on the GPU. The firmware averages the bandwidth with a time
-constant of 1 second, so between two readings it can fall at most to e^(-elapsed/1 s) of the earlier one, and the
-indicator corrects a reading under that bound by the wrap. The indicator reads the table every second for this, at
-which the bound missed none of the wrapped readings of a day of logs, also with an occasional reading 2 seconds after
-the one before, while readings every 2 seconds would miss about a third of them. Everything else in the table updates
-the indicator every 2 seconds. A bandwidth above the wrap already when the indicator starts shows as low until it
-falls below the wrap.
+the DRAM is the bandwidth of its reads and writes, as a share of the memory's bandwidth: the transfer rate the memory
+modules report in SMBIOS times the width of the GPU's memory bus, both as amdkfd publishes them in its topology under
+`/sys/class/kfd/kfd/topology`. On this laptop that is 5600 MT/s over 128 bits, 89.6 GB/s. The table holds the
+bandwidth in 16 bit fields of MB/s, which wrap at 65.5 GB/s, and the reads go above that, to about 83 GB/s from the
+GPU. Nothing in the table tells a wrapped reading from a low one, and every wrap adds 65.5 GB/s to the sum of the reads
+and the writes, whichever of them wrapped. So while a reading plus 65.5 GB/s still fits under the memory's bandwidth,
+which on this laptop it does below 24.1 GB/s, the DRAM row shows every bandwidth the reading can stand for, like
+`1.4/66.9 GB/s, 2/75%`, and leaves it to the reader to tell from what runs which one it is. Above that it shows the
+one bandwidth. Memory with a bandwidth of 131 GB/s or more can wrap twice, and the row then shows three or more.
 
 The menu shows the temperatures of the memory modules, the SSD and the wireless card from their hwmon devices. It
 reads them, the EC's reading of the APU's temperature and the battery only while it is open, as a read of the SSD's or

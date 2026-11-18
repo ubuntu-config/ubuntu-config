@@ -29,7 +29,6 @@ const OFFSET_AVERAGE_GFXCLK_FREQUENCY = 174;
 const OFFSET_AVERAGE_IPUCLK_FREQUENCY = 180;
 const OFFSET_AVERAGE_UCLK_FREQUENCY = 186;
 const OFFSET_CURRENT_CORECLK = 190;
-const OFFSET_TIME_FILTER_ALPHAVALUE = 256;
 
 // The NPU's columns, each of which has an entry in average_ipu_activity.
 const NPU_COLUMNS = 8;
@@ -45,17 +44,11 @@ const NPU_COLUMNS = 8;
  */
 const NPU_MAX_FREQUENCY = 1800;
 
-// The width of the memory bus in bytes: the APU's memory controller has two 64 bit DDR5 channels, which the two memory
-// modules of this laptop fill. Each transfers twice per cycle of the memory clock.
-const DRAM_BUS_BYTES = 16;
+// The topology amdkfd, the compute part of amdgpu, publishes: a node per CPU and per GPU, each with its memory banks.
+const KFD_NODES_PATH = '/sys/class/kfd/kfd/topology/nodes';
 
 // The DRAM bandwidth is in 16 bit fields of MB/s, which wrap at this.
 const DRAM_BANDWIDTH_WRAP = 65536;
-
-// The share of the bound below which a reading of the DRAM bandwidth counts as wrapped, as described for
-// unwrapDramBandwidth. It leaves room for the firmware updating the table at its own times rather than at the times
-// the table is read.
-const DRAM_BOUND_MARGIN = 0.9;
 
 /**
  * Where each core sits in the per-core arrays, and the frequency it reaches when nothing holds it back.
@@ -254,47 +247,89 @@ export function decodeMetrics(bytes) {
         memoryFrequency: view.getUint16(OFFSET_AVERAGE_UCLK_FREQUENCY, true),
         dramReads: view.getUint16(OFFSET_AVERAGE_DRAM_READS, true),
         dramWrites: view.getUint16(OFFSET_AVERAGE_DRAM_WRITES, true),
-        filterTime: view.getUint32(OFFSET_TIME_FILTER_ALPHAVALUE, true),
         coreGroups,
         residency,
     };
 }
 
 /**
- * Corrects the DRAM bandwidth of a reading for the wrap of the table's fields.
+ * Finds the bandwidths of the DRAM's reads and writes together which a reading of the table can stand for.
  *
  * The table holds the read and the write bandwidth in 16 bit fields of MB/s, which wrap at 65536 MB/s, and the reads do
- * go above that, to about 73 GB/s under a large language model on the GPU. The firmware averages both over time with
- * the time constant of time_filter_alphavalue, 1 second on this laptop, so between two readings a bandwidth falls at
- * most to the share e^(-elapsed/time constant) of the earlier one, which is what it falls to when the memory falls
- * idle. When a GPU load ended, the reads were measured to fall by about 60% a second. A reading under that bound has
- * wrapped, and is corrected by the wrap. Over a day of readings once a second and once every 2 seconds, this corrected
- * no reading taken while the GPU was busy less than half of the time.
+ * go above that, to about 83 GB/s from the GPU. Nothing in the table tells a wrapped reading from a low one, so the
+ * sum of the two fields stands for itself and for every wrap more which still fits under the bandwidth of the memory.
  *
- * A reading which has wrapped is not recognized as such without an earlier reading above the bound, so a bandwidth
- * which is above the wrap already at the first reading shows as low until it falls below the wrap. The longer the time
- * between two readings, the lower the bound, and with readings every 2 seconds the bound misses about a third of the
- * wrapped readings of the log, and with an occasional reading 3 seconds after the one before, most of them. With
- * readings every second, the bound misses none of them, also with an occasional reading 2 seconds after the one before.
- *
- * @param {object} previous - the earlier reading, as decodeMetrics returned it and this function corrected it
- * @param {object} current - the later reading, as decodeMetrics returned it, whose dramReads and dramWrites this
- *   corrects in place
- * @param {number} elapsed - the milliseconds between the two readings
+ * @param {object} metrics - a reading, as decodeMetrics returned it
+ * @param {number|null} maxBandwidth - the bandwidth in MB/s of the memory at the top of its clock, as findClockLimits
+ *   returned it, or null when it is unknown, in which case the sum stands for itself and for one wrap more
+ * @returns {number[]} the bandwidths in MB/s, lowest first: one when the reading is unambiguous, more otherwise
  */
-export function unwrapDramBandwidth(previous, current, elapsed) {
-    if (current.filterTime <= 0)
-        return;
-    const share = DRAM_BOUND_MARGIN * Math.exp(-1000 * elapsed / current.filterTime);
-    for (const key of ['dramReads', 'dramWrites']) {
-        if (current[key] < share * previous[key])
-            current[key] += DRAM_BANDWIDTH_WRAP;
+export function dramBandwidths(metrics, maxBandwidth) {
+    const bandwidth = metrics.dramReads + metrics.dramWrites;
+    if (maxBandwidth === null)
+        return [bandwidth, bandwidth + DRAM_BANDWIDTH_WRAP];
+    const bandwidths = [bandwidth];
+    for (let more = bandwidth + DRAM_BANDWIDTH_WRAP; more <= maxBandwidth; more += DRAM_BANDWIDTH_WRAP)
+        bandwidths.push(more);
+    return bandwidths;
+}
+
+/**
+ * Reads a properties file of amdkfd's topology, one "name value" pair per line.
+ *
+ * @param {string} path - the file
+ * @returns {Map<string, number>} the values by their names, empty when the file cannot be read
+ */
+function readKfdProperties(path) {
+    const properties = new Map();
+    for (const line of (readText(path) ?? '').split('\n')) {
+        const [name, value] = line.split(' ');
+        if (name && value !== undefined)
+            properties.set(name, Number(value));
     }
+    return properties;
+}
+
+/**
+ * Finds the bandwidth of the memory the GPU of a metrics table reads from: the transfer rate of the system's memory
+ * times the width of the GPU's memory bus.
+ *
+ * Both come from amdkfd's topology. The memory banks of a CPU node carry the speed which the memory modules report in
+ * SMBIOS, in MT/s, as mem_clk_max, and the memory bank of a GPU node carries the width of the bus amdgpu reads the
+ * memory over, in bits, as width. This holds for any memory type, unlike the GPU's memory clock, whose ratio to the
+ * transfer rate differs between DDR5 and LPDDR5X. SMBIOS gives the speed the modules are rated for, so with modules
+ * which run slower than that, the bandwidth comes out higher than the memory reaches.
+ *
+ * @param {Gio.File} file - the metrics table, as findMetricsFile returned it
+ * @returns {number|null} the bandwidth in MB/s, or null when amdkfd does not report it
+ */
+function findMemoryBandwidth(file) {
+    // The GPU node is the one which renders through the card's render node, which tells it apart from the nodes of
+    // other GPUs in the same system.
+    const renderNode = listChildren(`${file.get_parent().get_path()}/drm`).find(name => /^renderD\d+$/.test(name));
+    if (!renderNode)
+        return null;
+    const renderMinor = Number(renderNode.slice('renderD'.length));
+    let width = null;
+    let rate = null;
+    for (const node of listChildren(KFD_NODES_PATH)) {
+        const properties = readKfdProperties(`${KFD_NODES_PATH}/${node}/properties`);
+        const isGpu = properties.get('drm_render_minor') === renderMinor && properties.get('simd_count') > 0;
+        const isCpu = properties.get('cpu_cores_count') > 0;
+        for (const bank of listChildren(`${KFD_NODES_PATH}/${node}/mem_banks`)) {
+            const bankProperties = readKfdProperties(`${KFD_NODES_PATH}/${node}/mem_banks/${bank}/properties`);
+            if (isGpu && bankProperties.get('width') > 0)
+                width = bankProperties.get('width');
+            if (isCpu && rate === null && bankProperties.get('mem_clk_max') > 0)
+                rate = bankProperties.get('mem_clk_max');
+        }
+    }
+    return width === null || rate === null ? null : rate * width / 8;
 }
 
 /**
  * Finds the frequencies the GPU, the NPU and the memory reach when nothing holds them back, and the bandwidth of the
- * memory at its frequency.
+ * memory, as findMemoryBandwidth finds it.
  *
  * @param {Gio.File} file - the metrics table, as findMetricsFile returned it
  * @returns {{graphics: number|null, npu: number, memory: number|null, memoryBandwidth: number|null}} the frequencies
@@ -312,12 +347,11 @@ export function findClockLimits(file) {
             return null;
         }
     };
-    const memory = topLevel('pp_dpm_mclk');
     return {
         graphics: topLevel('pp_dpm_sclk'),
         npu: NPU_MAX_FREQUENCY,
-        memory,
-        memoryBandwidth: memory === null ? null : memory * 2 * DRAM_BUS_BYTES,
+        memory: topLevel('pp_dpm_mclk'),
+        memoryBandwidth: findMemoryBandwidth(file),
     };
 }
 
