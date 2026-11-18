@@ -15,9 +15,9 @@ Description: Quit cleanly when the desktop session ends, as the Inhibit portal r
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090663
 Forwarded: https://phabricator.services.mozilla.com/D340640
-Last-Update: 2026-11-16
+Last-Update: 2026-11-18
 diff --git a/toolkit/xre/nsNativeAppSupportUnix.cpp b/toolkit/xre/nsNativeAppSupportUnix.cpp
-index e629f582d43f..802ee6a26de3 100644
+index e629f582d43f..ba6c2bac72a1 100644
 --- a/toolkit/xre/nsNativeAppSupportUnix.cpp
 +++ b/toolkit/xre/nsNativeAppSupportUnix.cpp
 @@ -39,8 +39,21 @@
@@ -242,7 +242,7 @@ index e629f582d43f..802ee6a26de3 100644
    // the SM is free to exit any time after we disconnect, so callers must be
    // sure to have reached a sufficiently advanced phase of shutdown that there
    // is no risk of data loss:
-@@ -418,14 +461,6 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
+@@ -418,13 +461,13 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
  
    *aRetVal = true;
  
@@ -250,14 +250,19 @@ index e629f582d43f..802ee6a26de3 100644
 -  gboolean sm_disable = FALSE;
 -  if (!getenv("SESSION_MANAGER")) {
 -    sm_disable = TRUE;
--  }
++#ifdef MOZ_BACKGROUNDTASKS
++  // NS_CreateNativeAppSupport() runs before BackgroundTasks::Init(), so the
++  // mode is known only here.
++  if (BackgroundTasks::IsBackgroundTaskMode()) {
++    mSMDisabled = true;
+   }
 -
 -  nsAutoCString prev_client_id;
--
++#endif
+ 
    char** curarg = gArgv + 1;
    while (*curarg) {
-     char* arg = *curarg;
-@@ -433,104 +468,130 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
+@@ -433,104 +476,122 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
        arg += 2;
        if (!strcmp(arg, "sm-disable")) {
          RemoveArg(curarg);
@@ -284,14 +289,6 @@ index e629f582d43f..802ee6a26de3 100644
  
 -  if (prev_client_id.IsEmpty()) {
 -    prev_client_id = getenv("DESKTOP_AUTOSTART_ID");
-+#ifdef MOZ_BACKGROUNDTASKS
-+  // NS_CreateNativeAppSupport() runs before BackgroundTasks::Init(), so the
-+  // mode is known only here.
-+  if (BackgroundTasks::IsBackgroundTaskMode()) {
-+    mSMDisabled = true;
-+  }
-+#endif
-+
 +#ifdef MOZ_X11
 +  if (mPrevClientId.IsEmpty()) {
 +    mPrevClientId = getenv("DESKTOP_AUTOSTART_ID");
@@ -400,53 +397,53 @@ index e629f582d43f..802ee6a26de3 100644
 +  }
 +  return true;
 +}
-+
+ 
+-    ice_init();
 +NS_IMETHODIMP
 +nsNativeAppSupportXSMP::Start(bool* aRetVal) {
 +  nsresult rv = nsNativeAppSupportUnix::Start(aRetVal);
 +  NS_ENSURE_SUCCESS(rv, rv);
  
--    ice_init();
-+  if (mSMDisabled || !LoadSMLibraries()) {
-+    return NS_OK;
-+  }
- 
 -    // all callbacks are mandatory in libSM 1.0, so listen even if we don't
 -    // care.
 -    unsigned long mask = SmcSaveYourselfProcMask | SmcDieProcMask |
 -                         SmcSaveCompleteProcMask | SmcShutdownCancelledProcMask;
-+  ice_init();
++  if (mSMDisabled || !LoadSMLibraries()) {
++    return NS_OK;
++  }
  
 -    SmcCallbacks callbacks;
 -    callbacks.save_yourself.callback = nsNativeAppSupportUnix::SaveYourselfCB;
 -    callbacks.save_yourself.client_data = static_cast<SmPointer>(this);
++  ice_init();
+ 
+-    callbacks.die.callback = nsNativeAppSupportUnix::DieCB;
+-    callbacks.die.client_data = static_cast<SmPointer>(this);
 +  // all callbacks are mandatory in libSM 1.0, so listen even if we don't
 +  // care.
 +  unsigned long mask = SmcSaveYourselfProcMask | SmcDieProcMask |
 +                       SmcSaveCompleteProcMask | SmcShutdownCancelledProcMask;
  
--    callbacks.die.callback = nsNativeAppSupportUnix::DieCB;
--    callbacks.die.client_data = static_cast<SmPointer>(this);
+-    callbacks.save_complete.callback = nsNativeAppSupportUnix::SaveCompleteCB;
+-    callbacks.save_complete.client_data = nullptr;
 +  SmcCallbacks callbacks;
 +  callbacks.save_yourself.callback = nsNativeAppSupportXSMP::SaveYourselfCB;
 +  callbacks.save_yourself.client_data = static_cast<SmPointer>(this);
  
--    callbacks.save_complete.callback = nsNativeAppSupportUnix::SaveCompleteCB;
--    callbacks.save_complete.client_data = nullptr;
-+  callbacks.die.callback = nsNativeAppSupportXSMP::DieCB;
-+  callbacks.die.client_data = static_cast<SmPointer>(this);
- 
 -    callbacks.shutdown_cancelled.callback =
 -        nsNativeAppSupportUnix::ShutdownCancelledCB;
 -    callbacks.shutdown_cancelled.client_data = static_cast<SmPointer>(this);
-+  callbacks.save_complete.callback = nsNativeAppSupportXSMP::SaveCompleteCB;
-+  callbacks.save_complete.client_data = nullptr;
++  callbacks.die.callback = nsNativeAppSupportXSMP::DieCB;
++  callbacks.die.client_data = static_cast<SmPointer>(this);
  
 -    char errbuf[256];
 -    mSessionConnection = SmcOpenConnection(
 -        nullptr, this, SmProtoMajor, SmProtoMinor, mask, &callbacks,
 -        prev_client_id.get(), &client_id, sizeof(errbuf), errbuf);
 -  }
++  callbacks.save_complete.callback = nsNativeAppSupportXSMP::SaveCompleteCB;
++  callbacks.save_complete.client_data = nullptr;
++
 +  callbacks.shutdown_cancelled.callback =
 +      nsNativeAppSupportXSMP::ShutdownCancelledCB;
 +  callbacks.shutdown_cancelled.client_data = static_cast<SmPointer>(this);
@@ -531,7 +528,9 @@ index e629f582d43f..802ee6a26de3 100644
 +                                    aError.get());
 +          });
 +}
-+
+ 
+-  *aResult = native;
+-  NS_ADDREF(*aResult);
 +void nsNativeAppSupportDBus::StopSessionMonitor() {
 +  if (mSessionMonitorProxy) {
 +    g_signal_handlers_disconnect_matched(mSessionMonitorProxy,
@@ -545,8 +544,6 @@ index e629f582d43f..802ee6a26de3 100644
 +  }
 +}
  
--  *aResult = native;
--  NS_ADDREF(*aResult);
 +// A monitor ends with the portal process, so one is created for each owner of
 +// the portal's name. Without an owner, a call would start the portal again.
 +void nsNativeAppSupportDBus::UpdateSessionMonitor() {
@@ -579,7 +576,7 @@ index e629f582d43f..802ee6a26de3 100644
 +            WarnSessionMonitorError("monitor the session", aError.get());
 +          });
 +}
- 
++
 +void nsNativeAppSupportDBus::SessionMonitorOwnerChanged(GObject* aObject,
 +                                                        GParamSpec* aPSpec,
 +                                                        gpointer aUserData) {
