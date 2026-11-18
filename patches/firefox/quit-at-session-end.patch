@@ -17,7 +17,7 @@ Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090663
 Forwarded: https://phabricator.services.mozilla.com/D340640
 Last-Update: 2026-11-18
 diff --git a/toolkit/xre/nsNativeAppSupportUnix.cpp b/toolkit/xre/nsNativeAppSupportUnix.cpp
-index e629f582d43f..ba6c2bac72a1 100644
+index e629f582d43f..0b1e40cc9a9c 100644
 --- a/toolkit/xre/nsNativeAppSupportUnix.cpp
 +++ b/toolkit/xre/nsNativeAppSupportUnix.cpp
 @@ -39,8 +39,21 @@
@@ -242,7 +242,7 @@ index e629f582d43f..ba6c2bac72a1 100644
    // the SM is free to exit any time after we disconnect, so callers must be
    // sure to have reached a sufficiently advanced phase of shutdown that there
    // is no risk of data loss:
-@@ -418,13 +461,13 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
+@@ -418,13 +461,14 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
  
    *aRetVal = true;
  
@@ -255,6 +255,7 @@ index e629f582d43f..ba6c2bac72a1 100644
 +  // mode is known only here.
 +  if (BackgroundTasks::IsBackgroundTaskMode()) {
 +    mSMDisabled = true;
++    return NS_OK;
    }
 -
 -  nsAutoCString prev_client_id;
@@ -262,7 +263,7 @@ index e629f582d43f..ba6c2bac72a1 100644
  
    char** curarg = gArgv + 1;
    while (*curarg) {
-@@ -433,104 +476,122 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
+@@ -433,104 +477,122 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
        arg += 2;
        if (!strcmp(arg, "sm-disable")) {
          RemoveArg(curarg);
@@ -456,7 +457,7 @@ index e629f582d43f..ba6c2bac72a1 100644
  
    if (!mSessionConnection) {
      return NS_OK;
-@@ -538,8 +599,8 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
+@@ -538,8 +600,8 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
  
    LogModule::Init(
        gArgc, gArgv);  // need to make sure initialized before SetClientState
@@ -467,7 +468,7 @@ index e629f582d43f..ba6c2bac72a1 100644
      SetClientState(STATE_REGISTERING);
    } else {
      SetClientState(STATE_IDLE);
-@@ -632,20 +693,190 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
+@@ -632,20 +694,190 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
    SmcSetProperties(mSessionConnection, n, props);
  
    g_free(client_id);
