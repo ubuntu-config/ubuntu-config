@@ -52,6 +52,13 @@ variables:
 default:
   after_script:
     - tests/backtrace-cores.sh cores build/*/
+  # A job which failed before its script ran, like when the runner could not pull the image, or whose runner broke,
+  # runs again. A script which fails or runs into the job's timeout does not.
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - scheduler_failure
 
 # The source is fetched and patched by rebuild-patched-packages.sh, as for a local build, and built as an unprivileged
 # user, as sbuild does, since some test suites check what root is allowed regardless, like reading a file without
