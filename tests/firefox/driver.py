@@ -18,7 +18,8 @@ SCENARIO is one of:
                    another application, and external links open in a new window; the URL has to open in the new
                    window
   startup-url-tab  like startup-url, with external links opening in a tab as by default; the URL has to open as
-                   a tab of the first restored window, and no window may receive the token
+                   a tab of the first restored window, no window may receive the token, and a window opened after
+                   the restore has to request activation with a token of its own
   startup-restore-crash, startup-url-crash
                    like startup-restore and startup-url, but the first run is killed instead of quitting, so the
                    second one recovers from a crash, with crash recovery enabled as by default; the results have
@@ -348,6 +349,22 @@ def keyboard_focus(log_path, token):
     return None if focused is None else "token" if focused in token_surfaces else "other"
 
 
+def line_count(log_path):
+    with open(log_path, errors="replace") as f:
+        return sum(1 for _ in f)
+
+
+def activation_tokens(log_path, skip, token):
+    """Returns for each activation request in log_path after its first skip lines whether it passes token ("token")
+    or another one ("other")."""
+    tokens = []
+    with open(log_path, errors="replace") as f:
+        for line in list(f)[skip:]:
+            if match := re.search(r'-> xdg_activation_v1#\d+\.activate\("([^"]*)", wl_surface#\d+\)', line):
+                tokens.append("token" if match[1] == token else "other")
+    return tokens
+
+
 def add_keyboard():
     """Adds a keyboard to mutter's seat through its remote desktop API, by pressing Shift, so that mutter gives the
     keyboard focus to windows. Returns the remote desktop session, which keeps the keyboard until remove_keyboard()
@@ -470,6 +487,14 @@ def main():
         # The URL opens in a tab of the first window of the saved session, and the token is dropped.
         report("run 2: pages of the windows %s", window_pages(m), sorted([sorted([pages[0], link]), [pages[1]], [pages[2]]]))
         report("run 2: activation token passed with windows %s", activated_toplevels(run2_log, ACTIVATION_TOKEN), [])
+        # A window opened after the restore requests activation with a token of its own. A launch token which no
+        # window used would no longer be accepted then: mutter ignores it once the startup sequence of the launch
+        # timed out, 15 seconds after the launch.
+        lines_before = line_count(run2_log)
+        open_windows(m, 1)
+        time.sleep(3)
+        report("run 2: a window opened after the restore passes the activation token or another one: %s",
+               activation_tokens(run2_log, lines_before, ACTIVATION_TOKEN), ["other"])
     elif at_startup:
         # The start page is about:blank, see write_prefs.
         new_page = link if with_url else "about:blank"
@@ -507,8 +532,14 @@ def main():
     if not alive_after(proc, 5):
         print("run 3: FIREFOX EXITED with status %s" % proc.returncode, flush=True)
         return 1
-    # The session store does not save a window which shows only about:blank, the start page.
-    run2_saved = 3 if scenario in ("startup-restore", "startup-no-ids") else run2_windows
+    # The session store does not save a window which shows only about:blank, the start page, but it saves the window
+    # startup-url-tab opens after the restore.
+    if scenario in ("startup-restore", "startup-no-ids"):
+        run2_saved = 3
+    elif scenario == "startup-url-tab":
+        run2_saved = run2_windows + 1
+    else:
+        run2_saved = run2_windows
     report("run 3: %s windows", window_count(m), run2_saved + 1)
     report("run 3: %s windows shown", mapped_toplevels(os.path.join(log_dir, "run3.log")), run2_saved + 1)
     report("run 3: %s windows restored by the compositor", restored_toplevels(os.path.join(log_dir, "run3.log")),

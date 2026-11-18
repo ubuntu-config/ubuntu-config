@@ -18,7 +18,7 @@ Description: Do not activate the windows restored at startup, and activate the w
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090734
 Forwarded: https://phabricator.services.mozilla.com/D340739
-Last-Update: 2026-11-17
+Last-Update: 2026-11-18
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
 --- a/toolkit/xre/nsAppRunner.cpp
 +++ b/toolkit/xre/nsAppRunner.cpp
@@ -106,18 +106,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
    SetSafeWindowSize(mSizeConstraints.mMaxSize);
  
    if (!gGlobalsInitialized) {
-@@ -1189,6 +1190,10 @@ void nsWindow::SetUserTimeAndStartupTokenForActivatedWindow() {
-     return;
-   }
- 
-+  if (mWaitingToFocusRestore) {
-+    return;
-+  }
-+
-   mWindowActivationTokenFromEnv = toolkit->GetActivationToken();
-   if (!mWindowActivationTokenFromEnv.IsEmpty()) {
-     if (!GdkIsWaylandDisplay()) {
-@@ -1289,6 +1294,11 @@ void nsWindow::SetFocus(Raise aRaise, mozilla::dom::CallerType aCallerType) {
+@@ -1289,6 +1290,11 @@ void nsWindow::SetFocus(Raise aRaise, mozilla::dom::CallerType aCallerType) {
      if (StaticPrefs::mozilla_widget_raise_on_setfocus_AtStartup() &&
          toplevelWindow->mIsShown && toplevelWindow->mShell &&
          !gtk_window_is_active(GTK_WINDOW(toplevelWindow->mShell))) {
@@ -129,7 +118,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
        LOG("  toplevel is visible but not active, requesting activation [%p]",
            toplevelWindow.get());
  
-@@ -7733,7 +7743,11 @@ void nsWindow::SessionRestoreFinished() {
+@@ -7733,7 +7739,11 @@ void nsWindow::SessionRestoreFinished() {
    GList* toplevels = gtk_window_list_toplevels();
    for (GList* item = toplevels; item; item = item->next) {
      nsWindow* window = FromGtkWidget(GTK_WIDGET(item->data));
@@ -142,19 +131,29 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
        waitingWindows.AppendElement(window);
      }
    }
-@@ -7749,6 +7763,12 @@ void nsWindow::SessionRestoreFinished() {
+@@ -7749,12 +7759,17 @@ void nsWindow::SessionRestoreFinished() {
      }
    }
  
+-  if (!gFocusRequestWindow) {
+-    return;
++  if (gFocusRequestWindow) {
++    gFocusRequestWindow->SetFocus(gFocusRequestWindowRaise,
++                                  mozilla::dom::CallerType::System);
++    gFocusRequestWindow = nullptr;
++  }
++
 +  // A launch activation token which no window used, because every window was
 +  // restored, must not activate a window opened later.
 +  if (nsGTKToolkit* toolkit = nsGTKToolkit::GetToolkit()) {
 +    toolkit->SetActivationToken(""_ns);
-+  }
-+
-   if (!gFocusRequestWindow) {
-     return;
    }
+-  gFocusRequestWindow->SetFocus(gFocusRequestWindowRaise,
+-                                mozilla::dom::CallerType::System);
+-  gFocusRequestWindow = nullptr;
+ }
+ 
+ // If aForce = true we create a new session if there isn't any one.
 diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
 --- a/widget/gtk/nsWindow.h
 +++ b/widget/gtk/nsWindow.h
@@ -181,12 +180,27 @@ diff --git a/widget/gtk/nsWindowWayland.cpp b/widget/gtk/nsWindowWayland.cpp
  
    LOGVERBOSE("  mWaitingToSessionRestore %d", mWaitingToSessionRestore);
  }
-@@ -733,6 +734,8 @@ void nsWindowWaylandToplevel::NativeShow(bool aAction) {
-     auto token = std::move(mWindowActivationTokenFromEnv);
-     if (!token.IsEmpty()) {
-       FocusWaylandWindow(token.get());
-+    } else if (mWaitingToFocusRestore) {
+@@ -728,13 +729,17 @@ void nsWindowWaylandToplevel::NativeShow(bool aAction) {
+     LOG("nsWindowWaylandToplevel::NativeShow show\n");
+ 
+     gtk_widget_show(mShell);
+-    SetUserTimeAndStartupTokenForActivatedWindow();
+-
+-    auto token = std::move(mWindowActivationTokenFromEnv);
+-    if (!token.IsEmpty()) {
+-      FocusWaylandWindow(token.get());
++    if (mWaitingToFocusRestore) {
 +      LOG("  waiting to focus restore, not activated");
      } else {
-       TransferFocusTo();
+-      TransferFocusTo();
++      SetUserTimeAndStartupTokenForActivatedWindow();
++
++      auto token = std::move(mWindowActivationTokenFromEnv);
++      if (!token.IsEmpty()) {
++        FocusWaylandWindow(token.get());
++      } else {
++        TransferFocusTo();
++      }
      }
+     mNeedsShow = false;
+   } else {
