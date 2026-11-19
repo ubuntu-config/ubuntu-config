@@ -498,6 +498,11 @@ the battery or runs the fan at full speed. Such a day is skipped, while a measur
 because the EC stopped reading its sensors (see [Processor throttling](#processor-throttling)), leaves
 `health-benchmark.service` failed, which the [daily mail](#daily-mail-of-failures-and-errors) then reports.
 
+With an EC which reports the fan's duty cycle and whether it controls the fan itself, which Framework's EC releases
+for this laptop do not, the samples include both. A measurement then fails without touching the fan when something
+else holds the fan at a fixed duty cycle, which may be on purpose or forgotten, and after the measurement the EC has to
+confirm that it controls the fan again, or the service fails, so that a fan left at a fixed duty cycle is reported.
+
 For the battery, each measurement records the values the battery's fuel gauge reports: the full capacity it
 estimates, the design capacity and the charge cycles. The gauge recalculates the full capacity only after the battery
 has discharged far enough between two rests, which a battery kept between 40% and 60% rarely does, so the estimate

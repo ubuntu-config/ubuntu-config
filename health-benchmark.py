@@ -35,8 +35,8 @@ Usage
                                          day at 04:00 by health-benchmark.timer)
   health-benchmark --restore             return the battery to automatic charging and the fan to the EC's automatic
                                          control, when a measurement which ended abnormally left the battery
-                                         discharging or the fan at a fixed duty cycle (root, run at every boot by
-                                         health-benchmark-restore.service)
+                                         discharging or the fan at a fixed duty cycle, and fail when either stays
+                                         changed (root, run at every boot by health-benchmark-restore.service)
 
 A note marks a measurement in the report, for example "after cleaning the fan". A manual measurement first waits for
 the load to drop, and a scheduled one first measures the load for a minute and skips when it was higher than 1%, so
@@ -46,6 +46,11 @@ that would have cost the scores about as much, or when anything powered the NPU,
 shares its power budget. It is also abandoned when the screen is unlocked during a scheduled measurement, AC power is
 disconnected, or the laptop suspends. These end it with a message and a successful exit status, while failures, such
 as an EC which stopped reading its sensors, exit with an error.
+
+With an EC which reports the fan's duty cycle and whether it controls the fan itself (see FAN_MODES), the samples
+include both, a measurement fails without touching the fan when something else holds the fan at a fixed duty cycle,
+and the EC has to confirm that it controls the fan again after the measurement, or the run fails, so that a fan left
+at a fixed duty cycle is reported.
 
 
 Comparability
@@ -132,6 +137,14 @@ PERF_CPU = 0
 
 # At a full duty cycle the fan of this laptop spins at about 7600 RPM. Much less means it did not follow the command.
 FAN_FULL_MIN_RPM = 4000
+# The cros_ec hwmon device has pwm1 and pwm1_enable only when the EC reports the fan's duty cycle and whether it
+# controls the fan itself, which Framework's EC releases for this laptop do not. pwm1 holds the duty cycle from 0 to
+# 255, and pwm1_enable is 1 while the duty cycle is fixed and 2 while the EC controls the fan. With an EC which does
+# not report them, the duty cycle is not recorded and the fan's control is not checked.
+FAN_MODES = {'1': 'manual', '2': 'auto'}
+FAN_DUTY_SCALE = 255 / 100
+# A read of the fan's mode can fail for a moment, so it is tried this many times, a second apart.
+FAN_MODE_READS = 5
 # Under the steady load the EC's sensor next to the APU warms by well over this. Less means the EC stopped reading
 # its sensors, which leaves them at the values they last had.
 EC_RISE_MIN_C = 5
@@ -200,8 +213,8 @@ TEMPERATURES = ('tctl', 'core_max', 'soc', 'skin', 'ec_local', 'ec_cpu', 'ec_ddr
 # Measured alongside the temperatures because the graphics and the NPU heat the same package as the cores do.
 GRAPHICS = ('gfx_power_w', 'gfx_activity_pct')
 TRACE_FIELDS = (
-    ('t', 'phase', 'busy_pct', 'power_w', 'fan_rpm', 'fan_target') + TEMPERATURES + GRAPHICS +
-    ('vcn_activity_pct', 'npu_active', 'npu_clock_mhz', 'battery_status', 'battery_v', 'battery_a'))
+    ('t', 'phase', 'busy_pct', 'power_w', 'fan_rpm', 'fan_target', 'fan_duty_pct', 'fan_mode') + TEMPERATURES +
+    GRAPHICS + ('vcn_activity_pct', 'npu_active', 'npu_clock_mhz', 'battery_status', 'battery_v', 'battery_a'))
 
 FIELDS = [
     'timestamp', 'trigger', 'note', 'duration_s', 'foreign_cpu_pct', 'platform_profile',
@@ -357,6 +370,9 @@ class Sensors:
             raise Failure('the cros_ec hwmon device is missing')
         self.fan_file = f'{ec}/fan1_input'
         self.fan_target_file = f'{ec}/fan1_target'
+        # Missing with an EC which does not report them, see FAN_MODES.
+        self.fan_duty_file = f'{ec}/pwm1' if os.path.exists(f'{ec}/pwm1') else None
+        self.fan_mode_file = f'{ec}/pwm1_enable' if os.path.exists(f'{ec}/pwm1_enable') else None
         self.ec_files = {}
         for label in glob.glob(f'{ec}/temp*_label'):
             name = EC_SENSORS.get(read_text(label))
@@ -376,8 +392,9 @@ class Sensors:
     def read(self):
         """Returns one sample: temperatures in degrees Celsius (None for a sensor which failed to read), the package
         power and the graphics power in watts, the graphics and video activity in percent, the fan speed and target in
-        RPM, the share of CPU time busy since the previous sample, whether the NPU is powered and its clock in MHz,
-        the battery's status, voltage in volts and current in amperes, and the throttle residency counters."""
+        RPM, the fan's duty cycle in percent and its mode (None when the EC does not report them), the share of CPU
+        time busy since the previous sample, whether the NPU is powered and its clock in MHz, the battery's status,
+        voltage in volts and current in amperes, and the throttle residency counters."""
         with open(self.metrics_file, 'rb') as file:
             metrics = decode_metrics(file.read())
         if metrics is None:
@@ -391,6 +408,8 @@ class Sensors:
             'power_w': metrics['power_w'],
             'fan_rpm': read_number(self.fan_file),
             'fan_target': read_number(self.fan_target_file),
+            'fan_duty_pct': read_number(self.fan_duty_file, FAN_DUTY_SCALE) if self.fan_duty_file else None,
+            'fan_mode': FAN_MODES.get(read_text(self.fan_mode_file)) if self.fan_mode_file else None,
             'tctl': read_number(self.tctl_file, 1000),
             'core_max': metrics['core_max'],
             'soc': metrics['soc'],
@@ -628,20 +647,60 @@ def framework_tool(*arguments):
         raise Failure(f'framework_tool {" ".join(arguments)} failed: {(result.stdout + result.stderr).strip()}')
 
 
+def read_fan_control():
+    """Returns the fan's mode, 'manual' while its duty cycle is fixed or 'auto' while the EC controls it, and its duty
+    cycle in percent.
+
+    Both are None when the EC does not report them (see FAN_MODES), when the cros_ec hwmon device does not exist yet,
+    as at boot, or when the mode cannot be read FAN_MODE_READS times in a row.
+    """
+    ec = find_hwmon('cros_ec')
+    if ec is None or not os.path.exists(f'{ec}/pwm1_enable'):
+        return None, None
+    for attempt in range(FAN_MODE_READS):
+        if attempt:
+            time.sleep(1)
+        mode = FAN_MODES.get(read_text(f'{ec}/pwm1_enable'))
+        if mode is not None:
+            return mode, read_number(f'{ec}/pwm1', FAN_DUTY_SCALE)
+    return None, None
+
+
 def fix_fan():
     """Holds the fan at a full duty cycle. The marker is created first, so that it exists whenever the fan might be
-    fixed."""
+    fixed.
+
+    Raises Failure when framework_tool fails or the EC reports that it still controls the fan.
+    """
     os.makedirs(STATE_DIR, mode=0o755, exist_ok=True)
     with open(FAN_MARKER, 'w'):
         pass
     framework_tool('--fansetduty', '100')
+    # The fan's speed in the idle phase shows whether the EC followed the command, and an EC which reports the fan's
+    # mode confirms it right away.
+    mode, _ = read_fan_control()
+    if mode == 'auto':
+        raise Failure('the EC still controls the fan after framework_tool --fansetduty 100')
 
 
 def restore_fan():
-    """Returns the fan to the EC's automatic control."""
+    """Returns the fan to the EC's automatic control and removes the marker.
+
+    Raises Failure, keeping the marker, when framework_tool fails or the EC reports the fan still at a fixed duty cycle.
+    An EC which does not report the fan's mode leaves framework_tool's exit status as the only check.
+    """
     framework_tool('--autofanctrl')
+    mode, duty = read_fan_control()
+    if mode == 'manual':
+        raise Failure(f'the fan is still at a fixed duty cycle of {format_duty(duty)} after framework_tool '
+                      '--autofanctrl')
     with contextlib.suppress(FileNotFoundError):
         os.remove(FAN_MARKER)
+
+
+def format_duty(duty):
+    """Formats a duty cycle in percent, which is None when it cannot be read."""
+    return 'an unknown percentage' if duty is None else f'{duty:.0f}%'
 
 
 def write_attribute(path, value):
@@ -685,7 +744,10 @@ def restore_changes(announce):
     """Returns the battery to automatic charging and the fan to the EC's automatic control, when their markers say a
     measurement changed them. With announce, prints each restoration, for changes a measurement which ended abnormally
     left. Reports a restoration which fails and goes on, so that one failure does not keep the other from being undone.
+
+    Returns whether nothing is left changed, which is false when a restoration failed.
     """
+    restored = True
     for marker, restore, what in ((BATTERY_MARKER, restore_battery, 'the battery to automatic charging'),
                                   (FAN_MARKER, restore_fan, 'the fan to automatic control')):
         if not os.path.exists(marker):
@@ -696,6 +758,8 @@ def restore_changes(announce):
             restore()
         except Failure as error:
             print(f'health-benchmark: {error}', file=sys.stderr, flush=True)
+            restored = False
+    return restored
 
 
 def battery_description(battery):
@@ -848,10 +912,14 @@ def system_description():
         sevenzip_sha256 = hashlib.sha256(file.read()).hexdigest()
     sevenzip_banner = subprocess.run([SEVENZIP, 'i'], capture_output=True, text=True).stdout
     perf = subprocess.run(['perf', '--version'], capture_output=True, text=True)
+    # The EC runs one of its two copies of the firmware, RO or RW, and the other one can hold another version, as after
+    # flashing only RW.
+    ec = read_text('/sys/class/chromeos/cros_ec/version') or ''
+    ec_copy = search(r'^Firmware copy:\s*(RO|RW)$', ec)
     return {
         'bios_version': read_text('/sys/class/dmi/id/bios_version'),
         'bios_date': read_text('/sys/class/dmi/id/bios_date'),
-        'ec_version': search(r'^RW version:\s*(\S+)', read_text('/sys/class/chromeos/cros_ec/version') or ''),
+        'ec_version': search(rf'^{ec_copy} version:\s*(\S+)', ec) if ec_copy else None,
         'kernel': platform.release(),
         'kernel_build': platform.version(),
         'cmdline': read_text('/proc/cmdline'),
@@ -933,6 +1001,13 @@ def measure(trigger, note):
         raise Failure(f'the platform profile is {profile} instead of {PROFILE}')
     if not os.access(SEVENZIP, os.X_OK):
         raise Failure(f'{SEVENZIP} is missing, run install-health-benchmark.sh')
+    # A fan which something else holds at a fixed duty cycle may be held so on purpose or forgotten, so it is left as it
+    # is, and the measurement fails, which the daily mail reports. The caller has already undone a fixed duty cycle
+    # which an earlier measurement left.
+    mode, duty = read_fan_control()
+    if mode == 'manual':
+        raise Failure(f'the fan is at a fixed duty cycle of {format_duty(duty)}, which this measurement did not set '
+                      'and leaves as it is (framework_tool --autofanctrl returns it to automatic control)')
 
     sensors = Sensors()
     measurement = Measurement(sensors, scheduled=trigger == 'scheduled')
@@ -1015,7 +1090,12 @@ def measure(trigger, note):
         row['steady_thermal_pct'] = residency_percent(window[0], window[-1], THERMAL_LIMITS)
         row['steady_power_limit_pct'] = residency_percent(window[0], window[-1], POWER_LIMITS)
         row['steady_prochot_pct'] = residency_percent(window[0], window[-1], ('prochot',))
-        if row['steady_ec_cpu'] is None or row['steady_ec_cpu'] - row['idle_ec_cpu'] < EC_RISE_MIN_C:
+        # An EC which stopped reading its sensors either keeps reporting the values they last had or, built with a fix
+        # for that, reports them as failing to read.
+        if row['steady_ec_cpu'] is None or row['idle_ec_cpu'] is None:
+            raise Failure('the EC sensor next to the APU failed to read, the EC has probably stopped reading its '
+                          'sensors (a suspend and resume makes it read them again)')
+        if row['steady_ec_cpu'] - row['idle_ec_cpu'] < EC_RISE_MIN_C:
             raise Failure('the EC sensor next to the APU did not warm up under load, the EC has probably stopped '
                           'reading its sensors (a suspend and resume makes it read them again)')
 
@@ -1109,13 +1189,16 @@ def launch(trigger, note):
         command += ['--note', note]
     process = subprocess.Popen(command)
     try:
-        return process.wait()
+        code = process.wait()
     finally:
         # powerprofilesctl passes SIGINT and SIGTERM on to the child, which then cleans up, so waiting for it here
         # avoids restoring the battery and the fan while the child still holds them.
         with contextlib.suppress(subprocess.TimeoutExpired):
             process.wait(timeout=60)
-        restore_changes(announce=True)
+        restored = restore_changes(announce=True)
+    # A battery or a fan which stays changed fails the run even when the measurement itself succeeded, so that the
+    # daily mail reports it.
+    return code if code or restored else 1
 
 
 def require_root():
@@ -1131,6 +1214,7 @@ def run_manual(note):
     with measurement_lock() as acquired:
         if not acquired:
             sys.exit('health-benchmark: another measurement is running')
+        restore_changes(announce=True)
         if not on_ac_power():
             sys.exit('health-benchmark: a measurement requires AC power')
         print(f'waiting for the load to stay at or below {FOREIGN_CPU_PERCENT}% for {IDLE_REQUIRED_S} seconds',
@@ -1173,11 +1257,11 @@ def run_scheduled():
 
 def run_restore():
     """Returns the battery to automatic charging and the fan to automatic control, when a measurement left them
-    changed and none is running."""
+    changed and none is running. Exits with an error when either stays changed."""
     require_root()
     with measurement_lock() as acquired:
-        if acquired:
-            restore_changes(announce=True)
+        if acquired and not restore_changes(announce=True):
+            sys.exit(1)
 
 
 def read_results():
