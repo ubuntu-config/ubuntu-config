@@ -18,7 +18,8 @@ Description: Do not activate the windows restored at startup, and activate the w
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090734
 Forwarded: https://phabricator.services.mozilla.com/D340739
-Last-Update: 2026-11-18
+Applied-Upstream: 162, https://github.com/mozilla-firefox/firefox/commit/30ef407069f4bffab01b27f48e4dffbbba4267c2
+Last-Update: 2026-11-19
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
 --- a/toolkit/xre/nsAppRunner.cpp
 +++ b/toolkit/xre/nsAppRunner.cpp

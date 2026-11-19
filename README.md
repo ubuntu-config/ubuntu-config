@@ -594,7 +594,9 @@ session: Firefox 122 added a handler which quits cleanly on SIGTERM, but install
 counted as a crash, after which Firefox restores its windows as they were, without the new window for the launch, and
 loses the changes since it last saved its session. Firefox is patched to install the handler, and to monitor the
 session through the portal and quit cleanly when it ends (`patches/firefox/sigterm-handler-after-app-shell.patch` and
-`quit-at-session-end.patch`).
+`quit-at-session-end.patch`). With the handler, a SIGTERM which also ends the content processes of Firefox could crash
+it while it quits, which `tab-crash-without-frame-loader.patch` fixes
+([Mozilla bug 2094896](https://bugzilla.mozilla.org/show_bug.cgi?id=2094896)).
 
 Signal, Slack, Claude Desktop and other applications built on Electron crashed at every logout and shutdown with
 "GPU process isn't usable. Goodbye.", and Chromium itself does the same. Chromium moves its browser process into a

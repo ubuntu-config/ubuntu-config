@@ -89,8 +89,9 @@ wayland-session-restore-no-activation.patch
 
     The requests are in nsWindowWaylandToplevel::NativeShow in widget/gtk/nsWindowWayland.cpp and nsWindow::SetFocus
     in widget/gtk/nsWindow.cpp. The session test in tests/session/ checks that no restored window demands attention,
-    and tests/firefox/run-session.sh checks the token with every scenario, see tests/firefox/README. Proposed as
-    D340739 on phabricator.services.mozilla.com, for Mozilla bug 2090734.
+    and tests/firefox/run-session.sh checks the token with every scenario, see tests/firefox/README. In Firefox 162,
+    merged for Mozilla bug 2090734 from D340739 on phabricator.services.mozilla.com. Drop the patch once the PPA's
+    Firefox is 162 or newer.
 
 session-restore-launch-window.patch
     Make a start of Firefox behave like a launch while it runs: the saved windows return to their places, and the
@@ -112,35 +113,43 @@ session-restore-launch-window.patch
     whether and in which form Mozilla would accept the change, which is not proposed yet.
 
 sigterm-handler-after-app-shell.patch
+tab-crash-without-frame-loader.patch
 quit-at-session-end.patch
     Make Firefox quit cleanly when the desktop session ends, at logout, shutdown and reboot, so that it saves its
     session and the next start is no recovery from a crash. Such a recovery restores the windows as they were,
     without the new window session-restore-launch-window.patch opens for the launch, and loses the changes since
     Firefox last saved its session.
 
-    Before the session ends, GNOME tells applications through the session monitor of the Inhibit portal that it
-    ends, and GTK 4 applications and Chromium quit then. With the second patch Firefox creates such a monitor at
-    startup, and again whenever xdg-desktop-portal restarts, as a monitor ends with the portal's process. It answers
-    at once when the session asks whether it may end, and quits when it ends. A monitor does not keep the session
-    from ending: patches/xdg-desktop-portal-gtk/ makes the session wait until Firefox has quit, so that GNOME Shell
-    and the processes of Firefox are still there while it quits. Firefox uses the portal only where no session
-    manager offers XSMP through SESSION_MANAGER, as on GNOME, and XSMP otherwise, as on KDE Plasma, never both;
+    Before the session ends, GNOME tells applications through the session monitor of the Inhibit portal that it ends,
+    and GTK 4 applications and Chromium quit then. With the last patch Firefox creates such a monitor at startup, and
+    again whenever xdg-desktop-portal restarts, as a monitor ends with the portal's process. It answers at once when
+    the session asks whether it may end, and quits when it ends. A monitor does not keep the session from ending:
+    patches/xdg-desktop-portal-gtk/ makes the session wait until Firefox has quit, so that GNOME Shell and the
+    processes of Firefox are still there while it quits. Firefox uses the portal only where no session manager offers
+    XSMP through SESSION_MANAGER, as on GNOME, and XSMP otherwise, as on KDE Plasma, never both;
     MOZ_DBUS_SESSION_MANAGEMENT=1 selects the portal also there.
 
-    Firefox 122 added a handler which quits Firefox cleanly on SIGTERM (Mozilla bug 1837907). Firefox tries to
-    install it before XPCOM creates the app shell, which the handler requires, so the handler is never installed
-    and SIGTERM kills Firefox at once (Mozilla bug 2086801). The first patch installs the handler once the app shell
-    exists. Firefox then also quits cleanly when something else stops it: systemd at the end of a session which did
-    not tell Firefox through the portal, or in which xdg-desktop-portal-gtk stopped waiting after 8 seconds, and
-    systemctl or kill. The second patch quits Firefox with nsIAppStartup::Quit(eForceQuit), as Firefox does when an
-    X11 session manager ends the session through XSMP. They are proposed as D340638 and D340640 on
+    Firefox 122 added a handler which quits Firefox cleanly on SIGTERM (Mozilla bug 1837907). Firefox tries to install
+    it before XPCOM creates the app shell, which the handler requires, so the handler is never installed and SIGTERM
+    kills Firefox at once (Mozilla bug 2086801). The first patch installs the handler once the app shell exists.
+    Firefox then also quits cleanly when something else stops it: systemd at the end of a session which did not tell
+    Firefox through the portal, or in which xdg-desktop-portal-gtk stopped waiting after 8 seconds, and systemctl or
+    kill. The last patch quits Firefox with nsIAppStartup::Quit(eForceQuit), as Firefox does when an X11 session
+    manager ends the session through XSMP. The first and the last patch are proposed as D340638 and D340640 on
     phabricator.services.mozilla.com, for Mozilla bugs 2086801 and 2090663.
 
+    With the first patch, SIGTERM from systemd, which reaches all processes of Firefox at once, ends the content
+    processes while Firefox quits cleanly and closes its windows, and Firefox handles each of them as a crashed tab.
+    Sending a crashed tab whose window has closed to the tab crash page failed a release assertion in
+    nsFrameLoaderOwner::ChangeRemoteness() in 11 of 30 runs of a local test. The middle patch skips such tabs. It is
+    proposed as D344125 for Mozilla bug 2094896, and has no test, as the crash depends on when the content processes
+    end.
+
     The session test in tests/session/ checks that logging out leaves sessionstore.jsonlz4 in the profile, which
-    Firefox writes only when it quits cleanly, and that Firefox has quit before GNOME Shell shuts down. Drop the
-    first patch once bug 2086801 is fixed, and the second once Firefox creates a session monitor itself. After a
-    version bump, check that XREMain::XRE_mainRun in toolkit/xre/nsAppRunner.cpp still runs after XPCOM is
-    initialized.
+    Firefox writes only when it quits cleanly, and that Firefox has quit before GNOME Shell shuts down. Drop the first
+    patch once bug 2086801 is fixed, the middle one once bug 2094896 is fixed, and the last one once Firefox creates a
+    session monitor itself. After a version bump, check that XREMain::XRE_mainRun in toolkit/xre/nsAppRunner.cpp still
+    runs after XPCOM is initialized.
 
 local-handler-through-gio.patch
     Launches an executable chosen as a handler through GIO, as Firefox launches applications from desktop entries,

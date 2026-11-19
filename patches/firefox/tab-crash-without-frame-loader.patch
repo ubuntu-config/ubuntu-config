@@ -1,0 +1,26 @@
+Description: Skip crashed browsers without a frame loader when sending them to the tab crash page.
+ TabCrashHandler queues the selected browser of a crashed content process while it still has a frame loader, and
+ sends it to the tab crash page once the process ended. When its window closes in between, as when Firefox quits
+ while its content processes end, the browser has no frame loader left, and changing its remoteness fails a release
+ assertion in nsFrameLoaderOwner::ChangeRemoteness(). With sigterm-handler-after-app-shell.patch this happens when
+ SIGTERM reaches all processes of Firefox at once, as when systemd stops it: the content processes end, while Firefox
+ quits cleanly and closes its windows.
+Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2094896
+Author: Mitar
+Forwarded: https://phabricator.services.mozilla.com/D344125
+Last-Update: 2026-11-19
+---
+diff --git a/browser/modules/ContentCrashHandlers.sys.mjs b/browser/modules/ContentCrashHandlers.sys.mjs
+--- a/browser/modules/ContentCrashHandlers.sys.mjs
++++ b/browser/modules/ContentCrashHandlers.sys.mjs
+@@ -217,7 +217,9 @@ export var TabCrashHandler = {
+     let sentBrowser = false;
+     for (let weakBrowser of browserQueue) {
+       let browser = weakBrowser.get();
+-      if (browser) {
++      // A browser whose window closed after the crash, as when Firefox quits,
++      // has no frame loader to change the remoteness of.
++      if (browser?.frameLoader) {
+         if (
+           this.restartRequiredBrowsers.has(browser) ||
+           this.testBuildIDMismatch
