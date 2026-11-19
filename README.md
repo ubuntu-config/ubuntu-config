@@ -503,19 +503,20 @@ for this laptop do not, the samples include both. A measurement then fails witho
 else holds the fan at a fixed duty cycle, which may be on purpose or forgotten, and after the measurement the EC has to
 confirm that it controls the fan again, or the service fails, so that a fan left at a fixed duty cycle is reported.
 
-For the battery, each measurement records the values the battery's fuel gauge reports: the full capacity it
-estimates, the design capacity and the charge cycles. The gauge recalculates the full capacity only after the battery
-has discharged far enough between two rests, which a battery kept between 40% and 60% rarely does, so the estimate
-can stay the same for weeks and then jump. The measurement also determines the battery's internal resistance, which
-grows steadily as the battery ages. For the first 90 seconds of the idle phase and of the steady load, the battery
-powers the laptop although AC power is connected (`charge_behaviour` set to `force-discharge`), and the resistance is
-the drop of the battery's voltage from idle to load divided by the rise of its current. The battery reports its
-current averaged over tens of seconds, which is why each hold lasts 90 seconds and only its last 15 seconds count.
-Both holds together draw about 1.4 Wh, about 2% of the battery. The resistance also rises when the battery is cold,
-and the battery reports no temperature, so it is best compared between measurements made in similar rooms. The
-battery returns to automatic charging after each hold, and if a crash interrupts a measurement,
-`health-benchmark-restore.service` returns it at the next boot, because the EC can keep the battery discharging
-across a reboot.
+For the battery, each measurement records the values the battery's fuel gauge reports: the full capacity it estimates,
+the design capacity and the charge cycles. The gauge recalculates the full capacity only after the battery has
+discharged far enough between two rests, which a battery kept between 40% and 60% rarely does, so the estimate can stay
+the same for weeks and then jump. The measurement also determines the battery's internal resistance, which grows
+steadily as the battery ages. For the first 90 seconds of the idle phase and of the steady load, the battery powers the
+laptop although AC power is connected (`charge_behaviour` set to `force-discharge`), and the resistance is the drop of
+the battery's voltage from idle to load divided by the rise of its current. The battery reports its current averaged
+over tens of seconds, which is why each hold lasts 90 seconds and only its last 15 seconds count. Both holds together
+draw about 1.4 Wh, about 2% of the battery. The resistance also rises when the battery is cold, so each measurement
+records the battery's temperature during both holds, where the EC reports it, and the report shows it next to the
+resistance. Framework's EC releases for this laptop do not report it, and with them the resistance is best compared
+between measurements made in similar rooms. The battery returns to automatic charging after each hold, and if a crash
+interrupts a measurement, `health-benchmark-restore.service` returns it at the next boot, because the EC can keep the
+battery discharging across a reboot.
 
 7-Zip is a static build of a pinned release, verified by its checksum, so that its scores stay comparable across
 years and only the hardware, firmware, microcode and kernel can move them. Each measurement records those as well, in

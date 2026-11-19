@@ -15,7 +15,8 @@ appends a row to /var/lib/health-benchmark/results.csv with its findings in each
 For the battery, the row records the values its fuel gauge reports (the full capacity it estimates, the design capacity
 and the charge cycles) and the battery's internal resistance, which grows as the battery ages. The resistance comes from
 the battery's voltage and current at the start of the idle phase and at the start of the steady load, for each of which
-the measurement makes the battery power the laptop for 90 seconds although AC power is connected.
+the measurement makes the battery power the laptop for 90 seconds although AC power is connected. The resistance also
+rises as the battery cools, so the row records the battery's temperature during both, where the EC reports it.
 
 The row also records the firmware, microcode, kernel and its mitigations, so that a change in the scores can be traced
 to the system change which came with it, and the external displays, the wired network and the USB-C power source, which
@@ -204,6 +205,9 @@ EC_SENSORS = {
     'ddr_f75303@4d': 'ec_ddr',
     'cpu@4c': 'ec_apu',
 }
+# The label of the battery's temperature, which the EC reports only when built to, unlike Framework's EC releases for
+# this laptop. Without it, the battery's temperature is not recorded.
+EC_BATTERY_SENSOR = 'battery_temp@b'
 
 # The runtime power state the kernel keeps for the NPU: "active" while anything holds it powered, be it a workload or
 # only a tool which queries it, and "suspended" a few seconds after nothing does.
@@ -214,7 +218,8 @@ TEMPERATURES = ('tctl', 'core_max', 'soc', 'skin', 'ec_local', 'ec_cpu', 'ec_ddr
 GRAPHICS = ('gfx_power_w', 'gfx_activity_pct')
 TRACE_FIELDS = (
     ('t', 'phase', 'busy_pct', 'power_w', 'fan_rpm', 'fan_target', 'fan_duty_pct', 'fan_mode') + TEMPERATURES +
-    GRAPHICS + ('vcn_activity_pct', 'npu_active', 'npu_clock_mhz', 'battery_status', 'battery_v', 'battery_a'))
+    GRAPHICS + ('vcn_activity_pct', 'npu_active', 'npu_clock_mhz', 'battery_status', 'battery_v', 'battery_a',
+                'battery_c'))
 
 FIELDS = [
     'timestamp', 'trigger', 'note', 'duration_s', 'foreign_cpu_pct', 'platform_profile',
@@ -232,6 +237,7 @@ FIELDS = [
     'battery_manufacturer', 'battery_model', 'battery_serial', 'battery_level_pct', 'battery_full_mah',
     'battery_design_mah', 'battery_design_voltage_v', 'battery_cycles',
     'battery_idle_v', 'battery_idle_a', 'battery_load_v', 'battery_load_a', 'battery_resistance_mohm',
+    'battery_idle_c', 'battery_load_c',
 ]
 
 
@@ -374,10 +380,13 @@ class Sensors:
         self.fan_duty_file = f'{ec}/pwm1' if os.path.exists(f'{ec}/pwm1') else None
         self.fan_mode_file = f'{ec}/pwm1_enable' if os.path.exists(f'{ec}/pwm1_enable') else None
         self.ec_files = {}
+        self.battery_temperature_file = None
         for label in glob.glob(f'{ec}/temp*_label'):
-            name = EC_SENSORS.get(read_text(label))
-            if name:
-                self.ec_files[name] = label.replace('_label', '_input')
+            text = read_text(label)
+            if text in EC_SENSORS:
+                self.ec_files[EC_SENSORS[text]] = label.replace('_label', '_input')
+            elif text == EC_BATTERY_SENSOR:
+                self.battery_temperature_file = label.replace('_label', '_input')
         missing = set(EC_SENSORS.values()) - set(self.ec_files)
         if missing:
             raise Failure(f'the EC does not report the sensors {", ".join(sorted(missing))}')
@@ -394,7 +403,8 @@ class Sensors:
         power and the graphics power in watts, the graphics and video activity in percent, the fan speed and target in
         RPM, the fan's duty cycle in percent and its mode (None when the EC does not report them), the share of CPU
         time busy since the previous sample, whether the NPU is powered and its clock in MHz, the battery's status,
-        voltage in volts and current in amperes, and the throttle residency counters."""
+        voltage in volts, current in amperes and temperature in degrees Celsius (None when the EC does not report it),
+        and the throttle residency counters."""
         with open(self.metrics_file, 'rb') as file:
             metrics = decode_metrics(file.read())
         if metrics is None:
@@ -429,6 +439,8 @@ class Sensors:
             # The current is given without a sign, with the status telling its direction.
             current = read_number(f'{self.battery}/current_now', 1e6)
             sample['battery_a'] = abs(current) if current is not None else None
+            sample['battery_c'] = (read_number(self.battery_temperature_file, 1000)
+                                   if self.battery_temperature_file else None)
         return sample
 
 
@@ -786,7 +798,7 @@ def battery_description(battery):
 
 def battery_resistance(idle_hold, load_hold):
     """Returns the battery's internal resistance in milliohms, from the samples of a hold at idle and of one under load,
-    together with the voltages and currents it comes from, as columns.
+    together with the voltages and currents it comes from and the battery's temperatures during them, as columns.
 
     Leaves the resistance out, printing why, when the battery did not discharge throughout the windows averaged or the
     two currents differ by less than BATTERY_MIN_STEP_A.
@@ -798,18 +810,20 @@ def battery_resistance(idle_hold, load_hold):
         'battery_load_v': mean(load, 'battery_v'),
         'battery_load_a': mean(load, 'battery_a'),
     }
+    # The resistance rises as the battery cools, so its temperature tells which measurements compare. They are None
+    # with an EC which does not report it.
+    temperatures = {'battery_idle_c': mean(idle, 'battery_c'), 'battery_load_c': mean(load, 'battery_c')}
     if any(sample.get('battery_status') != 'Discharging' for sample in idle + load):
         print('no battery resistance: the battery did not discharge throughout both holds', flush=True)
-        return columns
-    if None in columns.values() or columns['battery_load_a'] - columns['battery_idle_a'] < BATTERY_MIN_STEP_A:
+    elif None in columns.values() or columns['battery_load_a'] - columns['battery_idle_a'] < BATTERY_MIN_STEP_A:
         print('no battery resistance: the currents at idle and under load are too close', flush=True)
-        return columns
-    # The voltage falls under load by the current times the internal resistance, so the ratio of the two differences
-    # is the resistance, with the open-circuit voltage canceling out.
-    columns['battery_resistance_mohm'] = 1000 * (
-        (columns['battery_idle_v'] - columns['battery_load_v']) /
-        (columns['battery_load_a'] - columns['battery_idle_a']))
-    return columns
+    else:
+        # The voltage falls under load by the current times the internal resistance, so the ratio of the two
+        # differences is the resistance, with the open-circuit voltage canceling out.
+        columns['battery_resistance_mohm'] = 1000 * (
+            (columns['battery_idle_v'] - columns['battery_load_v']) /
+            (columns['battery_load_a'] - columns['battery_idle_a']))
+    return {**columns, **temperatures}
 
 
 def sevenzip(measurement, prefix, threads, passes):
@@ -1294,6 +1308,13 @@ def thermal_resistance(row):
     return (steady_tctl - idle_tctl) / (steady_power - idle_power)
 
 
+def battery_temperature(row):
+    """Returns the battery's mean temperature during the two holds of a measurement, in degrees Celsius, or None when
+    the row lacks it."""
+    values = [value for value in (number(row, 'battery_idle_c'), number(row, 'battery_load_c')) if value is not None]
+    return statistics.fmean(values) if values else None
+
+
 def battery_capacity_wh(row):
     """Returns the battery's full capacity as its gauge estimates it, in watt-hours, or None when the row lacks it."""
     full, voltage = number(row, 'battery_full_mah'), number(row, 'battery_design_voltage_v')
@@ -1442,6 +1463,13 @@ def report():
 
     if battery_rows:
         section('Battery', BATTERY, best_battery_rows)
+        # The internal resistance compares only between similar temperatures of the battery.
+        _, best_row = best(best_battery_rows, lambda row: number(row, 'battery_resistance_mohm'), False)
+        latest_c, best_c = battery_temperature(latest), battery_temperature(best_row) if best_row else None
+        if latest_c is not None or best_c is not None:
+            print(f'  {"At a battery temperature":<26}' +
+                  (f'{latest_c:.1f} {"C":>5}' if latest_c is not None else '-').rjust(16) +
+                  (f'{best_c:.1f} {"C":>5}' if best_c is not None else '-').rjust(16))
         capacity = battery_capacity_wh(latest)
         design_mah, voltage = number(latest, 'battery_design_mah'), number(latest, 'battery_design_voltage_v')
         if capacity is not None and design_mah and voltage:
