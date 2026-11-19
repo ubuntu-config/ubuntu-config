@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Download the newest .deb of packages whose vendors publish one but no APT repository, into the local repository.
+"""Download the newest .deb of packages whose vendors publish no APT repository, into the local repository.
 
 For each package in PACKAGES below, find the newest version its vendor offers, and when it is not yet in the local
 repository /usr/local/lib/debs, download it, verify it, publish it there under its Debian file name, remove the older
@@ -23,6 +23,9 @@ The kind of a download's source decides how it is verified:
   GitHubRelease    a release asset on GitHub, checked against the SHA256 GitHub publishes for it. That catches a
                    download corrupted or altered on its way, but not a release published by whoever controls the
                    project's account.
+  GitHubBinary     an executable as a release asset on GitHub, verified as a GitHubRelease, and packed into a .deb here
+                   for a vendor which publishes no .deb. dpkg-shlibdeps derives the package's dependencies from the
+                   executable without running it, so that a release linking another library depends on its package.
 
 A downloaded package has to carry the package name it is fetched as, so that a vendor cannot replace another package
 through the local repository, which is otherwise not locked down.
@@ -59,8 +62,9 @@ rebuild-patched-packages, the script regenerating the repository's index.
 Adding a package
 ----------------
 Add it to PACKAGES below, keyed by its Debian package name: a GitHubRelease for a project which publishes its .deb as
-a release asset, or a SignedRedirect for a vendor which redirects a fixed URL to its newest .deb and signs it, with
-its key in vendor-debs/. Then install the result with install-fetch-vendor-debs.sh.
+a release asset, a GitHubBinary for one which publishes only an executable, or a SignedRedirect for a vendor which
+redirects a fixed URL to its newest .deb and signs it, with its key in vendor-debs/. Then install the result with
+install-fetch-vendor-debs.sh.
 """
 
 import argparse
@@ -103,8 +107,12 @@ SIGNATURE_MEMBER = '_gpgbuilder'
 # The largest _gpgbuilder accepted. It holds three lines of checksums and a signature, so anything near this is not one.
 SIGNATURE_MAX_BYTES = 64 * 1024
 REQUIRED_COMMANDS = ['dpkg', 'dpkg-deb', 'gpgv']
+# The Debian revision of a package GitHubBinary packs, with a suffix Debian and Ubuntu do not use, so that its version
+# never equals one they publish of the same package.
+BINARY_REVISION = '-0github1'
 
-Offer = collections.namedtuple('Offer', ['url', 'sha256'])
+# tag is the name of the release's tag, for a download from a GitHub release.
+Offer = collections.namedtuple('Offer', ['url', 'sha256', 'tag'], defaults=[None])
 
 
 class FetchError(Exception):
@@ -181,12 +189,101 @@ class GitHubRelease:
         digest = assets[0].get('digest') or ''
         if not digest.startswith('sha256:'):
             raise FetchError(f'GitHub publishes no SHA256 for {assets[0]["browser_download_url"]}')
-        return Offer(assets[0]['browser_download_url'], digest.removeprefix('sha256:').lower())
+        return Offer(assets[0]['browser_download_url'], digest.removeprefix('sha256:').lower(), release['tag_name'])
 
     def verify(self, path, offer, sha256):
         """Raises FetchError unless the downloaded file, whose SHA256 is sha256, is the asset GitHub describes."""
         if sha256 != offer.sha256:
             raise FetchError(f'{offer.url} has SHA256 {sha256}, but GitHub publishes {offer.sha256} for it')
+
+    def deb(self, package, path, offer, directory):
+        """Returns the path of the .deb which the verified download at path is, path itself."""
+        return path
+
+
+class GitHubBinary(GitHubRelease):
+    """An executable published as an asset of the releases of a GitHub repository, packed into a .deb here.
+
+    The executable is installed as path by a package built with dpkg-deb, whose version is the release's tag without
+    its v, followed by BINARY_REVISION. The package depends on the packages providing the shared libraries the
+    executable links, as dpkg-shlibdeps finds them by reading the executable, which is never run. description is the
+    one-line description of the package. Pre-releases are not fetched.
+    """
+
+    def __init__(self, repository, asset, path, description):
+        super().__init__(repository, asset)
+        self.path = path
+        self.description = description
+
+    def locate(self):
+        """Returns the Offer of the newest release, as GitHubRelease does.
+
+        Raises FetchError also when the release's tag is not a version, since it becomes the package's version.
+        """
+        offer = super().locate()
+        if not re.fullmatch(r'v?[0-9]+(\.[0-9]+){1,3}', offer.tag):
+            raise FetchError(f'the tag {offer.tag!r} of {self.repository} is not a version')
+        return offer
+
+    def deb(self, package, path, offer, directory):
+        """Packs the verified executable at path into a .deb of package in directory and returns the .deb's path.
+
+        Raises FetchError when the executable is not one for amd64 or the package cannot be built.
+        """
+        with open(path, 'rb') as file:
+            header = file.read(20)
+        # An ELF file of 64 bits (class 2), little-endian (data 1), for x86-64 (machine 0x3e at offset 18).
+        if header[:6] != b'\x7fELF\x02\x01' or header[18:20] != b'\x3e\x00':
+            raise FetchError(f'{offer.url} is not an x86-64 executable')
+
+        root = os.path.join(directory, 'root')
+        executable = os.path.join(root, self.path.lstrip('/'))
+        control_dir = os.path.join(root, 'DEBIAN')
+        os.makedirs(os.path.dirname(executable))
+        os.makedirs(control_dir)
+        shutil.copyfile(path, executable)
+        os.chmod(executable, 0o755)
+        # dpkg-deb refuses a control directory which is not 0755 to 0775, and the other directories are installed with
+        # the modes they have here, which the umask of whoever runs this would otherwise decide.
+        for parent, _, _ in os.walk(root):
+            os.chmod(parent, 0o755)
+
+        fields = {
+            'Package': package,
+            'Version': f'{offer.tag.removeprefix("v")}{BINARY_REVISION}',
+            'Architecture': 'amd64',
+            'Maintainer': 'fetch-vendor-debs <root@localhost>',
+            'Installed-Size': str(-(-os.path.getsize(executable) // 1024)),
+            'Depends': shared_library_depends(executable, directory),
+            'Section': 'utils',
+            'Priority': 'optional',
+            'Homepage': f'https://github.com/{self.repository}',
+            'Description': f'{self.description}\n Release {offer.tag} of https://github.com/{self.repository}, packed '
+                           f'into a .deb by fetch-vendor-debs.',
+        }
+        with open(os.path.join(control_dir, 'control'), 'w') as file:
+            file.write(''.join(f'{name}: {value}\n' for name, value in fields.items()))
+        deb = os.path.join(directory, f'{package}.deb')
+        run(['dpkg-deb', '--root-owner-group', '--build', root, deb])
+        return deb
+
+
+def shared_library_depends(executable, directory):
+    """Returns the Depends field for the shared libraries executable links, as dpkg-shlibdeps finds them.
+
+    dpkg-shlibdeps reads the executable's dynamic section without running it, and requires a debian/control, which is
+    written to directory. Raises FetchError when dpkg-shlibdeps is missing or finds no dependencies.
+    """
+    if shutil.which('dpkg-shlibdeps') is None:
+        raise FetchError('dpkg-shlibdeps is missing, it is in the package dpkg-dev')
+    os.makedirs(os.path.join(directory, 'debian'))
+    with open(os.path.join(directory, 'debian', 'control'), 'w') as file:
+        file.write('Source: fetch-vendor-debs\n\nPackage: fetch-vendor-debs\nArchitecture: any\n')
+    output = run(['dpkg-shlibdeps', '-O', f'-e{executable}'], cwd=directory)
+    for line in output.splitlines():
+        if line.startswith('shlibs:Depends='):
+            return line.removeprefix('shlibs:Depends=')
+    raise FetchError(f'dpkg-shlibdeps found no shared libraries {os.path.basename(executable)} depends on')
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -250,6 +347,10 @@ class SignedRedirect:
         differing = sorted(name for name in listed.keys() | members.keys() if listed.get(name) != members.get(name))
         if differing:
             raise FetchError(f'{offer.url} does not match its signature in {", ".join(differing)}')
+
+    def deb(self, package, path, offer, directory):
+        """Returns the path of the .deb which the verified download at path is, path itself."""
+        return path
 
 
 def read_ar(path):
@@ -347,6 +448,10 @@ PACKAGES = {
     # The key in zoom.asc is 84C3 65D6 CC9A 4886 CA92 6BCC 4F21 9739 9706 AC24, created 2026-01-15. Zoom's download
     # center links its current key as https://zoom.us/linux/download/pubkey?version=<version>, 6-7-5 for this one.
     'zoom': SignedRedirect('https://zoom.us/client/latest/zoom_amd64.deb', 'zoom.asc'),
+    # Framework publishes framework_tool only as an executable. It replaces Ubuntu's framework-tool 0.6.2, which flashes
+    # EC firmware with an outdated layout of NPCX flash and leaves out the end of the RW image, fixed in 0.6.6.
+    'framework-tool': GitHubBinary('FrameworkComputer/framework-system', r'framework_tool', '/usr/bin/framework_tool',
+                                   'Tool to control Framework Computer systems'),
 }
 
 
@@ -437,9 +542,10 @@ def publish(package, source, offer, state):
     published, or None when nothing was. Raises FetchError when the download fails, does not verify or is not package.
     """
     with tempfile.TemporaryDirectory(prefix='fetch-vendor-debs-') as directory:
-        path = os.path.join(directory, 'download.deb')
+        path = os.path.join(directory, 'download')
         sha256 = download(offer.url, path)
         source.verify(path, offer, sha256)
+        path = source.deb(package, path, offer, directory)
         fields = deb_fields(path)
         if fields['Package'] != package:
             raise FetchError(f'{offer.url} is the package {fields["Package"]}, not {package}')
@@ -568,7 +674,8 @@ def fetch(packages):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Download the newest .deb of packages which have no APT repository into the local repository.')
+        description='Download the newest .deb of packages whose vendors publish no APT repository into the local '
+                    'repository.')
     parser.add_argument('--fetch', action='store_true', help='download and publish whatever is newer (root)')
     parser.add_argument('packages', nargs='*', metavar='package',
                         help=f'limit the run to these packages, out of {", ".join(sorted(PACKAGES))}')

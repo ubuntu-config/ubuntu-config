@@ -43,7 +43,7 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
   - [Third-party APT repositories pinned to their packages](#third-party-apt-repositories-pinned-to-their-packages): a
     vendor repository can install and upgrade only the packages in use from it.
   - [Packages without an APT repository kept up to date](#packages-without-an-apt-repository-kept-up-to-date):
-    vendors' `.deb` files downloaded daily, verified, and upgraded like any other package.
+    vendors' `.deb` files and programs downloaded daily, verified, and upgraded like any other package.
   - [Daily mail of failures and errors](#daily-mail-of-failures-and-errors): failed units, errors and crash reports
     from the journals of the system and of every user.
   - [Processor throttling](#processor-throttling): a top bar indicator naming the limit which holds the processor
@@ -144,9 +144,9 @@ logout dialog, run in a GNOME session in a container (`tests/session/`): the rea
 headless, with the patched packages, the settings of `configure-gnome-desktop.sh` and this repository's session units,
 driven through a test extension. GitLab CI runs these tests too.
 
-Packages whose vendors publish a `.deb` but no APT repository are published to the same local repository:
-`fetch-vendor-debs.py` downloads the newest version of each daily and verifies it, and the next `apt upgrade` upgrades
-it where it is installed (see
+Packages whose vendors publish a `.deb` or a program but no APT repository are published to the same local
+repository: `fetch-vendor-debs.py` downloads the newest version of each daily and verifies it, and the next
+`apt upgrade` upgrades it where it is installed (see
 [Packages without an APT repository kept up to date](#packages-without-an-apt-repository-kept-up-to-date)).
 
 GNOME Shell extensions are installed from extensions.gnome.org and configured by `configure-gnome-desktop.sh`, with
@@ -339,16 +339,24 @@ in its file in `sources.list.d/` is replaced and the script is applied again.
 
 ### Packages without an APT repository kept up to date
 
-For packages whose vendors publish a `.deb` but no APT repository, a daily cron job downloads the newest version of
-each into the local APT repository of the patched packages (`fetch-vendor-debs.py`, `install-fetch-vendor-debs.sh`,
-`cron.daily/`), from which the next `apt upgrade` upgrades the installed ones, while unattended-upgrades is kept from
-them. One which is not installed is only downloaded, ready for `apt install`. The script configures the packages to
-fetch, each from one of two kinds of sources: a fixed URL which redirects to the newest `.deb`, signed by the vendor
-and verified against the vendor's key kept in `vendor-debs/`, or a GitHub release asset, verified against the SHA256
-GitHub publishes for it. A version lower than the one already in the repository is never published, since the
-repository's pin would make APT downgrade to it, and a download has to carry the package name it is fetched as, so
-that a vendor cannot replace another package through it. When a vendor changes its signing key, the daily fetch
-fails, naming the new key, until the key in `vendor-debs/` is replaced and installed again.
+For packages whose vendors publish a `.deb` or a program but no APT repository, a daily cron job downloads the newest
+version of each into the local APT repository of the patched packages (`fetch-vendor-debs.py`,
+`install-fetch-vendor-debs.sh`, `cron.daily/`), from which the next `apt upgrade` upgrades the installed ones, while
+unattended-upgrades is kept from them. One which is not installed is only downloaded, ready for `apt install`. The
+script configures the packages to fetch, each from one of three kinds of sources: a fixed URL which redirects to the
+newest `.deb`, signed by the vendor and verified against the vendor's key kept in `vendor-debs/`, a GitHub release asset
+which is a `.deb`, verified against the SHA256 GitHub publishes for it, or a GitHub release asset which is an
+executable, verified the same way and packed into a `.deb` with the dependencies `dpkg-shlibdeps` finds for it. A
+version lower than the one already in the repository is never published, since the repository's pin would make APT
+downgrade to it, and a download has to carry the package name it is fetched as, so that a vendor cannot replace another
+package through it. When a vendor changes its signing key, the daily fetch fails, naming the new key, until the key in
+`vendor-debs/` is replaced and installed again.
+
+Framework's `framework_tool` is fetched this way, as the executable of each of Framework's
+[releases](https://github.com/FrameworkComputer/framework-system/releases), packed into the package `framework-tool`,
+which replaces Ubuntu's. Ubuntu 26.04 has its version 0.6.2, which flashes the EC firmware of this laptop with an
+outdated layout of its flash and leaves out the end of the RW image, which Framework fixed in 0.6.6. The packed package
+has no manual page and no shell completions, which Framework's releases do not include.
 
 ### Daily mail of failures and errors
 
