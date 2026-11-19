@@ -7,6 +7,9 @@ import {findHwmonDirectories, listChildren, readText} from './hwmon.js';
 // is the only one of them which follows the APU rather than the board around it.
 const HWMON_NAME = 'cros_ec';
 const APU_SENSOR_LABEL = 'cpu@4c';
+// The label of the battery's temperature, which the EC reports only when built to, unlike Framework's EC releases for
+// this laptop. It is neither on the board around the APU nor used by the EC to run the fan.
+const BATTERY_SENSOR_LABEL = 'battery_temp@b';
 
 /**
  * The top of the embedded controller's fan table, in RPM.
@@ -33,15 +36,41 @@ export const FAN_MAX_RPM = 6200;
  *   sensor
  */
 export function findApuSensor() {
+    return findSensor(APU_SENSOR_LABEL);
+}
+
+/**
+ * Finds the file through which the embedded controller reports the battery's temperature.
+ *
+ * The file holds the temperature in millidegrees Celsius. Reading it fails with Gio.IOErrorEnum.INVALID_DATA while the
+ * EC cannot read the battery.
+ *
+ * @returns {{file: Gio.File, critical: number|null}|null} the file with the critical limit in degrees Celsius, or
+ *   null for the limit when the EC reports none, or null when no embedded controller on this system reports the
+ *   battery's temperature
+ */
+export function findBatterySensor() {
+    return findSensor(BATTERY_SENSOR_LABEL);
+}
+
+/**
+ * Finds the file of the embedded controller's temperature sensor with a label.
+ *
+ * @param {string} label - the label the EC gives the sensor
+ * @returns {{file: Gio.File, critical: number|null}|null} the file with the critical limit in degrees Celsius, or
+ *   null for the limit when the EC reports none, or null when no embedded controller on this system has the sensor
+ */
+function findSensor(label) {
     // The index of a sensor is the EC's own numbering, so the sensor is found by its label.
     for (const directory of findHwmonDirectories(HWMON_NAME)) {
         for (const name of listChildren(directory)) {
             const match = /^(temp\d+)_label$/.exec(name);
-            if (match && readText(`${directory}/${name}`) === APU_SENSOR_LABEL) {
+            if (match && readText(`${directory}/${name}`) === label) {
+                // The EC reports a threshold it does not have as 0 K, which the driver gives as -273.15 C.
                 const critical = Number.parseInt(readText(`${directory}/${match[1]}_crit`), 10);
                 return {
                     file: Gio.File.new_for_path(`${directory}/${match[1]}_input`),
-                    critical: Number.isNaN(critical) ? null : critical / 1000,
+                    critical: Number.isNaN(critical) || critical <= -273150 ? null : critical / 1000,
                 };
             }
         }
@@ -53,11 +82,11 @@ export function findApuSensor() {
  * Finds the files through which the embedded controller reports the temperatures on the board, which it runs the fan
  * from.
  *
- * These are all of the EC's temperature sensors other than the one it reads from the APU. Each file holds the
- * temperature in millidegrees Celsius, in whole degrees. Reading it fails with Gio.IOErrorEnum.INVALID_DATA while the
- * EC reports the sensor as failed, but Framework's EC does not report a board sensor it cannot read any more as
- * failed. It keeps reporting the last temperature it read from it, so that shows only as a reading which stops
- * changing.
+ * These are all of the EC's temperature sensors other than the one it reads from the APU and the battery's. Each file
+ * holds the temperature in millidegrees Celsius, in whole degrees. Reading it fails with Gio.IOErrorEnum.INVALID_DATA
+ * while the EC reports the sensor as failed, but Framework's EC releases do not report a board sensor they cannot read
+ * any more as failed. They keep reporting the last temperature they read from it, so that shows only as a reading
+ * which stops changing.
  *
  * @returns {Gio.File[]} the files, or an empty array when no embedded controller on this system reports such a sensor
  */
@@ -66,7 +95,8 @@ export function findBoardSensorFiles() {
     for (const directory of findHwmonDirectories(HWMON_NAME)) {
         for (const name of listChildren(directory)) {
             const match = /^(temp\d+)_label$/.exec(name);
-            if (match && readText(`${directory}/${name}`) !== APU_SENSOR_LABEL)
+            const label = match ? readText(`${directory}/${name}`) : null;
+            if (match && label !== APU_SENSOR_LABEL && label !== BATTERY_SENSOR_LABEL)
                 files.push(Gio.File.new_for_path(`${directory}/${match[1]}_input`));
         }
     }

@@ -10,7 +10,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {decodeChargingPower, findBatteryFile} from './battery.js';
-import {FAN_MAX_RPM, findApuSensor, findBoardSensorFiles, findFanFiles} from './ec.js';
+import {FAN_MAX_RPM, findApuSensor, findBatterySensor, findBoardSensorFiles, findFanFiles} from './ec.js';
 import {findMemorySensors, findSsdSensors, findWifiSensors} from './hwmon.js';
 import {
     CORE_GROUPS, REASONS, SustainedPowerCheck, decodeMetrics, dominantReason, dramBandwidths, findClockLimits,
@@ -121,12 +121,15 @@ class ThrottleIndicator extends PanelMenu.Button {
      * @param {{file: Gio.File, critical: number|null}|null} devices.apuSensor - the APU's sensor, as findApuSensor
      *   returned it
      * @param {Gio.File|null} devices.batteryFile - the battery's state, as findBatteryFile returned it
+     * @param {{file: Gio.File, critical: number|null}|null} devices.batterySensor - the battery's temperature, as
+     *   findBatterySensor returned it
      * @param {{name: string, file: Gio.File, critical: number|null}[]} devices.temperatureSensors - the other hwmon
      *   temperature sensors to show in the menu, each with the name to show it under and its critical limit in degrees
      *   Celsius, or null when it has none
      */
     _init(iconsPath, {
-        metricsFile, clockLimits, groupCpus, fanFiles, boardSensorFiles, apuSensor, batteryFile, temperatureSensors,
+        metricsFile, clockLimits, groupCpus, fanFiles, boardSensorFiles, apuSensor, batteryFile, batterySensor,
+        temperatureSensors,
     }) {
         super._init(0, 'CPU Throttle Indicator');
 
@@ -136,6 +139,7 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._groupCpus = groupCpus;
         this._batteryFile = batteryFile;
         this._readingBattery = false;
+        this._hasBatteryTemperature = batterySensor !== null;
         this._cancellable = new Gio.Cancellable();
         this._previous = null;
         this._reading = false;
@@ -242,9 +246,10 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._fanTargetRows = this._fanRows.filter(fanRow => fanRow.kind === 'target');
 
         // The laptop's power is the APU's and the other power together, and the APU's is its four parts together,
-        // which are indented under it. The power which charges the battery is not part of the laptop's, and its row
-        // is shown only while the battery charges. The memory modules, the SSD and the wireless card draw a part of
-        // the other power, and are indented under it.
+        // which are indented under it. The power which charges the battery is not part of the laptop's, and the
+        // battery's row shows it only while the battery charges. The row is shown always when the EC reports the
+        // battery's temperature, and otherwise only while the battery charges. The memory modules, the SSD and the
+        // wireless card draw a part of the other power, and are indented under it.
         this._addColumnsHeading(grid, row++, null, 'Temperature', 'Power');
         const addPart = (name, indented = false) => {
             const part = this._addRow(grid, row++, name, indented);
@@ -257,11 +262,12 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._npuRow = addPart('NPU', true);
         this._socRow = addPart('SoC', true);
         this._batteryRow = addPart('Battery');
-        this._setRowVisible(this._batteryRow, false);
+        this._setRowVisible(this._batteryRow, this._hasBatteryTemperature);
         this._otherRow = addPart('Other');
         const addSensor = (sensor, part) => ({file: sensor.file, critical: sensor.critical, row: part, reading: false});
         this._temperatureSensors = [
             ...(apuSensor ? [addSensor(apuSensor, this._apuRow)] : []),
+            ...(batterySensor ? [addSensor(batterySensor, this._batteryRow)] : []),
             ...temperatureSensors.map(sensor => addSensor(sensor, addPart(sensor.name, true))),
         ];
 
@@ -611,9 +617,8 @@ class ThrottleIndicator extends PanelMenu.Button {
             if (this._cancellable.is_cancelled())
                 return;
             const power = decodeChargingPower(bytes.get_data());
-            this._setRowVisible(this._batteryRow, power !== null);
-            if (power !== null)
-                this._batteryRow.power.text = formatPower(power);
+            this._setRowVisible(this._batteryRow, power !== null || this._hasBatteryTemperature);
+            this._batteryRow.power.text = power === null ? '' : formatPower(power);
         });
     }
 
@@ -904,6 +909,7 @@ export default class CpuThrottleIndicatorExtension extends Extension {
             boardSensorFiles: findBoardSensorFiles(),
             apuSensor: findApuSensor(),
             batteryFile: findBatteryFile(),
+            batterySensor: findBatterySensor(),
             temperatureSensors: [
                 ...named('DRAM', findMemorySensors()),
                 ...named('SSD', findSsdSensors()),

@@ -392,31 +392,33 @@ without the power which charges the battery. On battery it was measured within a
 battery reports at up to 25 W, and about 15% under it at 55 W to 65 W. The table holds it in a 16 bit field of
 milliwatts, which wraps at 65.5 W, and the indicator adds the wrapped part back, as the laptop's power is never below
 the APU's. The SoC row is the APU's power which neither the cores, the GPU nor the NPU draw, such as the power of the
-data fabric and of the memory controller and its PHY. The memory modules draw their power outside the APU, so the
-other row includes it, as the laptop's power which the APU does not draw, together with the power of the display and
-the SSD. While the battery charges, a battery row shows the power which charges it, from the voltage and the current
-the kernel reports for the battery, as the laptop's power does not include it. The GPU's and the DRAM's frequencies
-are given as a share of the top of the clock levels amdgpu lists in `pp_dpm_sclk` and `pp_dpm_mclk`, and the NPU's as
-a share of 1800 MHz, the top of the NPU's clock table in the kernel's `amdxdna` driver. The usage of each group of
-cores comes from `/proc/stat`, for the logical CPUs whose maximum frequency in cpufreq is the group's. The usage of
-the DRAM is the bandwidth of its reads and writes, as a share of the memory's bandwidth: the transfer rate the memory
-modules report in SMBIOS times the width of the GPU's memory bus, both as amdkfd publishes them in its topology under
-`/sys/class/kfd/kfd/topology`. On this laptop that is 5600 MT/s over 128 bits, 89.6 GB/s. The table holds the
-bandwidth in 16 bit fields of MB/s, which wrap at 65.5 GB/s, and the reads go above that, to about 83 GB/s from the
-GPU. Nothing in the table tells a wrapped reading from a low one, and every wrap adds 65.5 GB/s to the sum of the reads
-and the writes, whichever of them wrapped. So while a reading plus 65.5 GB/s still fits under the memory's bandwidth,
-which on this laptop it does below 24.1 GB/s, the DRAM row shows every bandwidth the reading can stand for, like
-`1.4/66.9 GB/s, 2/75%`, and leaves it to the reader to tell from what runs which one it is. Above that it shows the
-one bandwidth. Memory with a bandwidth of 131 GB/s or more can wrap twice, and the row then shows three or more.
+data fabric and of the memory controller and its PHY. The memory modules draw their power outside the APU, so the other
+row includes it, as the laptop's power which the APU does not draw, together with the power of the display and the SSD.
+While the battery charges, a battery row shows the power which charges it, from the voltage and the current the kernel
+reports for the battery, as the laptop's power does not include it. With an EC which reports the battery's temperature,
+which Framework's EC releases for this laptop do not, the battery row is shown always, with the temperature, and with
+the power while the battery charges. The GPU's and the DRAM's frequencies are given as a share of the top of the clock
+levels amdgpu lists in `pp_dpm_sclk` and `pp_dpm_mclk`, and the NPU's as a share of 1800 MHz, the top of the NPU's clock
+table in the kernel's `amdxdna` driver. The usage of each group of cores comes from `/proc/stat`, for the logical CPUs
+whose maximum frequency in cpufreq is the group's. The usage of the DRAM is the bandwidth of its reads and writes, as a
+share of the memory's bandwidth: the transfer rate the memory modules report in SMBIOS times the width of the GPU's
+memory bus, both as amdkfd publishes them in its topology under `/sys/class/kfd/kfd/topology`. On this laptop that is
+5600 MT/s over 128 bits, 89.6 GB/s. The table holds the bandwidth in 16 bit fields of MB/s, which wrap at 65.5 GB/s, and
+the reads go above that, to about 83 GB/s from the GPU. Nothing in the table tells a wrapped reading from a low one, and
+every wrap adds 65.5 GB/s to the sum of the reads and the writes, whichever of them wrapped. So while a reading plus
+65.5 GB/s still fits under the memory's bandwidth, which on this laptop it does below 24.1 GB/s, the DRAM row shows
+every bandwidth the reading can stand for, like `1.4/66.9 GB/s, 2/75%`, and leaves it to the reader to tell from what
+runs which one it is. Above that it shows the one bandwidth. Memory with a bandwidth of 131 GB/s or more can wrap twice,
+and the row then shows three or more.
 
-The menu shows the temperatures of the memory modules, the SSD and the wireless card from their hwmon devices. It
-reads them, the EC's reading of the APU's temperature and the battery only while it is open, as a read of the SSD's or
-the wireless card's sensor sends the device a command, which wakes it from a power saving state. The laptop's
-temperature is the skin temperature from the table, which AMD's firmware interface describes as the highest skin
-temperature the APU and the sensors on the chassis report. A temperature turns red when it reaches the critical limit
-its hwmon device reports: 85 C for the memory modules, 93.85 C for the SSD, and 114.85 C for the APU's temperature
-which the EC reads, the threshold at which the EC throttles the APU. The table carries no limits for the temperatures
-of the laptop, the CPU, the GPU and the SoC, and the wireless card reports none, so these never turn red.
+The menu shows the temperatures of the memory modules, the SSD and the wireless card from their hwmon devices. It reads
+them, the EC's reading of the APU's temperature and the battery only while it is open, as a read of the SSD's or the
+wireless card's sensor sends the device a command, which wakes it from a power saving state. The laptop's temperature is
+the skin temperature from the table, which AMD's firmware interface describes as the highest skin temperature the APU
+and the sensors on the chassis report. A temperature turns red when it reaches the critical limit its hwmon device
+reports: 85 C for the memory modules, 93.85 C for the SSD, and 114.85 C for the APU's temperature which the EC reads,
+the threshold at which the EC throttles the APU. The table carries no limits for the temperatures of the laptop, the
+CPU, the GPU and the SoC, and the wireless card and the EC for the battery report none, so these never turn red.
 
 The menu also shows the fan's speed and the target speed the embedded controller (EC) is bringing it to, both as the
 EC reports them through `cros_ec`'s hwmon device. The target is 0 while the fan is off. While
