@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """Report a release of a patched Firefox add-on other than the one firefox-addons/ pins.
 
-Usage: check-addon-release.py ADDON_DIR [--state FILE]
+Usage: check-addon-release.py ADDON_DIR
 
 ADDON_DIR is a directory of firefox-addons/, whose file "release" names the add-on's ID ("id") and the version it
 pins ("version"), see build-addon.py. The version addons.mozilla.org offers is read from its API, and when it is not
 the pinned one, the patches of ADDON_DIR are applied to it with build-addon.py. The report names both versions, says
 whether the patches apply, and when they do, gives the lines "release" needs for the offered version. Prints nothing
 while the pinned version is the one offered.
-
-With --state, FILE records the version reported last, so that each version is reported once: nothing is printed while
-addons.mozilla.org offers the version FILE names, and FILE is written after a report.
 
 Exits with 1 and a message on standard error when addons.mozilla.org cannot be queried, and with 0 otherwise, also
 when the patches do not apply, which the report says.
@@ -32,7 +29,6 @@ API = "https://addons.mozilla.org/api/v5/addons/addon/%s/"
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("addon_dir")
-    parser.add_argument("--state")
     args = parser.parse_args()
     addon_dir = os.path.abspath(args.addon_dir)
     name = os.path.basename(addon_dir.rstrip("/"))
@@ -53,10 +49,6 @@ def main():
     algorithm, _, digest = current["file"]["hash"].partition(":")
     if version == release["version"]:
         return 0
-    if args.state and os.path.exists(args.state):
-        with open(args.state) as f:
-            if f.read().strip() == version:
-                return 0
 
     print("Firefox add-on %s: addons.mozilla.org offers %s, firefox-addons/%s/release pins %s."
           % (release["id"], version, name, release["version"]))
@@ -80,10 +72,6 @@ def main():
         else:
             print("The patches do not apply to %s:" % version)
             print((result.stdout + result.stderr).rstrip())
-    if args.state:
-        with open(args.state + ".tmp", "w") as f:
-            f.write(version + "\n")
-        os.replace(args.state + ".tmp", args.state)
     return 0
 
 
