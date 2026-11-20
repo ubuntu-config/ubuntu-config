@@ -448,7 +448,7 @@ uses it to throttle and to shut down the APU when it overheats.
 
 The indicator also turns red and shows THM, and its menu a warning, when the EC's fan control stops following the
 processor's heat. After days of uptime the EC has been seen to stop updating its sensors. The three F75303 readings
-come from one chip, which shares an I2C bus with the APU's SB-TSI, and the EC's driver for it keeps reporting the
+come from one chip, which shares an I2C bus with the APU's SB-TSI, and Framework's driver for it keeps reporting the
 last temperature it read when it cannot read the chip any more. The readings then stay at the values they had, and
 the fan stays at the speed those values ask for, which is off when they stopped below 50 C. A suspend and resume
 makes the EC read them again. The indicator tells that the fan does not follow the heat from either of two signs.
@@ -478,6 +478,15 @@ hold the APU above 32 W, as a bursty one or one on the power saving profile, doe
 the limits do not reach the APU. The warning stays until the sustained limit holds the APU at or below 32 W for most
 of a minute, or until a suspend, after which the indicator judges anew. The stuck mailbox is tracked in Framework's
 [issue #160](https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/160).
+
+The patched EC (see [The embedded controller runs patched
+firmware](#the-embedded-controller-runs-patched-firmware)) reports a board sensor as failed once three polls of it in
+a row, a second apart, have failed, and runs the fan at full speed until it can read the sensor again, while the
+laptop is not suspended. The indicator then turns red and shows SENSOR, and its menu a warning, once 5 reads of a
+board sensor in a row, over 10 seconds, have failed. A single failed read does not count, and does not count as a
+changed board reading either, because the EC's hwmon driver reports a sensor as failed also when its byte in the EC's
+memory map reads as 0xFF. That is what a failed port read returns, and port reads of the EC fail now and then on
+battery ([issue #308](https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/308)).
 
 ### Cooling, performance and battery tracked over time
 

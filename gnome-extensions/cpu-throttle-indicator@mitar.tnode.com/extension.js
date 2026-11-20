@@ -45,12 +45,19 @@ const FAN_NEEDED_ABOVE_C = 70;
 const FAULT_AFTER_HOT_SAMPLES = 15;
 
 // How long none of the board's temperature readings may change, with the hottest core at FAN_NEEDED_ABOVE_C or more
-// for the last FAULT_AFTER_HOT_SAMPLES in a row, before that is shown as the fan not following the heat. The EC keeps
-// reporting the last temperature it read from a board sensor it cannot read any more, and the fan then keeps the speed
-// that temperature asks for, which can be a slow one as well as off. The readings are in whole degrees and can all
-// stay the same for minutes while the processor idles, but once it heats up, at least one of them changes within
-// seconds, until a steady load settles the board.
+// for the last FAULT_AFTER_HOT_SAMPLES in a row, before that is shown as the fan not following the heat. Framework's EC
+// releases keep reporting the last temperature they read from a board sensor they cannot read any more, and the fan
+// then keeps the speed that temperature asks for, which can be a slow one as well as off. The readings are in whole
+// degrees and can all stay the same for minutes while the processor idles, but once it heats up, at least one of them
+// changes within seconds, until a steady load settles the board.
 const BOARD_STALE_AFTER_S = 120;
+
+// The number of reads in a row, one per sample, which have to fail for a board sensor before that is shown as the EC
+// having lost the sensor. The patched EC reports a sensor as failed only after three seconds of failed polls of it, and
+// then for as long as it cannot read it, while a single read can fail with the sensor working, as findBoardSensorFiles
+// describes. The patched EC runs the fan at full speed for a lost sensor, so the APU does not overheat while this
+// waits.
+const BOARD_LOST_AFTER_SAMPLES = 5;
 
 // The share of FAN_MAX_RPM from which the EC's fan target counts as full speed, at which board readings which stopped
 // changing are not shown as the fan not following the heat. A build on all threads held at the sustained power limit,
@@ -150,11 +157,13 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._samplesUnderThreshold = 0;
         this._samplesHot = 0;
         this._samplesFanOffWhileHot = 0;
-        // The temperature is undefined until the sensor has been read, and null while the EC reports it as failed.
+        // The temperature is undefined until the sensor has been read, and stays the last one read while reads of the
+        // sensor fail, which failedReads counts since the last read which succeeded.
         this._boardSensors = boardSensorFiles.map(boardFile => ({
             file: boardFile,
             reading: false,
             temperature: undefined,
+            failedReads: 0,
         }));
         // The monotonic time in microseconds at which a board reading last changed.
         this._boardChangedAt = null;
@@ -187,6 +196,8 @@ class ThrottleIndicator extends PanelMenu.Button {
             ['Fan control may be stuck on old temperatures.']);
         this._powerWarningItem = this._addWarning("APU power does not follow the EC's limits",
             ['Power limits may be stuck on old values.']);
+        this._sensorWarningItem = this._addWarning('EC cannot read a board temperature sensor',
+            ['The fan runs at full speed meanwhile.']);
 
         // All sections are rows of one grid, so that their columns line up: the names, a first column of values and a
         // second one.
@@ -701,20 +712,24 @@ class ThrottleIndicator extends PanelMenu.Button {
             sensor.reading = true;
             sensor.file.load_bytes_async(this._cancellable, (file, result) => {
                 sensor.reading = false;
-                let temperature = null;
+                let temperature;
                 try {
                     const [bytes] = file.load_bytes_finish(result);
                     temperature = Number(new TextDecoder().decode(bytes.get_data()));
                 } catch (error) {
                     if (error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                         return;
-                    // INVALID_DATA is the EC reporting the sensor as failed, which stays the same as long as the
-                    // failure does. Any other error is about reaching the file and says nothing about the sensor.
-                    if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.INVALID_DATA)) {
+                    // INVALID_DATA is the EC reporting the sensor as failed, or a single read which failed, which
+                    // findBoardSensorFiles describes. It is counted, but does not change the reading, so that a single
+                    // failed read does not count as a board reading which changed. Any other error is about reaching
+                    // the file and says nothing about the sensor.
+                    if (error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.INVALID_DATA))
+                        sensor.failedReads++;
+                    else
                         console.warn(`CPU Throttle Indicator: cannot read ${file.get_path()}: ${error.message}`);
-                        return;
-                    }
+                    return;
                 }
+                sensor.failedReads = 0;
                 if (this._cancellable.is_cancelled() || temperature === sensor.temperature)
                     return;
                 sensor.temperature = temperature;
@@ -760,7 +775,8 @@ class ThrottleIndicator extends PanelMenu.Button {
         // is not at full speed. Once the warning is shown for them, it stays until one of them changes, for the same
         // reason as for a fan which does not spin. A target which reaches full speed after that does not hide it,
         // because with the board readings unchanged, only the APU's own sensor can raise the target, which it does
-        // only once the APU overheats.
+        // only once the APU overheats, or a board sensor which the patched EC cannot read any more, which is shown on
+        // its own.
         const fansAtFull = this._fanTargetRows.length > 0 &&
             this._fanTargetRows.every(row => row.speed >= FAN_FULL_TARGET_SHARE * FAN_MAX_RPM);
         if (this._samplesHot >= FAULT_AFTER_HOT_SAMPLES && !fansAtFull && this._boardChangedAt !== null &&
@@ -845,8 +861,10 @@ class ThrottleIndicator extends PanelMenu.Button {
     _render() {
         const fanFault = this._boardStale || this._samplesFanOffWhileHot >= FAULT_AFTER_HOT_SAMPLES;
         const powerFault = this._powerCheck.raised;
+        const sensorLost = this._boardSensors.some(sensor => sensor.failedReads >= BOARD_LOST_AFTER_SAMPLES);
         this._warningItem.visible = fanFault;
         this._powerWarningItem.visible = powerFault;
+        this._sensorWarningItem.visible = sensorLost;
         this._icon.show();
         // Without a fan which follows the heat the APU heats up until its temperature limit holds it back. The
         // indicator therefore shows that limit instead of the reason which holds the APU back right now. This goes
@@ -863,6 +881,16 @@ class ThrottleIndicator extends PanelMenu.Button {
         if (powerFault) {
             this._icon.gicon = this._icons.power;
             this._reasonLabel.text = (this._throttle?.kind === 'power' ? this._throttle : this._powerFaultReason).short;
+            this.add_style_class_name(WARNING_PANEL_STYLE_CLASS);
+            this.show();
+            return;
+        }
+        // While the EC cannot read a board sensor, the indicator stays in red and says so, also when nothing holds the
+        // APU back, because the fan stays at full speed until the EC can read the sensor again. This goes after the
+        // power check, because the fan at full speed keeps the APU from overheating.
+        if (sensorLost) {
+            this._icon.gicon = this._icons.thermal;
+            this._reasonLabel.text = 'SENSOR';
             this.add_style_class_name(WARNING_PANEL_STYLE_CLASS);
             this.show();
             return;

@@ -84,9 +84,13 @@ function findSensor(label) {
  *
  * These are all of the EC's temperature sensors other than the one it reads from the APU and the battery's. Each file
  * holds the temperature in millidegrees Celsius, in whole degrees. Reading it fails with Gio.IOErrorEnum.INVALID_DATA
- * while the EC reports the sensor as failed, but Framework's EC releases do not report a board sensor they cannot read
- * any more as failed. They keep reporting the last temperature they read from it, so that shows only as a reading
- * which stops changing.
+ * while the EC reports the sensor as failed. Framework's EC releases do not report a board sensor they cannot read any
+ * more as failed, but keep reporting the last temperature they read from it, so that shows only as a reading which
+ * stops changing. The patched EC of https://gitlab.com/ubuntu-config/framework-ec reports such a sensor as failed once
+ * three polls of it in a row, a second apart, have failed, and runs the fan at full speed for it while the laptop is
+ * not suspended. A single read can fail with INVALID_DATA while the sensor works as well: the driver reports a sensor
+ * whose byte in the EC's memory map is 0xFF as failed, and 0xFF is what a failed port read returns, which happens on
+ * this laptop on battery (https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/308).
  *
  * @returns {Gio.File[]} the files, or an empty array when no embedded controller on this system reports such a sensor
  */
