@@ -973,14 +973,7 @@ The embedded controller (EC), which runs the laptop's fan, charging and power li
 with fixes and additions from
 [framework-ec](https://gitlab.com/ubuntu-config/framework-ec/-/tree/ubuntu-config/ubuntu-config), whose
 [README](https://gitlab.com/ubuntu-config/framework-ec/-/blob/ubuntu-config/ubuntu-config/README.md#changes) lists them
-and describes how to flash the firmware. Its CI builds the firmware the way Framework builds its releases and runs the
-EC's test suites. Among the fixes, the charge stays in the range of the [battery charge
-thresholds](#battery-charge-thresholds-on-framework-laptops), the thresholds set from Linux hold with the firmware's own
-charge limit at 100%, a temperature sensor which stops answering runs the fan at full speed instead of leaving it to
-follow frozen readings, and the AC state does not flip when the charger is plugged or unplugged. The firmware also
-reports the fan's duty cycle and the battery's temperature, which the [processor throttling
-indicator](#processor-throttling) shows and the [health benchmark](#cooling-performance-and-battery-tracked-over-time)
-records.
+and describes how to flash the firmware.
 
 The rest of this configuration assumes that firmware. With Framework's own firmware instead:
 
