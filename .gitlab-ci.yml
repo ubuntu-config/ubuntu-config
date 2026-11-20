@@ -24,6 +24,9 @@ variables:
   DEBIAN_FRONTEND: noninteractive
   # tests/backtrace-cores.sh downloads debug symbols, for which GitLab's default of 5 minutes can be too short.
   RUNNER_AFTER_SCRIPT_TIMEOUT: 1h
+  # The runner fetches the repository through GitLab's CI gateway, which sometimes does not answer. GitLab reports such
+  # a job as failed by its script, which retry below does not cover, so the runner tries the fetch up to 3 times.
+  GET_SOURCES_ATTEMPTS: 3
 
 # Every job keeps the core files of processes which crashed in it as artifacts, in cores/, with their backtraces, which
 # tests/backtrace-cores.sh writes after the job's script. The kernel writes them as files, since a core_pattern which
