@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Run every script of this repository in the order they have to be applied, as described under "Applying
-# everything" in README.md. The BIOS settings described there cannot be applied from here and come first.
+# everything" in README.md. The BIOS setting and the EC firmware described there cannot be applied from here.
 #
 #
 # Usage
@@ -34,7 +34,7 @@ step() {
   echo
 }
 
-echo "The BIOS settings from README.md have to be made by hand: battery charge limit 99% and Battery Extender disabled."
+echo "Done by hand, see README.md: Battery Extender disabled in the BIOS, and the patched EC firmware flashed."
 
 if [ "$MODE" = apply ]; then
   step "APT lockdown"

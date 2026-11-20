@@ -100,6 +100,9 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
   - [GDM does not fail at shutdown](#gdm-does-not-fail-at-shutdown): GDM is stopped before accounts-daemon.
   - [The encrypted disk is not closed while in use at shutdown](#the-encrypted-disk-is-not-closed-while-in-use-at-shutdown):
     the root filesystem's encrypted device is closed in the final phase of the shutdown.
+  - [The embedded controller runs patched firmware](#the-embedded-controller-runs-patched-firmware): Framework's EC
+    firmware with fixes to charging, the fan and the AC state, and the fan's duty cycle and the battery's temperature
+    for Linux.
 - [Requirements](#requirements): the Ubuntu release, the hardware and the packages the scripts assume.
 - [Applying everything](#applying-everything): the order in which to run the scripts.
 - [GitHub mirror](#github-mirror): a read-only mirror, for forking the project on GitHub.
@@ -302,7 +305,10 @@ Requirements:
 - The Preserve Battery Health extension for the quick settings toggle (`configure-gnome-desktop.sh`).
 - The estimated time until the battery is empty or full, shown under the battery percentage in quick settings
   (`gnome-extensions/quick-settings-battery-time@mitar.tnode.com/`).
-- The firmware's own charge limit at 99%[^charge-limit] and Battery Extender disabled, in the BIOS.
+- The patched EC firmware, with which Linux's thresholds hold with the firmware's own charge limit at 100% and the
+  charge stays in their range (see [The embedded controller runs patched
+  firmware](#the-embedded-controller-runs-patched-firmware)), and Battery Extender disabled in the BIOS, which would
+  otherwise replace the thresholds with its own range after some days on AC.
 
 ### Hardware tweaks
 
@@ -961,6 +967,33 @@ keeps a copy of crypttab. The problem is reported as
 [Launchpad bug 2152224](https://bugs.launchpad.net/ubuntu/+source/systemd/+bug/2152224). Fedora fixed it in its
 installer with [anaconda pull request 6785](https://github.com/rhinstaller/anaconda/pull/6785).
 
+### The embedded controller runs patched firmware
+
+The embedded controller (EC), which runs the laptop's fan, charging and power limits, runs Framework's firmware 4.0.2
+with fixes and additions from
+[framework-ec](https://gitlab.com/ubuntu-config/framework-ec/-/tree/ubuntu-config/ubuntu-config), whose
+[README](https://gitlab.com/ubuntu-config/framework-ec/-/blob/ubuntu-config/ubuntu-config/README.md#changes) lists them
+and describes how to flash the firmware. Its CI builds the firmware the way Framework builds its releases and runs the
+EC's test suites. Among the fixes, the charge stays in the range of the [battery charge
+thresholds](#battery-charge-thresholds-on-framework-laptops), the thresholds set from Linux hold with the firmware's own
+charge limit at 100%, a temperature sensor which stops answering runs the fan at full speed instead of leaving it to
+follow frozen readings, and the AC state does not flip when the charger is plugged or unplugged. The firmware also
+reports the fan's duty cycle and the battery's temperature, which the [processor throttling
+indicator](#processor-throttling) shows and the [health benchmark](#cooling-performance-and-battery-tracked-over-time)
+records.
+
+The rest of this configuration assumes that firmware. With Framework's own firmware instead:
+
+- The battery charge limit in the BIOS has to be at 99%[^charge-limit], or the charge thresholds set from Linux do
+  not apply.
+- The battery charges to the upper threshold at every connection of AC and at every write of a threshold, as when
+  UPower starts or the health benchmark ends a battery hold, even with the charge already inside the range. Turning
+  the thresholds on with the charge above the upper one discharges the battery on AC down to it.
+- The AC state flips three times within about 150 ms when the charger is plugged or unplugged.
+- A stalled sensor bus leaves the fan following frozen readings, which the processor throttling indicator warns about.
+- The indicator's menu shows no battery temperature, and the health benchmark records neither the battery's
+  temperature nor the fan's duty cycle and does not check the fan's control, while it measures everything else.
+
 ## Requirements
 
 - Ubuntu 26.04 desktop, with GNOME 50 on Wayland. The hardware parts (battery thresholds, touchscreen, power
@@ -983,7 +1016,7 @@ installer with [anaconda pull request 6785](https://github.com/rhinstaller/anaco
 
 Run each script first without `--apply` to see what it would change. The general order is:
 
-1. In the BIOS, set the battery charge limit to 99%[^charge-limit] and disable Battery Extender.
+1. In the BIOS, disable Battery Extender.
 2. Configure and lock down the third-party APT repositories, including the Mozilla Team PPA with its source, from
    which Firefox is rebuilt:
 
@@ -1024,6 +1057,9 @@ Run each script first without `--apply` to see what it would change. The general
    ./install-journal-digest.sh --apply
    ```
 
+7. Flash the patched EC firmware with the `framework_tool` which step 4 installs, first into RW to try it and then
+   into RO, as [its README](https://gitlab.com/ubuntu-config/framework-ec/-/blob/ubuntu-config/ubuntu-config/README.md#flashing) describes.
+
 `./all.sh` runs steps 2 to 6 in this order, showing what each script would change, and `./all.sh --apply`
 applies them all, leaving logging out and back in for the end. Run it as your own user, without sudo: it calls
 sudo itself for the steps which need root, and asks for the password then.
@@ -1044,7 +1080,8 @@ if you need to fork the project there.
 This project is open source software released under the [Apache 2.0 license](./LICENSE).
 
 [^charge-limit]:
-    At 100% the firmware's own charge limit is switched off, and while it is off the firmware clears the battery
-    charge sustainer every second, which also removes the thresholds set from Linux. Below 100% it sets its own
-    range, from 5% below the limit up to the limit, only when the limit changes or the embedded controller starts,
-    so the thresholds set from Linux stay in effect. See `modprobe.d/cros-charge-control.conf`.
+    With Framework's firmware, at 100% the firmware's own charge limit is switched off, and while it is off the
+    firmware clears the battery charge sustainer every second, which also removes the thresholds set from Linux.
+    Below 100% it sets its own range, from 5% below the limit up to the limit, only when the limit changes or the
+    embedded controller starts, so the thresholds set from Linux stay in effect. The patched firmware clears the
+    sustainer only once, when the limit changes to 100%. See `modprobe.d/cros-charge-control.conf`.
