@@ -12,10 +12,12 @@
 ^app-gnome-(ubuntu\\x2dreport\\x2don\\x2dupgrade|snap\\x2duserd\\x2dautostart)-[0-9]+\.scope \(user\): resources$
 ^systemd: Failed to start app-gnome-(ubuntu\\x2dreport\\x2don\\x2dupgrade|snap\\x2duserd\\x2dautostart)-[0-9]+\.scope
 
-# Garbled replies from the Framework laptop's embedded controller, a few to a few dozen a day since late October, for
-# which the kernel fails the command. The CPU Throttle Indicator extension watches for the failure which would
-# matter, the fan not following the heat. The embedded controller's trouble is reported upstream as
-# FrameworkComputer/EmbeddedController issue 69.
+# Garbled replies from the Framework laptop's embedded controller, almost only on battery, up to a few dozen a day
+# since September, for which the kernel fails that single command. The kernel reads the replies with port reads, some
+# of which return 0xFF bytes while the processor uses its deepest idle state (ACPI C3): the errors stop with that
+# state turned off and return with it turned on. The next command works, and the CPU Throttle Indicator extension
+# counts a temperature sensor as failed only after several failed reads in a row. Reported upstream as
+# https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/308.
 ^kernel: cros_ec_lpcs \S+: (bad packet checksum|packet too long)
 
 # The embedded controller, which answers the kernel's USB-C questions (UCSI), rejects reading the power offers of a
@@ -48,3 +50,9 @@
 # At a login, the login screen's GNOME Shell asks polkit about an action just before it exits, and polkit finds the
 # process, or its connection to the bus, gone when it evaluates the request.
 ^polkitd: Error converting subject to JS object: (Process [0-9]+ terminated|GDBus\.Error:org\.freedesktop\.DBus\.Error\.NameHasNoOwner: Could not get credentials of name ':[0-9.]+': no such name)$
+
+# After some unplugs of the dock with the external monitor, the graphics driver tries to set up the DisplayPort link
+# to that monitor once more before it handles its removal, fails four times within three seconds and gives up
+# ("enabling link 2 failed", logged as a warning). It also happened once when the screen woke up an hour after such
+# an unplug. Seen since September, with the built-in screen working throughout.
+^kernel: amdgpu \S+: \[drm\] \*ERROR\* dpcd_set_link_settings:[0-9]+: core_link_write_dpcd \((DP_DOWNSPREAD_CTRL|DP_LANE_COUNT_SET|DP_LINK_BW_SET)\) failed$
