@@ -295,7 +295,9 @@ critically low battery still sound.
 ### Battery charge thresholds on Framework laptops
 
 GNOME's Preserve Battery Health keeps the battery between 40% and 60% while the laptop is docked most of the time,
-and a quick settings toggle switches back to charging to 100% before traveling.
+and a quick settings toggle switches it off before traveling. Without it, the battery charges to 100% from below 95%,
+and a charge from 95% up stays as it is, also once the battery is full, instead of being topped up whenever it drops
+by a percent.
 
 Requirements:
 
@@ -305,10 +307,10 @@ Requirements:
 - The Preserve Battery Health extension for the quick settings toggle (`configure-gnome-desktop.sh`).
 - The estimated time until the battery is empty or full, shown under the battery percentage in quick settings
   (`gnome-extensions/quick-settings-battery-time@mitar.tnode.com/`).
-- The patched EC firmware, with which Linux's thresholds hold with the firmware's own charge limit at 100% and the
-  charge stays in their range (see [The embedded controller runs patched
-  firmware](#the-embedded-controller-runs-patched-firmware)), and Battery Extender disabled in the BIOS, which would
-  otherwise replace the thresholds with its own range after some days on AC.
+- The patched EC firmware, with which Linux's thresholds hold with the firmware's own charge limit at 100%, the
+  charge stays in their range, and without them a charge from 95% up is kept (see [The embedded controller runs
+  patched firmware](#the-embedded-controller-runs-patched-firmware)), and Battery Extender disabled in the BIOS, which
+  would otherwise replace the thresholds with its own range after some days on AC.
 
 ### Hardware tweaks
 
@@ -991,6 +993,8 @@ The rest of this configuration assumes that firmware. With Framework's own firmw
 - The battery charges to the upper threshold at every connection of AC and at every write of a threshold, as when
   UPower starts or the health benchmark ends a battery hold, even with the charge already inside the range. Turning
   the thresholds on with the charge above the upper one discharges the battery on AC down to it.
+- Without the thresholds, the battery is topped up to 100% whenever its charge drops by a percent, and connecting AC
+  charges it to full from any charge.
 - The AC state flips three times within about 150 ms when the charger is plugged or unplugged.
 - A stalled sensor bus leaves the fan following frozen readings, which the processor throttling indicator warns about.
 - The indicator's menu shows no battery temperature, and the health benchmark records neither the battery's
