@@ -402,14 +402,14 @@ milliwatts, which wraps at 65.5 W, and the indicator adds the wrapped part back,
 the APU's. The SoC row is the APU's power which neither the cores, the GPU nor the NPU draw, such as the power of the
 data fabric and of the memory controller and its PHY. The memory modules draw their power outside the APU, so the other
 row includes it, as the laptop's power which the APU does not draw, together with the power of the display and the SSD.
-While the battery charges, a battery row shows the power which charges it, from the voltage and the current the kernel
-reports for the battery, as the laptop's power does not include it. With an EC which reports the battery's temperature,
-which Framework's EC releases for this laptop do not, the battery row is shown always, with the temperature, and with
-the power while the battery charges. The GPU's and the DRAM's frequencies are given as a share of the top of the clock
-levels amdgpu lists in `pp_dpm_sclk` and `pp_dpm_mclk`, and the NPU's as a share of 1800 MHz, the top of the NPU's clock
-table in the kernel's `amdxdna` driver. The usage of each group of cores comes from `/proc/stat`, for the logical CPUs
-whose maximum frequency in cpufreq is the group's. The usage of the DRAM is the bandwidth of its reads and writes, as a
-share of the memory's bandwidth: the transfer rate the memory modules report in SMBIOS times the width of the GPU's
+A battery row shows the power which flows out of the battery, from the voltage and the current the kernel reports for
+it: positive while the battery powers the laptop, and negative while it charges, as the power which charges it is not
+part of the laptop's. With an EC which reports the battery's temperature, which Framework's EC releases for this laptop
+do not, the row shows that temperature too. The GPU's and the DRAM's frequencies are given as a share of the top of the
+clock levels amdgpu lists in `pp_dpm_sclk` and `pp_dpm_mclk`, and the NPU's as a share of 1800 MHz, the top of the NPU's
+clock table in the kernel's `amdxdna` driver. The usage of each group of cores comes from `/proc/stat`, for the logical
+CPUs whose maximum frequency in cpufreq is the group's. The usage of the DRAM is the bandwidth of its reads and writes,
+as a share of the memory's bandwidth: the transfer rate the memory modules report in SMBIOS times the width of the GPU's
 memory bus, both as amdkfd publishes them in its topology under `/sys/class/kfd/kfd/topology`. On this laptop that is
 5600 MT/s over 128 bits, 89.6 GB/s. The table holds the bandwidth in 16 bit fields of MB/s, which wrap at 65.5 GB/s, and
 the reads go above that, to about 83 GB/s from the GPU. Nothing in the table tells a wrapped reading from a low one, and

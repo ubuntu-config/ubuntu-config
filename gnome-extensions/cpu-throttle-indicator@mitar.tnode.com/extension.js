@@ -9,7 +9,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import {decodeChargingPower, findBatteryFile} from './battery.js';
+import {decodeBatteryPower, findBatteryFile} from './battery.js';
 import {FAN_MAX_RPM, findApuSensor, findBatterySensor, findBoardSensorFiles, findFanFiles} from './ec.js';
 import {findMemorySensors, findSsdSensors, findWifiSensors} from './hwmon.js';
 import {
@@ -257,9 +257,8 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._fanTargetRows = this._fanRows.filter(fanRow => fanRow.kind === 'target');
 
         // The laptop's power is the APU's and the other power together, and the APU's is its four parts together,
-        // which are indented under it. The power which charges the battery is not part of the laptop's, and the
-        // battery's row shows it only while the battery charges. The row is shown always when the EC reports the
-        // battery's temperature, and otherwise only while the battery charges. The memory modules, the SSD and the
+        // which are indented under it. The battery's row shows the power which flows out of the battery, negative while
+        // it charges, as the power which charges it is not part of the laptop's. The memory modules, the SSD and the
         // wireless card draw a part of the other power, and are indented under it.
         this._addColumnsHeading(grid, row++, null, 'Temperature', 'Power');
         const addPart = (name, indented = false) => {
@@ -273,7 +272,7 @@ class ThrottleIndicator extends PanelMenu.Button {
         this._npuRow = addPart('NPU', true);
         this._socRow = addPart('SoC', true);
         this._batteryRow = addPart('Battery');
-        this._setRowVisible(this._batteryRow, this._hasBatteryTemperature);
+        this._setRowVisible(this._batteryRow, batteryFile !== null || this._hasBatteryTemperature);
         this._otherRow = addPart('Other');
         const addSensor = (sensor, part) => ({file: sensor.file, critical: sensor.critical, row: part, reading: false});
         this._temperatureSensors = [
@@ -627,8 +626,7 @@ class ThrottleIndicator extends PanelMenu.Button {
             }
             if (this._cancellable.is_cancelled())
                 return;
-            const power = decodeChargingPower(bytes.get_data());
-            this._setRowVisible(this._batteryRow, power !== null || this._hasBatteryTemperature);
+            const power = decodeBatteryPower(bytes.get_data());
             this._batteryRow.power.text = power === null ? '' : formatPower(power);
         });
     }
