@@ -36,7 +36,7 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
   - [Power and lid sounds follow the System Sounds switch](#power-and-lid-sounds-follow-the-system-sounds-switch): no
     sound for the power cable, the lid and a low battery.
   - [Battery charge thresholds on Framework laptops](#battery-charge-thresholds-on-framework-laptops): Preserve
-    Battery Health keeps the battery between 40% and 60%.
+    Battery Health keeps the battery between 60% and 75%.
   - [Hardware tweaks](#hardware-tweaks): the touchscreen and the power button light off, keys repeating only after a
     second, and disk writes recorded for every unit.
 - [Additions](#additions): tools and features which Ubuntu does not have.
@@ -294,7 +294,7 @@ critically low battery still sound.
 
 ### Battery charge thresholds on Framework laptops
 
-GNOME's Preserve Battery Health keeps the battery between 40% and 60% while the laptop is docked most of the time,
+GNOME's Preserve Battery Health keeps the battery between 60% and 75% while the laptop is docked most of the time,
 and a quick settings toggle switches it off before traveling. Without it, the battery charges to 100% from below 95%,
 and a charge from 95% up stays as it is, also once the battery is full, instead of being topped up whenever it drops
 by a percent.
@@ -524,7 +524,7 @@ confirm that it controls the fan again, or the service fails, so that a fan left
 
 For the battery, each measurement records the values the battery's fuel gauge reports: the full capacity it estimates,
 the design capacity and the charge cycles. The gauge recalculates the full capacity only after the battery has
-discharged far enough between two rests, which a battery kept between 40% and 60% rarely does, so the estimate can stay
+discharged far enough between two rests, which a battery kept between 60% and 75% rarely does, so the estimate can stay
 the same for weeks and then jump. The measurement also determines the battery's internal resistance, which grows
 steadily as the battery ages. For the first 90 seconds of the idle phase and of the steady load, the battery powers the
 laptop although AC power is connected (`charge_behaviour` set to `force-discharge`), and the resistance is the drop of
