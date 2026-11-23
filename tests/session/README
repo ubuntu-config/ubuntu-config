@@ -78,6 +78,11 @@ The tests:
                   drop-in the test writes for the test user, and the test tiles with mutter's keybindings, with
                   tiling-assistant disabled as configure-gnome-desktop.sh disables it, since tiling-assistant leaves
                   a tiled window floating.
+  restart-bus     Logging out restarts the session bus also while the start of a user service which needs it waits in
+                  a queued job, as the start of xdg-desktop-portal does when Desktop Icons NG starts its process again
+                  while GNOME Shell shuts down, which needs
+                  patches/gnome-session/restart-dbus-replace-queued-jobs.patch. Otherwise the next login uses the old
+                  bus.
 
 The tests text-editor, ptyxis and firefox also check that no restored window demands attention. The test chromium
 only records such windows in its result.json: Chromium asks mutter to activate every window it restores, without an
@@ -105,7 +110,7 @@ the packages of the local repository:
       /repo/tests/session/prepare-container.sh /debs &&
       /repo/tests/session/run-session-tests.sh /out/run spawn-scopes text-editor ptyxis firefox chromium \
         chromium-quit shutdown lock-screen workspace-attention portal-inhibit overview-thumbnails \
-        restore-monitors'
+        restore-monitors restart-bus'
 
 A later DEBS_DIR replaces packages of the same name of an earlier one, so a build to test can follow the local
 repository. prepare-container.sh can run again on a prepared container, for example without DEBS_DIR to install a

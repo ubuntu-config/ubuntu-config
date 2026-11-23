@@ -294,6 +294,7 @@ test_session:
           - portal-inhibit
           - overview-thumbnails
           - restore-monitors
+          - restart-bus
 
   before_script:
     - !reference [.cores, before_script]

@@ -1100,6 +1100,40 @@ def portal_inhibit(session, checks, out_dir):
     return result
 
 
+@test
+def restart_bus(session, checks, out_dir):
+    """Logging out restarts the session bus also while the start of a service which needs it waits in a queued job, as
+    the start of xdg-desktop-portal does when Desktop Icons NG starts its process again while GNOME Shell shuts down."""
+    units = pathlib.Path.home() / ".config/systemd/user"
+    units.mkdir(parents=True, exist_ok=True)
+    (units / "session-test-slow.service").write_text("[Service]\nType=oneshot\nExecStart=/bin/sleep 120\n")
+    (units / "session-test-needs-bus.service").write_text(
+        "[Unit]\nRequires=dbus.service\nWants=session-test-slow.service\nAfter=dbus.service session-test-slow.service\n\n"
+        "[Service]\nExecStart=/bin/true\n")
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+
+    session.login()
+    # The service waits for the slow one to finish, so its start job is still queued when the session ends.
+    subprocess.run(["systemctl", "--user", "start", "--no-block", "session-test-needs-bus.service"], check=True)
+
+    def queued():
+        jobs = subprocess.run(["systemctl", "--user", "list-jobs", "--no-legend", "--plain"], capture_output=True, text=True)
+        return "session-test-needs-bus.service" in jobs.stdout
+
+    checks.check("the start of a service which needs the session bus is queued", wait_for(queued, 5))
+    try:
+        session.logout()
+        restarted, detail = True, ""
+    except RuntimeError as error:
+        restarted, detail = False, str(error)
+    checks.check("logging out restarts the session bus", restarted, detail)
+    # The slow service is stopped before it finished starting, which systemd records as a failure of the test's own.
+    names = ["session-test-needs-bus.service", "session-test-slow.service"]
+    subprocess.run(["systemctl", "--user", "stop", *names], check=False)
+    subprocess.run(["systemctl", "--user", "reset-failed", *names], check=False)
+    return {}
+
+
 def main():
     name, out_dir = sys.argv[1], pathlib.Path(sys.argv[2])
     if name not in TESTS:

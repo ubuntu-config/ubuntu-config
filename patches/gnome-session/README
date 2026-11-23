@@ -15,3 +15,17 @@ leave-scope-to-glib.patch
 
       journalctl --user -b | grep 'Could not create transient scope'
                                   should find nothing
+
+restart-dbus-replace-queued-jobs.patch
+    Lets gnome-session stop the session bus at the end of the session also while the start of a service which needs
+    the bus waits in a queued job. gnome-session-restart-dbus.service stops dbus.service then, so that the next login
+    starts a new bus. gnome-session asks systemd for the stop with the job mode "fail", which systemd refuses when the
+    stop conflicts with a queued job, and the next login then uses the old bus. Such a job is queued when a D-Bus
+    activation during the shutdown starts a service: Desktop Icons NG starts its process again while GNOME Shell shuts
+    down (reported as desktop-icons-ng issue 395), which starts xdg-desktop-portal, whose start job stays queued, as
+    its GNOME backend cannot start once the graphical session has ended. The patch stops the bus with the job mode
+    "replace", with which systemd cancels such a job instead.
+
+    The stop is made in do_restart_dbus in tools/gnome-session-ctl.c. The session test restart-bus in tests/session/
+    queues such a job before logging out and checks that the bus is restarted. Not proposed upstream. Drop the patch
+    once gnome-session stops the bus without failing on a queued job.

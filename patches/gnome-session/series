@@ -1,1 +1,2 @@
 leave-scope-to-glib.patch
+restart-dbus-replace-queued-jobs.patch

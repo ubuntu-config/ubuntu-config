@@ -1,0 +1,33 @@
+Description: Stop the session bus at the end of the session also while a start job of a service which needs it is queued.
+ gnome-session-restart-dbus.service stops dbus.service at the end of the session, so that the next login starts a new
+ session bus. gnome-session-ctl asks systemd for the stop with the job mode "fail", which systemd refuses when the stop
+ conflicts with a queued job, as when a D-Bus activation during the shutdown queued the start of a service which needs
+ dbus.service. Desktop Icons NG starts its process again while GNOME Shell shuts down, which starts
+ xdg-desktop-portal, whose start job stays queued because its GNOME backend cannot start once the graphical session
+ has ended. The session bus then stays, and the next login uses it. The stop now replaces such jobs.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-23
+
+--- a/tools/gnome-session-ctl.c
++++ b/tools/gnome-session-ctl.c
+@@ -123,6 +123,10 @@
+         if (connection == NULL)
+                 return;
+ 
++        /* A D-Bus activation during the shutdown of the session can queue the
++         * start of a service which needs dbus.service, such as a portal whose
++         * backend cannot start anymore. The stop replaces such a job, as it
++         * would otherwise fail and leave the bus to the next login. */
+         reply = g_dbus_connection_call_sync (connection,
+                                              SYSTEMD_DBUS,
+                                              SYSTEMD_PATH_DBUS,
+@@ -130,7 +134,7 @@
+                                              "StopUnit",
+                                              g_variant_new ("(ss)",
+                                                             "dbus.service",
+-                                                            "fail"),
++                                                            "replace"),
+                                              NULL,
+                                              G_DBUS_CALL_FLAGS_NO_AUTO_START,
+                                              -1, NULL, &error);
