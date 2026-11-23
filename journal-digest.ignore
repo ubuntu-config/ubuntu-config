@@ -20,6 +20,15 @@
 # https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/308.
 ^kernel: cros_ec_lpcs \S+: (bad packet checksum|packet too long)
 
+# At every boot the kernel's drivers ask the embedded controller about features this laptop does not have, and the
+# controller's console (logged by ec-log) names each host command it refused, with 1 for an unknown command and 3 for
+# an invalid parameter: the versions of GET_NEXT_EVENT (0x0008), which the controller does not have, five LEDs
+# (0x0029, leds-cros_ec asks about every LED ID), the RW signature check (0x011d), the motion sensors (0x002b), the
+# peripheral chargers (0x0134), and a PD chip behind the controller (0x400b, GET_PROTOCOL_INFO passed through). The
+# controller starts a line with "+" or "(++)" when the previous host command repeated within 50 ms.
+^ec-console: [+()]*\[[0-9.]+ HC 0x(0008|0029) err 3\]$
+^ec-console: [+()]*\[[0-9.]+ HC 0x(002b|011d|0134|400b) err 1\]$
+
 # The embedded controller, which answers the kernel's USB-C questions (UCSI), rejects reading the power offers of a
 # charger or dock as an incompatible partner (-95) when the kernel asks right after it is plugged in or the laptop
 # resumes, while later reads list them. It also answers the question for the alternate modes of a cable plug with

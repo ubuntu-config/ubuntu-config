@@ -1,0 +1,28 @@
+# Installed by install-ec-log.sh, which overwrites edits made here.
+#
+# Logs the console of the embedded controller to the journal, under the identifier ec-console, and a new panic record
+# of the embedded controller at start, under the identifier ec-panic, which the daily mail of journal-digest reports.
+# It reads the console once more when it stops, so the journal holds the console up to the shutdown. The kernel's
+# cros_ec_debugfs module reads the same console, so install-ec-log.sh blacklists it.
+
+[Unit]
+Description=Log the console and the panics of the embedded controller to the journal
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ec-log
+# ec-log exits with an error when /dev/cros_ec does not appear within a minute after it started.
+Restart=on-failure
+RestartSec=30s
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+DevicePolicy=closed
+# /dev/cros_ec is a misc device. A path would be resolved when the service starts, which can be before the device
+# appears.
+DeviceAllow=char-misc rw
+
+[Install]
+WantedBy=multi-user.target

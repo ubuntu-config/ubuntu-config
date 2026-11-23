@@ -46,6 +46,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     vendors' `.deb` files and programs downloaded daily, verified, and upgraded like any other package.
   - [Daily mail of failures and errors](#daily-mail-of-failures-and-errors): failed units, errors and crash reports
     from the journals of the system and of every user.
+  - [Embedded controller console in the journal](#embedded-controller-console-in-the-journal): the console of the
+    embedded controller kept in the journal, and its errors and crashes in the daily mail.
   - [Processor throttling](#processor-throttling): a top bar indicator naming the limit which holds the processor
     back, and a warning when the fan stops following the heat.
   - [Cooling, performance and battery tracked over time](#cooling-performance-and-battery-tracked-over-time): a
@@ -373,10 +375,32 @@ when there were none (`journal-digest.py`, `install-journal-digest.sh`, `cron.da
 journal of the system and of every user. A failed unit is listed with the last lines its failed run logged, which
 usually say why, and errors are grouped by what logged them and their text with the numbers in it left out, so that
 one which repeats is listed once with how often and when. New crash reports in `/var/crash` are listed too, since
-apport writes them without logging the crash as an error. Known noise can be left out with patterns in
+apport writes them without logging the crash as an error, and crashes of the
+[embedded controller](#embedded-controller-console-in-the-journal) with their whole record. Known noise can be left out with patterns in
 `journal-digest.ignore`. `journal-digest --since -7d` can be used to gather a week's load of messages to determine
 patterns from. With `--ignore journal-digest.ignore`, patterns are tried out from the repository before they are
 installed.
+
+### Embedded controller console in the journal
+
+A service logs the console of the embedded controller (EC) to the journal, where its output stays after the EC's own
+buffer of 24 KB has moved on, which happens within minutes during a boot and within hours while the laptop idles
+(`ec-log.py`, `install-ec-log.sh`, `systemd/ec-log.service`). Every 10 seconds it reads the new output and logs each
+line under the identifier `ec-console`, as the EC printed it, with the EC's own time in seconds since it started. Lines
+which look like errors are logged at priority err, so the [daily mail](#daily-mail-of-failures-and-errors) reports
+them, and the routine ones are left out by patterns in `journal-digest.ignore`. The service reads the console once more
+when it stops at shutdown, and at boot it logs what the EC printed while the laptop was off.
+
+When it starts, the service reads the EC's record of its last crash (a panic), which the EC keeps until it loses power,
+and which it marks as read at the first read. A record which was not read before is logged under `ec-panic`, with its
+decoding by `framework_tool --panicinfo`, and the daily mail shows it in full. A crash of the EC cuts the power of the
+laptop, so the record is found at the next boot.
+
+The kernel's `cros_ec_debugfs` module reads the same console every 10 seconds, into a buffer of 16 KB which drops the
+newest output at boot when more is waiting, and it marks the panic record as read when it loads, so
+`install-ec-log.sh` blacklists it. The EC keeps a single position up to which its console was read, so the service
+misses lines when `framework_tool --console` reads the console too. `journalctl -t ec-console -f` follows the console
+instead.
 
 ### Processor throttling
 
@@ -999,6 +1023,8 @@ The rest of this configuration assumes that firmware. With Framework's own firmw
 - A stalled sensor bus leaves the fan following frozen readings, which the processor throttling indicator warns about.
 - The indicator's menu shows no battery temperature, and the health benchmark records neither the battery's
   temperature nor the fan's duty cycle and does not check the fan's control, while it measures everything else.
+- While the battery does not charge on AC, the EC console prints a charge request every few seconds, which adds about
+  19,000 lines a day to the journal.
 
 ## Requirements
 
@@ -1056,10 +1082,12 @@ Run each script first without `--apply` to see what it would change. The general
    ./configure-ptyxis.sh --apply
    ```
 
-6. Install the daily measurement of cooling and performance, and the daily mail of failures and errors:
+6. Install the daily measurement of cooling and performance, the log of the embedded controller's console, and the
+   daily mail of failures and errors:
 
    ```sh
    ./install-health-benchmark.sh --apply
+   ./install-ec-log.sh --apply
    ./install-journal-digest.sh --apply
    ```
 

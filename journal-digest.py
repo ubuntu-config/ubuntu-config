@@ -7,7 +7,8 @@ Reads the systemd journal, of the system and of every user, and prints:
   run logged, which usually say why,
 - the messages logged at priority err or more urgent, grouped by the program which logged them and by their text
   with the numbers in it left out, with when and how often,
-- the crash reports apport wrote to /var/crash, since a crash is otherwise logged only at a lower priority.
+- the crash reports apport wrote to /var/crash, since a crash is otherwise logged only at a lower priority,
+- the new panic records of the embedded controller which ec-log logged, each in full.
 
 It prints nothing when there is nothing to report, so that cron mails only when there is. Each report starts right
 after the last journal entry the previous one read, so that days on which it did not run are covered by the next
@@ -49,6 +50,8 @@ CRASH_FIELDS = ('ProblemType', 'Date', 'ExecutablePath', 'Package', 'SignalName'
 
 # The message ID systemd logs, both as the system manager and as a user's manager, when a unit fails.
 UNIT_FAILED = 'd9b373ed55a64feb8242e02dbe79a49c'
+# The message ID ec-log logs a new panic record of the embedded controller with.
+EC_PANIC = 'd254011119394bf884b09f752a54ff3e'
 # Priority err and the more urgent ones.
 ERROR_PRIORITIES = ('0', '1', '2', '3')
 # The period the first report covers, when there is no previous one.
@@ -208,18 +211,24 @@ def crash_reports(since):
 
 
 def report(start, label, patterns, crashes_since):
-    """Prints the failures and errors logged from where the journalctl arguments in start begin to the end of the
-    journal, and the crash reports of crashes since crashes_since, in seconds since the epoch, under a heading naming
-    label as the start. Leaves out the entries the patterns match, and prints nothing when nothing is left.
+    """Prints the failures, errors and panics of the embedded controller logged from where the journalctl arguments
+    in start begin to the end of the journal, and the crash reports of crashes since crashes_since, in seconds since
+    the epoch, under a heading naming label as the start. Leaves out the failures, errors and crash reports the
+    patterns match, and prints nothing when nothing is left.
 
     Returns the cursor of the last entry read, or None when no entry matched.
     """
     entries = journal([*start, *(f'PRIORITY={priority}' for priority in ERROR_PRIORITIES), '+',
-                       f'MESSAGE_ID={UNIT_FAILED}'])
+                       f'MESSAGE_ID={UNIT_FAILED}', '+', f'MESSAGE_ID={EC_PANIC}'])
 
     failures = collections.OrderedDict()
     errors = collections.OrderedDict()
+    panics = []
     for entry in entries:
+        # Every panic is listed with its whole record, which the patterns do not apply to.
+        if text(entry.get('MESSAGE_ID')) == EC_PANIC:
+            panics.append(entry)
+            continue
         if text(entry.get('MESSAGE_ID')) == UNIT_FAILED:
             scope = 'user' if entry.get('USER_UNIT') else 'system'
             line = f'{text(entry.get("UNIT") or entry.get("USER_UNIT"))} ({scope}): {text(entry.get("UNIT_RESULT"))}'
@@ -243,7 +252,7 @@ def report(start, label, patterns, crashes_since):
         if not any(pattern.search(line) for pattern in patterns):
             crashes.append((crashed, path, line))
 
-    if failures or errors or crashes:
+    if failures or errors or crashes or panics:
         print(f'Since {label}:')
     if crashes:
         print()
@@ -252,6 +261,14 @@ def report(start, label, patterns, crashes_since):
             print()
             print(f'  {line}')
             print(f'         {datetime.datetime.fromtimestamp(crashed):%Y-%m-%d %H:%M}, {path}')
+    if panics:
+        print()
+        print(f'Embedded controller panics ({len(panics)}):')
+        for entry in panics:
+            print()
+            print(f'  {entry_time(entry):%Y-%m-%d %H:%M}, found at the boot after the crash:')
+            for line in text(entry.get('MESSAGE')).splitlines():
+                print(f'    {line}'.rstrip())
     if failures:
         print()
         print(f'Failed units ({sum(group["count"] for group in failures.values())}):')

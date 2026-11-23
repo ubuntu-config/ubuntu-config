@@ -61,6 +61,9 @@ if [ "$MODE" = apply ]; then
   step "Health benchmark"
   ./install-health-benchmark.sh --apply
 
+  step "EC log"
+  ./install-ec-log.sh --apply
+
   step "Journal digest"
   ./install-journal-digest.sh --apply
 
@@ -91,6 +94,9 @@ else
 
   step "Health benchmark"
   ./install-health-benchmark.sh
+
+  step "EC log"
+  ./install-ec-log.sh
 
   step "Journal digest"
   ./install-journal-digest.sh
