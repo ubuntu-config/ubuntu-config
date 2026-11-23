@@ -16,7 +16,7 @@ Description: Build the wasm sandboxed libraries, as Mozilla's own builds do.
  link finds both.
 Author: Mitar
 Forwarded: not-needed
-Last-Update: 2026-11-02
+Last-Update: 2026-11-23
 diff -ruN a/debian/build/rules.mk b/debian/build/rules.mk
 --- a/debian/build/rules.mk
 +++ b/debian/build/rules.mk
@@ -76,8 +76,8 @@ diff -ruN a/debian/control b/debian/control
 +	libc++abi-22-dev-wasm32,
 +	libclang-rt-22-dev-wasm32,
 +	wasi-libc,
- 	cargo-1.97 | cargo-1.94 | cargo-1.93 | cargo-1.90,
- 	rustc-1.97 | rustc-1.94 | rustc-1.93 | rustc-1.90,
+ 	cargo-1.97 | cargo-1.96 | cargo-1.95,
+ 	rustc-1.97 | rustc-1.96 | rustc-1.95,
  	nodejs (>= 12.22.12)
 diff -ruN a/debian/control.in b/debian/control.in
 --- a/debian/control.in
@@ -90,8 +90,8 @@ diff -ruN a/debian/control.in b/debian/control.in
 +	libc++abi-22-dev-wasm32,
 +	libclang-rt-22-dev-wasm32,
 +	wasi-libc,
- 	cargo-1.97 | cargo-1.94 | cargo-1.93 | cargo-1.90,
- 	rustc-1.97 | rustc-1.94 | rustc-1.93 | rustc-1.90,
+ 	cargo-1.97 | cargo-1.96 | cargo-1.95,
+ 	rustc-1.97 | rustc-1.96 | rustc-1.95,
  	nodejs (>= 12.22.12)
 diff -ruN a/debian/wasm-cxa-stubs.c b/debian/wasm-cxa-stubs.c
 --- /dev/null

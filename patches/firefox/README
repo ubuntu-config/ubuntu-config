@@ -20,8 +20,8 @@ Building
       ricotz/mozilla           an older cdbs, 0.4.182+really0.4.181~mt1, which still has the makefile class the
                                packaging includes. Ubuntu's cdbs 0.4.182 dropped it, and the packaging includes it
                                with -include, so without it the build silently skips compiling Firefox at all.
-      rust-toolchain/staging   Rust 1.97, the first alternative of the packaging's Rust build dependency. Ubuntu
-                               26.04 has 1.93.
+      rust-toolchain/staging   Rust 1.97, the first alternative of the packaging's Rust build dependency, which
+                               needs 1.95 or newer since Firefox 161. Ubuntu 26.04 has 1.93.
 
     Trusting them adds nothing beyond trusting the PPA's own binaries, which are built with them. The keys are
     the PPAs' signing keys as Launchpad lists them (fingerprints 9BE528DCBA6F4EAA89326FFBB998E53B7BCC7DB8 and
@@ -87,11 +87,11 @@ wayland-session-restore-no-activation.patch
     because every window was restored, is dropped. Links opened from Ptyxis carry a token too, which Ptyxis passes to
     the portal through libportal with patches/libportal/.
 
-    The requests are in nsWindowWaylandToplevel::NativeShow in widget/gtk/nsWindowWayland.cpp and nsWindow::SetFocus
-    in widget/gtk/nsWindow.cpp. The session test in tests/session/ checks that no restored window demands attention,
-    and tests/firefox/run-session.sh checks the token with every scenario, see tests/firefox/README. In Firefox 162,
-    merged for Mozilla bug 2090734 from D340739 on phabricator.services.mozilla.com. Drop the patch once the PPA's
-    Firefox is 162 or newer.
+    The requests are in nsWindowWaylandToplevelGtk::NativeShow in widget/gtk/nsWindowWaylandGtk.cpp and
+    nsWindow::SetFocus in widget/gtk/nsWindow.cpp. The session test in tests/session/ checks that no restored window
+    demands attention, and tests/firefox/run-session.sh checks the token with every scenario, see
+    tests/firefox/README. In Firefox 162, merged for Mozilla bug 2090734 from D340739 on
+    phabricator.services.mozilla.com. Drop the patch once the PPA's Firefox is 162 or newer.
 
 session-restore-launch-window.patch
     Make a start of Firefox behave like a launch while it runs: the saved windows return to their places, and the

@@ -10,24 +10,11 @@ Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2064100
 Forwarded: https://phabricator.services.mozilla.com/D339348
 Applied-Upstream: 162, https://github.com/mozilla-firefox/firefox/commit/a9569aec61960a4d84bb044b065b759a12d65d78
-Last-Update: 2026-11-07
+Last-Update: 2026-11-23
 diff --git a/widget/gtk/nsWindowWayland.cpp b/widget/gtk/nsWindowWayland.cpp
-index 6fa8086..8aac443 100644
 --- a/widget/gtk/nsWindowWayland.cpp
 +++ b/widget/gtk/nsWindowWayland.cpp
-@@ -115,6 +115,11 @@ void nsWindowWayland::ForceToplevelCommit() {
- 
-   Likewise we use GetWorkspaceID() to create/save the xdg_toplevel session
-   for later restore.
-+
-+  A window which does not wait for session restore cannot be restored, so it
-+  ignores MoveToWorkspace() and is added to the session under a new ID instead.
-+  This happens when a previous session is restored from the menu or a closed
-+  window is reopened.
- */
- 
- static nsCString GenerateWorkspaceID() {
-@@ -230,13 +235,19 @@ void nsWindowWaylandToplevel::MoveToWorkspace(
+@@ -372,13 +372,19 @@ void nsWindowWaylandToplevel::MoveToWorkspace(
    if (!nsAppShell::IsSessionRestoreSupported()) {
      return;
    }
@@ -49,3 +36,18 @@ index 6fa8086..8aac443 100644
    mWaitingToSessionRestore = false;
    if (mNeedsShow) {
      NativeShow(/* show */ true);
+diff --git a/widget/gtk/nsWindowWaylandGtk.cpp b/widget/gtk/nsWindowWaylandGtk.cpp
+--- a/widget/gtk/nsWindowWaylandGtk.cpp
++++ b/widget/gtk/nsWindowWaylandGtk.cpp
+@@ -53,6 +53,11 @@ static nsWindowWaylandPopupGtk* PopupAsGtk(nsWindowWaylandPopup* aPopup) {
+ 
+   Likewise we use GetWorkspaceID() to create/save the xdg_toplevel session
+   for later restore.
++
++  A window which does not wait for session restore cannot be restored, so it
++  ignores MoveToWorkspace() and is added to the session under a new ID instead.
++  This happens when a previous session is restored from the menu or a closed
++  window is reopened.
+ */
+ 
+ static struct xdg_toplevel* GetXdgToplevelFromGdkWindow(GdkWindow* aWindow) {

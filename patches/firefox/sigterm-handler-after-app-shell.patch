@@ -12,13 +12,12 @@ Description: Install the SIGTERM handler once the app shell exists, so that SIGT
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2086801
 Author: Mitar
 Forwarded: https://phabricator.services.mozilla.com/D340638
-Last-Update: 2026-11-11
+Last-Update: 2026-11-23
 ---
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
-index 2893f3d..c125a71 100644
 --- a/toolkit/xre/nsAppRunner.cpp
 +++ b/toolkit/xre/nsAppRunner.cpp
-@@ -6000,9 +6000,6 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
+@@ -6144,9 +6144,6 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
      if (IsWaylandEnabled()) {
        (void)WaylandDisplayGet();
      }
@@ -28,7 +27,7 @@ index 2893f3d..c125a71 100644
  #endif
    }
  
-@@ -6421,6 +6418,12 @@ nsresult XREMain::XRE_mainRun() {
+@@ -6636,6 +6633,12 @@ nsresult XREMain::XRE_mainRun() {
          g_unsetenv(name.get());
        }
        nsAppShell::InitSessionRestore();
@@ -42,7 +41,6 @@ index 2893f3d..c125a71 100644
  
  #ifdef XP_MACOSX
 diff --git a/widget/gtk/nsAppShell.cpp b/widget/gtk/nsAppShell.cpp
-index 0103af5..b94d486 100644
 --- a/widget/gtk/nsAppShell.cpp
 +++ b/widget/gtk/nsAppShell.cpp
 @@ -436,12 +436,19 @@ void nsAppShell::TermSignalHandler(int signo) {

@@ -8,12 +8,11 @@ Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2064100
 Forwarded: https://phabricator.services.mozilla.com/D339349
 Applied-Upstream: 162, https://github.com/mozilla-firefox/firefox/commit/89cef2ada96d1636ee0ae1fb7e46d065613fcb0e
-Last-Update: 2026-11-07
+Last-Update: 2026-11-23
 diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
-index abb9480..7a40442 100644
 --- a/widget/gtk/nsWindow.cpp
 +++ b/widget/gtk/nsWindow.cpp
-@@ -7730,14 +7730,34 @@ uint32_t nsWindow::GetMaxTouchPoints() const {
+@@ -7735,14 +7735,34 @@ uint32_t nsWindow::GetMaxTouchPoints() const {
  void nsWindow::SessionRestoreFinished() {
    LOGW("nsWindow::SessionRestoreFinished() set focus to [%p]",
         gFocusRequestWindow.get());

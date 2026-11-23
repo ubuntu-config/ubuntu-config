@@ -19,11 +19,11 @@ Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090734
 Forwarded: https://phabricator.services.mozilla.com/D340739
 Applied-Upstream: 162, https://github.com/mozilla-firefox/firefox/commit/30ef407069f4bffab01b27f48e4dffbbba4267c2
-Last-Update: 2026-11-19
+Last-Update: 2026-11-23
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
 --- a/toolkit/xre/nsAppRunner.cpp
 +++ b/toolkit/xre/nsAppRunner.cpp
-@@ -6412,6 +6412,9 @@ nsresult XREMain::XRE_mainRun() {
+@@ -6627,6 +6627,9 @@ nsresult XREMain::XRE_mainRun() {
  #endif
  
  #if defined(MOZ_WIDGET_GTK)
@@ -97,7 +97,7 @@ diff --git a/widget/gtk/nsAppShell.h b/widget/gtk/nsAppShell.h
 diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
 --- a/widget/gtk/nsWindow.cpp
 +++ b/widget/gtk/nsWindow.cpp
-@@ -426,7 +426,8 @@ nsWindow::nsWindow()
+@@ -427,7 +427,8 @@ nsWindow::nsWindow()
        mNeedsToRetryCapturingMouse(false),
        mX11HiddenPopupPositioned(false),
        mPopupTemporaryHidden(false),
@@ -107,7 +107,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
    SetSafeWindowSize(mSizeConstraints.mMaxSize);
  
    if (!gGlobalsInitialized) {
-@@ -1289,6 +1290,11 @@ void nsWindow::SetFocus(Raise aRaise, mozilla::dom::CallerType aCallerType) {
+@@ -1290,6 +1291,11 @@ void nsWindow::SetFocus(Raise aRaise, mozilla::dom::CallerType aCallerType) {
      if (StaticPrefs::mozilla_widget_raise_on_setfocus_AtStartup() &&
          toplevelWindow->mIsShown && toplevelWindow->mShell &&
          !gtk_window_is_active(GTK_WINDOW(toplevelWindow->mShell))) {
@@ -119,7 +119,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
        LOG("  toplevel is visible but not active, requesting activation [%p]",
            toplevelWindow.get());
  
-@@ -7733,7 +7739,11 @@ void nsWindow::SessionRestoreFinished() {
+@@ -7744,7 +7750,11 @@ void nsWindow::SessionRestoreFinished() {
    GList* toplevels = gtk_window_list_toplevels();
    for (GList* item = toplevels; item; item = item->next) {
      nsWindow* window = FromGtkWidget(GTK_WIDGET(item->data));
@@ -132,7 +132,7 @@ diff --git a/widget/gtk/nsWindow.cpp b/widget/gtk/nsWindow.cpp
        waitingWindows.AppendElement(window);
      }
    }
-@@ -7749,12 +7759,17 @@ void nsWindow::SessionRestoreFinished() {
+@@ -7760,12 +7770,17 @@ void nsWindow::SessionRestoreFinished() {
      }
    }
  
@@ -170,10 +170,10 @@ diff --git a/widget/gtk/nsWindow.h b/widget/gtk/nsWindow.h
    // all of our DND stuff
    void InitDragEvent(mozilla::WidgetDragEvent& aEvent);
  
-diff --git a/widget/gtk/nsWindowWayland.cpp b/widget/gtk/nsWindowWayland.cpp
---- a/widget/gtk/nsWindowWayland.cpp
-+++ b/widget/gtk/nsWindowWayland.cpp
-@@ -651,6 +651,7 @@ void nsWindowWaylandToplevel::CreateNative() {
+diff --git a/widget/gtk/nsWindowWaylandGtk.cpp b/widget/gtk/nsWindowWaylandGtk.cpp
+--- a/widget/gtk/nsWindowWaylandGtk.cpp
++++ b/widget/gtk/nsWindowWaylandGtk.cpp
+@@ -265,6 +265,7 @@ void nsWindowWaylandToplevelGtk::CreateNative() {
    mWaitingToSessionRestore =
        IsTopLevelWidget() &&
        nsAppShell::UpdateAndGetSessionState() == eSessionRestoring;
@@ -181,8 +181,8 @@ diff --git a/widget/gtk/nsWindowWayland.cpp b/widget/gtk/nsWindowWayland.cpp
  
    LOGVERBOSE("  mWaitingToSessionRestore %d", mWaitingToSessionRestore);
  }
-@@ -728,13 +729,17 @@ void nsWindowWaylandToplevel::NativeShow(bool aAction) {
-     LOG("nsWindowWaylandToplevel::NativeShow show\n");
+@@ -343,13 +344,17 @@ void nsWindowWaylandToplevelGtk::NativeShow(bool aAction) {
+     LOG("nsWindowWaylandToplevelGtk::NativeShow show\n");
  
      gtk_widget_show(mShell);
 -    SetUserTimeAndStartupTokenForActivatedWindow();

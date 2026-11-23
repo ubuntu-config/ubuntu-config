@@ -6,12 +6,11 @@ Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2064100
 Forwarded: https://phabricator.services.mozilla.com/D340272
 Applied-Upstream: 162, https://github.com/mozilla-firefox/firefox/commit/fcd09a257c7a2778aded5758c8fe645c30964835
-Last-Update: 2026-11-07
+Last-Update: 2026-11-23
 diff --git a/widget/gtk/nsAppShell.cpp b/widget/gtk/nsAppShell.cpp
-index 84f3b84..5c4cfc2 100644
 --- a/widget/gtk/nsAppShell.cpp
 +++ b/widget/gtk/nsAppShell.cpp
-@@ -626,12 +626,6 @@ bool nsAppShell::IsSessionRestoreSupported() {
+@@ -627,12 +627,6 @@ bool nsAppShell::IsSessionRestoreSupported() {
        LOGW("nsAppShell::IsSessionRestoreSupported(): disabled by pref.");
        return false;
      }

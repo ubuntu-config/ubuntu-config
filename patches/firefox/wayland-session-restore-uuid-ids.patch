@@ -9,12 +9,11 @@ Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090009
 Forwarded: https://phabricator.services.mozilla.com/D340286
 Applied-Upstream: 162, https://github.com/mozilla-firefox/firefox/commit/d7eb772ff65953be7b6a2556255e86e2d8307248
-Last-Update: 2026-11-07
+Last-Update: 2026-11-23
 diff --git a/widget/gtk/nsWindowWayland.cpp b/widget/gtk/nsWindowWayland.cpp
-index db3e183..9d5b722 100644
 --- a/widget/gtk/nsWindowWayland.cpp
 +++ b/widget/gtk/nsWindowWayland.cpp
-@@ -102,12 +102,11 @@ bool nsWindowWayland::CreateRestoreSession(bool aRestoreWindow) {
+@@ -323,12 +323,11 @@ bool nsWindowWaylandToplevel::CreateRestoreSessionImpl(
    }
  
    // If we have old profile / workspace ID or it's empty just replace it by
@@ -25,8 +24,8 @@ index db3e183..9d5b722 100644
 -  }
 -  if (NS_SUCCEEDED(ret)) {
 +  // UUID to avoid protocol error crash (Bug 2059617). Every ID saved for a
-+  // Wayland window is a UUID from GenerateWorkspaceID(), while one saved on
-+  // X11 is the workspace number, so an ID which is not a UUID is replaced.
++  // Wayland window is a UUID from GenerateWorkspaceID(), while an old one is
++  // an integer, so an ID which is not a UUID is replaced.
 +  nsID id;
 +  if (!id.Parse(mWorkspaceID)) {
      mWorkspaceID = GenerateWorkspaceID();
