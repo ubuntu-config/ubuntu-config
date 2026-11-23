@@ -29,6 +29,11 @@
 ^ec-console: [+()]*\[[0-9.]+ HC 0x(0008|0029) err 3\]$
 ^ec-console: [+()]*\[[0-9.]+ HC 0x(002b|011d|0134|400b) err 1\]$
 
+# "framework_tool --versions" asks the embedded controller about the PCIe link of a graphics module (GET_GPU_PCIE,
+# 0x3e1e), which only the Laptop 16 has, before it reads that module's retimer version. The controller of this laptop
+# does not have the command, and framework_tool then lists no such module.
+^ec-console: [+()]*\[[0-9.]+ HC 0x3e1e err 1\]$
+
 # The embedded controller, which answers the kernel's USB-C questions (UCSI), rejects reading the power offers of a
 # charger or dock as an incompatible partner (-95) when the kernel asks right after it is plugged in or the laptop
 # resumes, while later reads list them. It also answers the question for the alternate modes of a cable plug with
