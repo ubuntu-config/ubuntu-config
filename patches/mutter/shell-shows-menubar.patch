@@ -1,0 +1,505 @@
+Description: Let GNOME Shell tell GTK that it shows the menu bars of windows.
+ GTK hides the menu bar of a GtkApplicationWindow when the compositor announces the gtk_shell1 capability
+ GLOBAL_MENU_BAR, which mutter never announces. meta_display_set_shell_shows_menubar() adds the capability and
+ sends the capabilities to all clients again, and unsetting it removes the capability, after which GTK shows
+ the menu bars again.
+ .
+ The test wayland-gtk-shell-menubar checks that a client receives the capability when it is set, once only,
+ and loses it when it is unset, and that a client which binds gtk_shell1 while it is set receives it at
+ once.
+Author: Mitar
+Forwarded: not-needed
+Last-Update: 2026-11-24
+diff --git a/src/core/display-private.h b/src/core/display-private.h
+index f17a31f..745f992 100644
+--- a/src/core/display-private.h
++++ b/src/core/display-private.h
+@@ -278,6 +278,8 @@ gboolean meta_display_windows_are_interactable (MetaDisplay *display);
+ gboolean meta_display_grab_keeps_keyboard_focus (MetaDisplay  *display,
+                                                  ClutterActor *grab_actor);
+ 
++gboolean meta_display_get_shell_shows_menubar (MetaDisplay *display);
++
+ void meta_display_queue_focus (MetaDisplay *display,
+                                MetaWindow  *window);
+ 
+diff --git a/src/core/display.c b/src/core/display.c
+index c086b83..1a2a167 100644
+--- a/src/core/display.c
++++ b/src/core/display.c
+@@ -69,6 +69,7 @@
+ #include "meta/prefs.h"
+ 
+ #include "wayland/meta-wayland.h"
++#include "wayland/meta-wayland-gtk-shell.h"
+ #include "wayland/meta-wayland-input-device.h"
+ #include "wayland/meta-wayland-private.h"
+ #include "wayland/meta-wayland-tablet-seat.h"
+@@ -140,6 +141,8 @@ typedef struct _MetaDisplayPrivate
+    * mapped to the handler of their destroy signal. */
+   GHashTable *keyboard_focus_keeping_actors;
+ 
++  gboolean shell_shows_menubar;
++
+   MetaWindow *pointer_window;
+   gulong pointer_window_unmanaging_handler_id;
+ 
+@@ -1258,6 +1261,45 @@ meta_display_grab_keeps_keyboard_focus (MetaDisplay  *display,
+                                 grab_actor);
+ }
+ 
++/**
++ * meta_display_set_shell_shows_menubar:
++ * @display: a #MetaDisplay
++ * @shows_menubar: whether the shell shows the menu bars of windows
++ *
++ * Sets whether the shell shows the menu bars of windows itself, which
++ * Wayland clients learn from the gtk_shell1 capability GLOBAL_MENU_BAR. GTK
++ * hides the menu bar of a GtkApplicationWindow while it is set, and shows it
++ * again once it is unset. It is unset initially.
++ */
++void
++meta_display_set_shell_shows_menubar (MetaDisplay *display,
++                                      gboolean     shows_menubar)
++{
++  MetaDisplayPrivate *priv;
++  MetaWaylandCompositor *compositor;
++
++  g_return_if_fail (META_IS_DISPLAY (display));
++
++  priv = meta_display_get_instance_private (display);
++  shows_menubar = !!shows_menubar;
++  if (priv->shell_shows_menubar == shows_menubar)
++    return;
++
++  priv->shell_shows_menubar = shows_menubar;
++
++  compositor = meta_context_get_wayland_compositor (priv->context);
++  if (compositor)
++    meta_wayland_gtk_shell_update_capabilities (compositor);
++}
++
++gboolean
++meta_display_get_shell_shows_menubar (MetaDisplay *display)
++{
++  MetaDisplayPrivate *priv = meta_display_get_instance_private (display);
++
++  return priv->shell_shows_menubar;
++}
++
+ static void
+ on_is_grabbed_changed (ClutterStage *stage,
+                        GParamSpec   *pspec,
+diff --git a/src/meta/display.h b/src/meta/display.h
+index fff3eb1..64575ba 100644
+--- a/src/meta/display.h
++++ b/src/meta/display.h
+@@ -140,6 +140,10 @@ void meta_display_set_grab_keeps_keyboard_focus (MetaDisplay  *display,
+                                                  ClutterActor *actor,
+                                                  gboolean      keeps_focus);
+ 
++META_EXPORT
++void meta_display_set_shell_shows_menubar (MetaDisplay *display,
++                                           gboolean     shows_menubar);
++
+ META_EXPORT
+ guint meta_display_add_keybinding    (MetaDisplay         *display,
+                                       const char          *name,
+diff --git a/src/tests/meson.build b/src/tests/meson.build
+index 235fb08..c18b21a 100644
+--- a/src/tests/meson.build
++++ b/src/tests/meson.build
+@@ -961,6 +961,17 @@ wayland_test_cases = [
+       test_client_executables.get('kde-appmenu'),
+     ],
+   },
++  {
++    'name': 'wayland-gtk-shell-menubar',
++    'suite': 'wayland',
++    'sources': [
++      'wayland-gtk-shell-menubar-tests.c',
++      wayland_test_utils,
++    ],
++    'depends': [
++      test_client_executables.get('gtk-shell-menubar'),
++    ],
++  },
+   {
+     'name': 'wayland-fullscreen',
+     'suite': 'wayland',
+diff --git a/src/tests/wayland-gtk-shell-menubar-tests.c b/src/tests/wayland-gtk-shell-menubar-tests.c
+new file mode 100644
+index 0000000..179b4ac
+--- /dev/null
++++ b/src/tests/wayland-gtk-shell-menubar-tests.c
+@@ -0,0 +1,122 @@
++/*
++ * Copyright (C) 2026 Mitar
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "config.h"
++
++#include "meta-test/meta-context-test.h"
++#include "meta/display.h"
++#include "tests/meta-wayland-test-driver.h"
++#include "tests/meta-wayland-test-utils.h"
++
++static MetaContext *test_context;
++static MetaWaylandTestDriver *test_driver;
++
++static void
++gtk_shell_menubar_toggle (void)
++{
++  MetaDisplay *display = meta_context_get_display (test_context);
++  MetaWaylandTestClient *wayland_test_client;
++
++  wayland_test_client =
++    meta_wayland_test_client_new_with_args (test_context,
++                                            "gtk-shell-menubar",
++                                            "toggle",
++                                            NULL);
++  meta_wayland_test_driver_wait_for_sync_point (test_driver, 0);
++
++  meta_display_set_shell_shows_menubar (display, TRUE);
++  meta_wayland_test_driver_wait_for_sync_point (test_driver, 1);
++
++  /* Setting it again sends nothing, otherwise the third event the client
++   * receives has the bit set, which fails its check. */
++  meta_display_set_shell_shows_menubar (display, TRUE);
++  meta_display_set_shell_shows_menubar (display, FALSE);
++  meta_wayland_test_driver_wait_for_sync_point (test_driver, 2);
++
++  meta_wayland_test_client_finish (wayland_test_client);
++}
++
++static void
++gtk_shell_menubar_initially_set (void)
++{
++  MetaDisplay *display = meta_context_get_display (test_context);
++  MetaWaylandTestClient *wayland_test_client;
++
++  meta_display_set_shell_shows_menubar (display, TRUE);
++
++  wayland_test_client =
++    meta_wayland_test_client_new_with_args (test_context,
++                                            "gtk-shell-menubar",
++                                            "initially-set",
++                                            NULL);
++  meta_wayland_test_driver_wait_for_sync_point (test_driver, 0);
++  meta_wayland_test_client_finish (wayland_test_client);
++
++  meta_display_set_shell_shows_menubar (display, FALSE);
++}
++
++static void
++on_before_tests (void)
++{
++  MetaWaylandCompositor *compositor =
++    meta_context_get_wayland_compositor (test_context);
++
++  test_driver = meta_wayland_test_driver_new (compositor);
++}
++
++static void
++on_after_tests (void)
++{
++  g_clear_object (&test_driver);
++}
++
++static void
++init_tests (void)
++{
++  g_test_add_func ("/wayland/gtk-shell-menubar/toggle",
++                   gtk_shell_menubar_toggle);
++  g_test_add_func ("/wayland/gtk-shell-menubar/initially-set",
++                   gtk_shell_menubar_initially_set);
++}
++
++int
++main (int   argc,
++      char *argv[])
++{
++  g_autoptr (MetaContext) context = NULL;
++
++#ifdef MUTTER_PRIVILEGED_TEST
++  return 0;
++#endif
++
++  context = meta_create_test_context (META_CONTEXT_TEST_TYPE_HEADLESS,
++                                      META_CONTEXT_TEST_FLAG_NO_X11 |
++                                      META_CONTEXT_TEST_FLAG_TEST_CLIENT);
++  g_assert_true (meta_context_configure (context, &argc, &argv, NULL));
++
++  test_context = context;
++
++  init_tests ();
++
++  g_signal_connect (context, "before-tests",
++                    G_CALLBACK (on_before_tests), NULL);
++  g_signal_connect (context, "after-tests",
++                    G_CALLBACK (on_after_tests), NULL);
++
++  return meta_context_test_run_tests (META_CONTEXT_TEST (context),
++                                      META_TEST_RUN_FLAG_NONE);
++}
+diff --git a/src/tests/wayland-test-clients/gtk-shell-menubar.c b/src/tests/wayland-test-clients/gtk-shell-menubar.c
+new file mode 100644
+index 0000000..04c82ad
+--- /dev/null
++++ b/src/tests/wayland-test-clients/gtk-shell-menubar.c
+@@ -0,0 +1,123 @@
++/*
++ * Copyright (C) 2026 Mitar
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/*
++ * Test client for meta_display_set_shell_shows_menubar(): checks the
++ * GLOBAL_MENU_BAR bit of each gtk_shell1 capabilities event it receives and
++ * reports each event with a sync point. With "toggle" it expects the bit
++ * unset, set and unset again. With "initially-set" it expects the bit set in
++ * the event sent when it binds gtk_shell1.
++ */
++
++#include "config.h"
++
++#include <glib.h>
++#include <wayland-client.h>
++
++#include "wayland-test-client-utils.h"
++
++#include "gtk-shell-client-protocol.h"
++
++static struct gtk_shell1 *gtk_shell;
++static const char *test_name;
++static int capabilities_count;
++static gboolean running;
++
++static void
++gtk_shell_handle_capabilities (void              *data,
++                               struct gtk_shell1 *shell,
++                               uint32_t           capabilities)
++{
++  WaylandDisplay *display = data;
++  gboolean shows_menubar =
++    (capabilities & GTK_SHELL1_CAPABILITY_GLOBAL_MENU_BAR) != 0;
++
++  if (g_strcmp0 (test_name, "toggle") == 0)
++    {
++      g_assert_cmpint (capabilities_count, <, 3);
++      g_assert_true (shows_menubar == (capabilities_count == 1));
++    }
++  else
++    {
++      g_assert_cmpint (capabilities_count, ==, 0);
++      g_assert_true (shows_menubar);
++    }
++
++  test_driver_sync_point (display->test_driver, capabilities_count, NULL);
++  capabilities_count++;
++
++  if (g_strcmp0 (test_name, "toggle") != 0 || capabilities_count == 3)
++    running = FALSE;
++}
++
++static const struct gtk_shell1_listener gtk_shell_listener = {
++  gtk_shell_handle_capabilities,
++};
++
++static void
++handle_registry_global (void               *data,
++                        struct wl_registry *registry,
++                        uint32_t            id,
++                        const char         *interface,
++                        uint32_t            version)
++{
++  WaylandDisplay *display = data;
++
++  if (strcmp (interface, gtk_shell1_interface.name) == 0)
++    {
++      gtk_shell = wl_registry_bind (registry, id, &gtk_shell1_interface, 1);
++      gtk_shell1_add_listener (gtk_shell, &gtk_shell_listener, display);
++    }
++}
++
++static void
++handle_registry_global_remove (void               *data,
++                               struct wl_registry *registry,
++                               uint32_t            name)
++{
++}
++
++static const struct wl_registry_listener registry_listener = {
++  handle_registry_global,
++  handle_registry_global_remove
++};
++
++int
++main (int    argc,
++      char **argv)
++{
++  g_autoptr (WaylandDisplay) display = NULL;
++  struct wl_registry *registry;
++
++  g_assert_cmpint (argc, ==, 2);
++  test_name = argv[1];
++
++  display = wayland_display_new (WAYLAND_DISPLAY_CAPABILITY_TEST_DRIVER);
++
++  registry = wl_display_get_registry (display->display);
++  wl_registry_add_listener (registry, &registry_listener, display);
++  wl_display_roundtrip (display->display);
++  g_assert_nonnull (gtk_shell);
++
++  running = TRUE;
++  while (running)
++    wayland_display_dispatch (display);
++
++  wl_display_roundtrip (display->display);
++
++  return EXIT_SUCCESS;
++}
+diff --git a/src/tests/wayland-test-clients/meson.build b/src/tests/wayland-test-clients/meson.build
+index 6be9693..684f8b8 100644
+--- a/src/tests/wayland-test-clients/meson.build
++++ b/src/tests/wayland-test-clients/meson.build
+@@ -163,6 +163,9 @@ wayland_test_clients = [
+   {
+     'name': 'kde-appmenu',
+   },
++  {
++    'name': 'gtk-shell-menubar',
++  },
+   {
+     'name': 'invalid-geometry',
+   },
+diff --git a/src/wayland/meta-wayland-gtk-shell.c b/src/wayland/meta-wayland-gtk-shell.c
+index 051e689..82f421c 100644
+--- a/src/wayland/meta-wayland-gtk-shell.c
++++ b/src/wayland/meta-wayland-gtk-shell.c
+@@ -23,6 +23,7 @@
+ #include "wayland/meta-wayland-gtk-shell.h"
+ 
+ #include "core/bell.h"
++#include "core/display-private.h"
+ #include "core/window-private.h"
+ #include "wayland/meta-wayland-private.h"
+ #include "wayland/meta-wayland-surface-private.h"
+@@ -639,28 +640,29 @@ meta_wayland_gtk_shell_class_init (MetaWaylandGtkShellClass *klass)
+ }
+ 
+ static uint32_t
+-calculate_capabilities (void)
++calculate_capabilities (MetaWaylandGtkShell *gtk_shell)
+ {
++  MetaContext *context =
++    meta_wayland_compositor_get_context (gtk_shell->compositor);
++  MetaDisplay *display = meta_context_get_display (context);
+   uint32_t capabilities = 0;
+ 
+   if (!meta_prefs_get_show_fallback_app_menu ())
+     capabilities = GTK_SHELL1_CAPABILITY_GLOBAL_APP_MENU;
+ 
++  if (display && meta_display_get_shell_shows_menubar (display))
++    capabilities |= GTK_SHELL1_CAPABILITY_GLOBAL_MENU_BAR;
++
+   return capabilities;
+ }
+ 
+ static void
+-prefs_changed (MetaPreference pref,
+-               gpointer       user_data)
++update_capabilities (MetaWaylandGtkShell *gtk_shell)
+ {
+-  MetaWaylandGtkShell *gtk_shell = user_data;
+   uint32_t new_capabilities;
+   GList *l;
+ 
+-  if (pref != META_PREF_BUTTON_LAYOUT)
+-    return;
+-
+-  new_capabilities = calculate_capabilities ();
++  new_capabilities = calculate_capabilities (gtk_shell);
+   if (gtk_shell->capabilities == new_capabilities)
+     return;
+   gtk_shell->capabilities = new_capabilities;
+@@ -673,6 +675,18 @@ prefs_changed (MetaPreference pref,
+     }
+ }
+ 
++static void
++prefs_changed (MetaPreference pref,
++               gpointer       user_data)
++{
++  MetaWaylandGtkShell *gtk_shell = user_data;
++
++  if (pref != META_PREF_BUTTON_LAYOUT)
++    return;
++
++  update_capabilities (gtk_shell);
++}
++
+ static MetaWaylandGtkShell *
+ meta_wayland_gtk_shell_new (MetaWaylandCompositor *compositor)
+ {
+@@ -687,7 +701,7 @@ meta_wayland_gtk_shell_new (MetaWaylandCompositor *compositor)
+     g_error ("Failed to register a global gtk-shell object");
+ 
+   gtk_shell->compositor = compositor;
+-  gtk_shell->capabilities = calculate_capabilities ();
++  gtk_shell->capabilities = calculate_capabilities (gtk_shell);
+ 
+   meta_prefs_add_listener (prefs_changed, gtk_shell);
+ 
+@@ -701,3 +715,16 @@ meta_wayland_init_gtk_shell (MetaWaylandCompositor *compositor)
+                           meta_wayland_gtk_shell_new (compositor),
+                           g_object_unref);
+ }
++
++/*
++ * Sends the gtk_shell1 capabilities to all clients again if they changed.
++ */
++void
++meta_wayland_gtk_shell_update_capabilities (MetaWaylandCompositor *compositor)
++{
++  MetaWaylandGtkShell *gtk_shell =
++    g_object_get_data (G_OBJECT (compositor), "-meta-wayland-gtk-shell");
++
++  if (gtk_shell)
++    update_capabilities (gtk_shell);
++}
+diff --git a/src/wayland/meta-wayland-gtk-shell.h b/src/wayland/meta-wayland-gtk-shell.h
+index 0f25c65..d613999 100644
+--- a/src/wayland/meta-wayland-gtk-shell.h
++++ b/src/wayland/meta-wayland-gtk-shell.h
+@@ -24,3 +24,5 @@ G_DECLARE_FINAL_TYPE (MetaWaylandGtkShell, meta_wayland_gtk_shell,
+                       META, WAYLAND_GTK_SHELL, GObject)
+ 
+ void meta_wayland_init_gtk_shell (MetaWaylandCompositor *compositor);
++
++void meta_wayland_gtk_shell_update_capabilities (MetaWaylandCompositor *compositor);

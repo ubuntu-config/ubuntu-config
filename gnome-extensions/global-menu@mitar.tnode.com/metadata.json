@@ -1,0 +1,13 @@
+{
+  "uuid": "global-menu@mitar.tnode.com",
+  "name": "Global Menu",
+  "description": "Shows the menus of the focused window in the top bar, right of the workspace indicator, starting with the bold name of its application, whose menu has the items of the application and of the window. F10 and a tap of the left Alt open the menu of the application's name, and Alt with a menu's mnemonic opens that menu. It needs the patched mutter of ubuntu-config, which keeps the window active while a menu is open, and global-menu-registrar.service.",
+  "shell-version": [
+    "50"
+  ],
+  "session-modes": [
+    "user",
+    "unlock-dialog"
+  ],
+  "url": "https://gitlab.com/ubuntu-config/ubuntu-config"
+}

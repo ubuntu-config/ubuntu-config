@@ -84,6 +84,38 @@ The tests:
                   patches/gnome-session/restart-dbus-replace-queued-jobs.patch. Otherwise the next login uses the old
                   bus.
 
+The tests of the global menu, gnome-extensions/global-menu@mitar.tnode.com with patches/mutter/, each install the
+extension for the test user and enable it at login, with the tap of the left Alt sending XF86Launch8:
+
+  global-menu-login
+                  Signal started at login registers its menu with global-menu-registrar, which owns
+                  com.canonical.AppMenu.Registrar from before the applications started at login start, and exports it.
+  global-menu-gtk3, global-menu-gtk4, global-menu-qt
+                  The window of apps/menuapp.py hides its menu bar, and the top bar shows the application's name and
+                  File, Edit and View. Alt+F opens File with the keyboard focus on its first item, Right and Left move
+                  between the menus, Escape closes them, and F10 and a tap of the left Alt open the menu of the
+                  application's name, from which Right moves to File. Return, and clicks on items, also in the
+                  submenu of View, activate them, a checked item shows its mark, and the window never loses its active
+                  state or its keyboard focus meanwhile.
+  global-menu-app-name
+                  Ptyxis, which has no menus, has the menu of its name, which a tap of the left Alt opens, with New
+                  Window, the items of the window and Quit, and Minimize there minimizes the window.
+  global-menu-signal, global-menu-vscode, global-menu-chromium, global-menu-firefox, global-menu-libreoffice
+                  The application's menus and their keys, as for the test window, and an item which acts on the
+                  window: Toggle Full Screen in Signal and Full Screen in Visual Studio Code, which act only when
+                  Electron has a focused window, and New Window in the others. Firefox exports its menus without
+                  mnemonics, so there Alt+F stays with Firefox, and the keys are checked from the menu of the
+                  application's name.
+  global-menu-overflow
+                  The test window with 14 further menus, more than fit into the top bar: the menus which fit keep their
+                  full width, the others are submenus of the overflow button, Alt with the mnemonic of such a menu opens
+                  its submenu there, and its item acts when clicked. With an actor of 300 pixels added to the top bar
+                  before the menus, more of them move into the overflow button, and back once it is gone.
+  global-menu-lock
+                  Locking the screen hides the global menu and unlocking shows it again, while the GTK window keeps its
+                  menu bar hidden throughout. Disabling the extension shows the window's menu bar again, and
+                  global-menu-registrar gives up its name.
+
 The tests text-editor, ptyxis and firefox also check that no restored window demands attention. The test chromium
 only records such windows in its result.json: Chromium asks mutter to activate every window it restores, without an
 event of the user behind the request, so mutter marks each of them as demanding attention (Chromium issue 582928432),
@@ -99,8 +131,10 @@ first start, and continues where it left off, which is not its default, through 
 policy. The tests serve their pages from a web server on localhost, and set Firefox as the default browser.
 
 prepare-container.sh installs the session and the patched packages, so it needs the .deb files built here, and
-Chromium from the xtradeb repository in sources.list.d/. run-session-tests.sh then runs the tests. Both run as root in
-a privileged container, and refuse to run anywhere else. With rootless Docker, from the root of the repository, and
+Chromium from the xtradeb repository in sources.list.d/. The tests of the global menu need further applications, which
+it installs when SESSION_TEST_APPS names them: signal for global-menu-login and global-menu-signal, gtk for the tests
+of GTK and global-menu-overflow, qt, vscode and libreoffice. run-session-tests.sh then runs the tests. Both run as root
+in a privileged container, and refuse to run anywhere else. With rootless Docker, from the root of the repository, and
 the packages of the local repository:
 
   docker run --rm --privileged -v "$PWD:/repo:ro" -v /usr/local/lib/debs:/debs:ro -v /tmp/session-test:/out \

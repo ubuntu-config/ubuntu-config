@@ -18,8 +18,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
 - [Preferences](#preferences): the desktop changed to my liking, where others may prefer GNOME's defaults.
   - [Keyboard like on macOS](#keyboard-like-on-macos): Control under the thumb in every application, the terminal
     included.
-  - [One key for Claude Quick Entry](#one-key-for-claude-quick-entry): a tap of the right Super opens Claude
-    Desktop's Quick Entry.
+  - [Application menus in the top bar](#application-menus-in-the-top-bar): the menus of the focused window next to
+    the workspace indicator, as on macOS, for GTK, Qt, Electron, Chromium, Firefox and LibreOffice.
   - [Terminal shortcuts and palettes](#terminal-shortcuts-and-palettes): Ctrl+G for the next search match, copying as
     HTML, and selection colours in palettes.
   - [Chromium quits with Ctrl+Q](#chromium-quits-with-ctrlq): a small extension binds the key, and Chromium keeps its
@@ -37,6 +37,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     sound for the power cable, the lid and a low battery.
   - [Battery charge thresholds on Framework laptops](#battery-charge-thresholds-on-framework-laptops): Preserve
     Battery Health keeps the battery between 60% and 75%.
+  - [One key for Claude Quick Entry](#one-key-for-claude-quick-entry): a tap of the right Super opens Claude
+    Desktop's Quick Entry.
   - [Hardware tweaks](#hardware-tweaks): the touchscreen and the power button light off, keys repeating only after a
     second, and disk writes recorded for every unit.
 - [Additions](#additions): tools and features which Ubuntu does not have.
@@ -185,23 +187,44 @@ sends in GNOME](docs/keyboard-bottom-row.svg)
 Note: Framework supports swapping left Ctrl with Fn in BIOS so if you really want complete macOS layout
 with Fn key in the left bottom corner position, you can switch additionally those two keys there.
 
-### One key for Claude Quick Entry
+### Application menus in the top bar
 
-Tapping the right Super on its own opens Claude Desktop's Quick Entry, and tapping the left Super on its own opens
-the overview. Held together with other keys, both stay an ordinary Super, so Ctrl+Super+L, both right of the
-space bar, locks the screen.
+The top bar shows the menus of the focused window right of the workspace indicator, as macOS does, and the windows do
+not show their own menu bars. The bold name of the window's application comes first. Its menu has the items Ubuntu
+Dock shows for the application, such as New Window and the actions of its desktop file, then Minimize, Maximize or
+Restore and Close for the window, then Quit, or Quit with the number of windows when the application has several. An
+application without menus has only this one. Quit runs the quit action of an application which exports one, as GTK
+applications do, so an application which restores its windows restores all of them, and in most GTK applications this
+is the action of Ctrl+Q. The windows of other applications, such as Firefox, Chromium and Electron applications, are
+closed one by one. The Quit of Ubuntu Dock does the same. A tap of the physical Win key, which is Alt after the key
+rotation of [Keyboard like on macOS](#keyboard-like-on-macos), or F10, opens the menu of the application's name, and
+Alt with the underlined letter of a menu opens that menu. Firefox and some Electron applications export their menus
+without underlined letters, so there Alt with a letter stays with the application. The window stays active while one
+of these menus is open, and the keys of the menu go to the menu. Menus which do not fit into the left half of the top
+bar are submenus of a » button after the last menu which fits.
+
+GTK 3 and GTK 4 applications, Qt applications, Chromium, Firefox, LibreOffice and Electron applications such as Signal,
+Slack, Claude Desktop and Visual Studio Code show their menus there. GTK applications show their menu bars in their
+windows again as soon as the extension is disabled.
 
 Requirements:
 
-- A third key tapped on its own, next to GNOME's overview and locate-pointer keys, which sends a configured key
-  combination (`patches/mutter/`). The right Super sends XF86Launch9, which no physical key sends
-  (`configure-gnome-keys.sh`).
-- Claude Desktop's Quick Entry shortcut set to that key, in the application.
-
-Framework's BIOS can turn the key right of the right Alt into a Copilot key, but do not switch it and leave it as
-Right Ctrl, the default. This configuration supersedes a Copilot key: the key stays a full Super, and a tap of it
-opens Claude's Quick Entry. As a Copilot key, it would send a fixed key combination instead and could not act as
-Super.
+- The Global Menu extension (`gnome-extensions/global-menu@mitar.tnode.com`), installed and enabled by
+  `configure-gnome-desktop.sh`.
+- Mutter keeping the keyboard focus of the focused window while a menu of the extension is open, without which
+  Chromium and Electron make their window inactive and ignore the item chosen, offering KDE's protocol through which
+  Chromium, Firefox and Qt name their menus on Wayland, and telling GTK that the top bar shows its menu bars
+  (`patches/mutter/`).
+- A registrar of menus which runs before the applications started at login, because Electron exports its menu only
+  when a registrar runs at the moment it sets its menu, and GNOME Shell enables extensions only after those
+  applications started (`global-menu-registrar.py`, `systemd/user/global-menu-registrar.service`, installed by
+  `configure-gnome-desktop.sh`).
+- Firefox exporting its menu, which it does only with two preferences, set as defaults by an enterprise policy
+  (`firefox/policies.json`, installed by `configure-gnome-desktop.sh`), and with the `libdbusmenu-gtk3-4` package.
+- Visual Studio Code with its native title bar, without which it draws its menus itself and exports none
+  (`window.titleBarStyle` set to `native` by `configure-gnome-desktop.sh`, and left out of Settings Sync).
+- The tap of the physical Win key sending XF86Launch8, which opens the menu of the application's name
+  (`configure-gnome-keys.sh`, with the tap keys of [One key for Claude Quick Entry](#one-key-for-claude-quick-entry)).
 
 ### Terminal shortcuts and palettes
 
@@ -313,6 +336,23 @@ Requirements:
   charge stays in their range, and without them a charge from 95% up is kept (see [The embedded controller runs
   patched firmware](#the-embedded-controller-runs-patched-firmware)), and Battery Extender disabled in the BIOS, which
   would otherwise replace the thresholds with its own range after some days on AC.
+
+### One key for Claude Quick Entry
+
+Tapping the right Super on its own opens Claude Desktop's Quick Entry, and tapping the left Super on its own opens
+the overview. Held together with other keys, both stay an ordinary Super, so Ctrl+Super+L, both right of the
+space bar, locks the screen.
+
+Requirements:
+
+- Keys tapped on their own, next to GNOME's overview and locate-pointer keys, which send configured key combinations
+  (`patches/mutter/`). The right Super sends XF86Launch9, which no physical key sends (`configure-gnome-keys.sh`).
+- Claude Desktop's Quick Entry shortcut set to that key, in the application.
+
+Framework's BIOS can turn the key right of the right Alt into a Copilot key, but do not switch it and leave it as
+Right Ctrl, the default. This configuration supersedes a Copilot key: the key stays a full Super, and a tap of it
+opens Claude's Quick Entry. As a Copilot key, it would send a fixed key combination instead and could not act as
+Super.
 
 ### Hardware tweaks
 

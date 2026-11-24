@@ -113,12 +113,13 @@ set_key org.gnome.desktop.input-sources xkb-options \
 # The second layout is Slovenian on a US keyboard, reached with the switcher bound under wm.keybindings below.
 set_key org.gnome.desktop.input-sources sources "[('xkb', 'us'), ('xkb', 'si+us')]"
 
-# A Super key tapped on its own: the left one opens the overview, and the right one sends XF86Launch9, which no
-# physical key sends, for Claude Desktop's Quick Entry shortcut. The tap-key settings come from patches/mutter, and
-# without the patched mutter they are skipped.
-set_key org.gnome.mutter overlay-key   "'Super_L'"
-set_key org.gnome.mutter tap-key       "'Super_R'"
-set_key org.gnome.mutter tap-key-sends "'XF86Launch9'"
+# Modifiers tapped on their own: the left Super opens the overview, the right Super sends XF86Launch9, which no
+# physical key sends, for Claude Desktop's Quick Entry shortcut, and the left Alt, which is the physical Win key after
+# the rotation above, sends XF86Launch8, with which the global menu extension opens the menu with the name of the
+# focused window's application.
+# The tap-keys setting comes from patches/mutter, and without the patched mutter it is skipped.
+set_key org.gnome.mutter overlay-key "'Super_L'"
+set_key org.gnome.mutter tap-keys    "{'Super_R': 'XF86Launch9', 'Alt_L': 'XF86Launch8'}"
 
 set_key org.gnome.desktop.interface locate-pointer "false"
 

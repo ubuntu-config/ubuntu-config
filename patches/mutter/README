@@ -1,29 +1,35 @@
 Source package: mutter
 
 tap-key.patch
-    Lets a modifier tapped on its own send a key combination, configured with tap-key and
-    tap-key-sends in org.gnome.mutter. Mutter already gives a lone tap of a modifier a meaning for
-    two keys, the overlay key and the locate-pointer key, and this adds a third one, which sends the
-    key combination tap-key-sends names. Held together with other keys it stays an ordinary
-    modifier.
+    Lets modifiers tapped on their own send key combinations, configured with tap-keys in
+    org.gnome.mutter, a map from a modifier to the key combination it sends. Mutter already gives a
+    lone tap of a modifier a meaning for two keys, the overlay key and the locate-pointer key, and
+    this adds more. Held together with other keys, a tap key stays an ordinary modifier.
 
-    The combination goes through a virtual keyboard, so it reaches keybindings and global shortcuts
-    the same way a key pressed by hand does. configure-gnome-keys.sh has the right Super send
-    XF86Launch9, which no physical key sends, for Claude Desktop's Quick Entry shortcut.
+    The combination goes through a virtual keyboard, so keybinding processing handles it and it
+    reaches keybindings and global shortcuts. configure-gnome-keys.sh sets tap-keys: the right Super
+    sends XF86Launch9, which no physical key sends, for Claude Desktop's Quick Entry shortcut, and the
+    left Alt, which is the physical Win key with the repository's key rotation, sends XF86Launch8,
+    with which the global menu extension opens the menu with the name of the focused window's
+    application. The tap keys do nothing until configure-gnome-keys.sh has set tap-keys. The release
+    of the tapped key still reaches the focused window, which saw it pressed.
 
-    The test is added to src/tests/keybindings.c, which runs during the build. It holds the tap key
-    together with another key, which must send nothing, and then taps it on its own, which must
-    trigger a keybinding bound to the combination it sends.
+    The test is added to src/tests/keybindings.c, which runs during the build. It configures two tap
+    keys and holds each together with another key, also with the other tap key, which must send
+    nothing, and then taps each on its own, which must trigger a keybinding bound to the combination
+    it sends.
 
-    The tap is detected by process_special_modifier_key in src/core/keybindings.c, shared by all
-    three keys, and the settings are read in src/core/prefs.c next to the other two. After a version
-    bump, check that both still handle the overlay and locate-pointer keys this way, since the patch
-    follows them.
+    The tap is detected by process_special_modifier_key in src/core/keybindings.c, shared by the
+    overlay key, the locate-pointer key and the tap keys, and the settings are read in
+    src/core/prefs.c. After a version bump, check that both still handle the overlay and
+    locate-pointer keys this way, since the patch follows them.
 
     Check by hand after a rebuild and a new login:
 
       tap the right Super on its own     should send XF86Launch9, which opens Claude Quick Entry
       right Super with another key       should act as Super, for example Ctrl+Super+L locks
+      tap the physical Win key           should open the menu of the application's name in the top bar
+      physical Win key with another key  should act as Alt, for example Win+Tab switches windows
 
 xdg-session-management.patch
     Backport of https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/4806 from mutter 51. Mutter
@@ -216,3 +222,77 @@ wayland-client-exited-subprocess.patch
     first such start without the patch, and survived 20 of 20 with it. Ubuntu's Error Tracker has
     the same crash from gnome-shell 49 (Launchpad bug 2126624). Upstream's main has the same code,
     the fix is not proposed upstream yet.
+
+keep-keyboard-focus.patch
+    Adds meta_display_set_grab_keeps_keyboard_focus(), which marks an actor whose stage grabs leave
+    the Wayland keyboard focus of the focused window in place. GNOME Shell grabs the stage for every
+    menu it opens, which moves the keyboard focus away from the focused window, and Chromium and
+    Electron derive the active state of a window from its keyboard focus. A menu of the global menu
+    extension (gnome-extensions/global-menu@mitar.tnode.com) opened for such a window would make the
+    window inactive, and VS Code drops the action of a menu item when it finds no focused window. The
+    extension marks its menus.
+
+    During a marked grab, key events still go only to the grab. Repeating keys the window received as
+    pressed are released for it when the grab starts. When the grab ends, the keys the window received as
+    pressed and which were released meanwhile are released for it, and the modifier state is sent again,
+    so that Alt of Alt+F, which opens a menu, does not stay pressed for the window. The input method focus
+    leaves the window for the time of the grab.
+    Xwayland keeps the usual behavior. ClutterStage gains a grab-actor property, notified whenever the actor of its
+    topmost grab changes, and the keyboard focus is decided again then, which a move from a global
+    menu to the date menu needs.
+
+    The test wayland-keep-keyboard-focus, which runs during the build, covers a marked grab with a
+    held key and a held modifier, an unmarked grab, and a grab which moves from a marked actor to an
+    unmarked one and back. It fails when any of the parts is removed: releasing the held keys at the start
+    or at the end of the grab, sending the modifiers again, or deciding again when the grab actor changes.
+
+    Not proposed upstream yet. After a version bump, check meta_wayland_event_handler_invalidate_focus()
+    in src/wayland/meta-wayland-input.c, the one place which decides the keyboard focus during a
+    grab, and clutter_stage_notify_grab() in clutter/clutter/clutter-stage.c.
+
+    Check by hand after a rebuild and a new login, with VS Code focused:
+
+      open a menu in the top bar         VS Code's window should stay active
+      choose View > Toggle Full Screen   should make VS Code's window fullscreen
+
+kde-appmenu.patch
+    Offers KDE's org_kde_kwin_appmenu protocol, with which Chromium, Firefox and Qt name the D-Bus
+    address of the com.canonical.dbusmenu menu of a Wayland window, and gives the address to GNOME
+    Shell as the MetaWindow properties dbus-appmenu-service-name and dbus-appmenu-object-path, from
+    which the global menu extension reads the menu of the focused window. The protocol XML is a copy
+    from plasma-wayland-protocols. Electron does not use the protocol for its menus (electron issue
+    34335, pull request 54629 open), so the extension finds them through com.canonical.AppMenu.Registrar.
+
+    The test wayland-kde-appmenu, which runs during the build, has a client name, rename and release
+    an address, and checks the properties and their notifications after each step.
+
+    Local only: wayland-protocols merge request 493 (dbus_annotation) is the protocol GNOME has
+    agreed to, so far for accessibility. Once mutter implements it and the browsers name their
+    menus with it, this patch can go. After a version bump, check that mutter still has no
+    org_kde_kwin_appmenu of its own.
+
+    Check by hand after a rebuild and a new login, with wayland-info from the wayland-utils package:
+
+      wayland-info | grep appmenu        should list org_kde_kwin_appmenu_manager
+
+shell-shows-menubar.patch
+    Adds meta_display_set_shell_shows_menubar(), with which GNOME Shell announces the gtk_shell1
+    capability GLOBAL_MENU_BAR, and GTK hides the menu bar of a GtkApplicationWindow while the
+    capability is announced. The global menu extension sets it while it is enabled, so GTK 3 and GTK 4
+    applications show their menu bars again when the extension is disabled.
+
+    The test wayland-gtk-shell-menubar, which runs during the build, checks the capability event a
+    client receives when the switch changes, and the capability a client which binds gtk_shell1
+    receives while it is set.
+
+    Not proposed upstream yet. After a version bump, check calculate_capabilities() in
+    src/wayland/meta-wayland-gtk-shell.c.
+
+global-menu-symbols.patch (debian-series)
+    Lists the functions keep-keyboard-focus.patch, kde-appmenu.patch and shell-shows-menubar.patch add
+    in debian/libmutter-18-0.symbols. Ubuntu builds with DPKG_GENSYMBOLS_CHECK_LEVEL=4, which fails the
+    build on any exported symbol the file does not list. It changes the packaging, so it is applied
+    from debian-series rather than series.
+
+keep-keyboard-focus.patch, kde-appmenu.patch and shell-shows-menubar.patch apply in this order, since
+each edits lines next to the ones the previous one adds.

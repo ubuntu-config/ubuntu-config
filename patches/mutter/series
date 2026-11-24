@@ -10,3 +10,6 @@ keymap-state-before-key-events.patch
 restore-target-monitor.patch
 restore-maximized-client-monitor.patch
 wayland-client-exited-subprocess.patch
+keep-keyboard-focus.patch
+kde-appmenu.patch
+shell-shows-menubar.patch

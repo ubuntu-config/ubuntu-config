@@ -21,7 +21,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from session import REPO_DIR, TEST_EXTENSION, Checks, Session, cgroup_of, processes, unit_of, wait_for  # noqa: E402
 
-from gi.repository import GLib  # noqa: E402
+from gi.repository import Gio, GLib  # noqa: E402
 
 TESTS = {}
 
@@ -1132,6 +1132,528 @@ def restart_bus(session, checks, out_dir):
     subprocess.run(["systemctl", "--user", "stop", *names], check=False)
     subprocess.run(["systemctl", "--user", "reset-failed", *names], check=False)
     return {}
+
+
+GLOBAL_MENU = "global-menu@mitar.tnode.com"
+SIGNAL = "signal-desktop"
+
+
+def menu_registrations(session):
+    """Returns the registrations global-menu-registrar holds, as (sender, process ID, window ID, object path), or None
+    when it does not answer."""
+    try:
+        reply = session.bus.call_sync("local.GlobalMenuRegistrar", "/local/GlobalMenuRegistrar", "local.GlobalMenuRegistrar",
+                                      "ListRegistrations", None, GLib.VariantType("(a(suuo))"), Gio.DBusCallFlags.NONE, 5000,
+                                      None)
+    except GLib.Error:
+        return None
+    return reply.unpack()[0]
+
+
+def menu_titles(session, sender, path):
+    """Returns the labels of the top-level items of a com.canonical.dbusmenu menu, or the error as a string."""
+    try:
+        reply = session.bus.call_sync(sender, path, "com.canonical.dbusmenu", "GetLayout", GLib.Variant("(iias)", (0, 1, [])),
+                                      GLib.VariantType("(u(ia{sv}av))"), Gio.DBusCallFlags.NONE, 5000, None)
+    except GLib.Error as error:
+        return str(error)
+    _revision, (_id, _properties, children) = reply.unpack()
+    return [properties.get("label") for _child_id, properties, _children in children]
+
+
+def processes_of(name):
+    """Returns the IDs of the processes of the user whose executable has the given file name."""
+    pids = set()
+    for entry in pathlib.Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if pathlib.Path(os.readlink(entry / "exe")).name == name:
+                pids.add(int(entry.name))
+        except OSError:
+            pass
+    return pids
+
+
+@test
+def global_menu_login(session, checks, out_dir):
+    """An Electron application started at login exports its menu. Electron registers its menu with
+    com.canonical.AppMenu.Registrar only when the name has an owner at the moment it sets the menu, and GNOME Shell enables
+    extensions only after the applications started at login run, so global-menu-registrar.service owns the name from
+    before they start, for a user who enabled global-menu@mitar.tnode.com. Signal is the Electron application, natively on
+    Wayland, as GNOME starts it."""
+    home = pathlib.Path.home()
+    write_desktop_file(home / ".config/autostart", "signal-autostart", "Signal", f"exec {SIGNAL} --ozone-platform=wayland")
+    session.enable_extensions(GLOBAL_MENU)
+
+    session.login()
+    registrations = wait_for(lambda: [r for r in menu_registrations(session) or [] if r[1] in processes_of(SIGNAL)], 60)
+    checks.check("Signal started at login registered its menu", bool(registrations), str(menu_registrations(session)))
+    titles = menu_titles(session, registrations[0][0], registrations[0][3]) if registrations else None
+    checks.check("Signal exports its menu", isinstance(titles, list) and "File" in titles, str(titles))
+    session.logout()
+    return {"registrations": registrations, "titles": titles}
+
+
+APPS_DIR = REPO_DIR / "tests/session/apps"
+# The tap of the left Alt sends the key which opens the global menu, as configure-gnome-keys.sh sets it.
+TAP_KEYS = "{'Alt_L': 'XF86Launch8'}"
+
+
+def install_global_menu(session):
+    """Installs global-menu@mitar.tnode.com for the test user and enables it at the next login, with the tap of the left
+    Alt set up as configure-gnome-keys.sh sets it up."""
+    extensions = pathlib.Path.home() / ".local/share/gnome-shell/extensions"
+    extensions.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(extensions / GLOBAL_MENU, ignore_errors=True)
+    shutil.copytree(REPO_DIR / "gnome-extensions" / GLOBAL_MENU, extensions / GLOBAL_MENU)
+    session.enable_extensions(GLOBAL_MENU)
+    session.gsettings("org.gnome.mutter", "tap-keys", TAP_KEYS)
+    # The virtual pointer's first move into the top bar would otherwise open the overview through the hot corner.
+    session.gsettings("org.gnome.desktop.interface", "enable-hot-corners", "false")
+
+
+def menu_state(session):
+    return session.call("globalMenu")
+
+
+def wait_menu(session, predicate, timeout=10):
+    """Waits until the state of the global menu satisfies predicate, and returns that state, or the last one."""
+    return wait_for(lambda: (lambda state: state if predicate(state) else None)(menu_state(session)), timeout) \
+        or menu_state(session)
+
+
+def item_label(item):
+    """Returns the label of an item as globalMenu() describes it, without its marks."""
+    if isinstance(item, dict):
+        return item["label"]
+    return item.removeprefix("[x] ").removesuffix(" (disabled)")
+
+
+def read_events(path):
+    """Returns the events a test application logged, see apps/menuapp.py."""
+    try:
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def submenu_open(items, label):
+    """Returns whether the submenu with the given label is open among items as globalMenu() describes them, also
+    inside open submenus."""
+    for item in items or []:
+        if isinstance(item, dict):
+            if item["label"] == label and item["open"]:
+                return True
+            if item["open"] and submenu_open(item["items"], label):
+                return True
+    return False
+
+
+# The label of the overflow button of the global menu, which has the menus which do not fit into the top bar.
+OVERFLOW = "\u00bb"
+
+
+def menu_open(state, title):
+    """Returns whether the menu with the given title is open, also as a submenu of the overflow button."""
+    return state["open"] == title or (state["open"] == OVERFLOW and submenu_open(state["items"], title))
+
+
+def click_path(session, path):
+    """Clicks the titles and items of the global menu along path, such as ("View", "Zoom", "Zoom In"), waiting after each
+    click until the menu or submenu it opens is open. A title or submenu which did not open is clicked once more: an
+    application can change its menu while it is open, as Visual Studio Code does, which the test cannot wait for."""
+    for attempt in range(2):
+        session.call("clickGlobalMenu", path[0])
+        if menu_open(wait_menu(session, lambda state: menu_open(state, path[0]), 5), path[0]):
+            break
+        if attempt:
+            raise RuntimeError(f"{path[0]} did not open: {global_menu_internals(session)}")
+    for i, label in enumerate(path[1:], start=1):
+        last = i == len(path) - 1
+        for _ in range(2):
+            session.call("clickGlobalMenuItem", label)
+            if last or submenu_open(wait_menu(session, lambda state: submenu_open(state["items"], label), 5)["items"],
+                                    label):
+                break
+        time.sleep(0.5)
+
+
+def check_menu_titles(session, checks, name, titles, timeout=30):
+    """Checks that the global menu shows the application's name followed by the given titles, or by File and at least
+    one more menu when titles is None, and returns the titles of the menus."""
+    expected = (lambda found: found == titles) if titles else (lambda found: len(found) >= 2 and found[0] == "File")
+    state = wait_menu(session, lambda s: expected(s["titles"][1:]), timeout)
+    checks.check(f"{name}: the top bar shows the application's name followed by its menus {titles or 'File, ...'}",
+                 state["shown"] and expected(state["titles"][1:]) and state["titles"][0] != "", str(state))
+    return state["titles"][1:]
+
+
+def global_menu_internals(session):
+    """Returns what the global menu extension holds, for the details of a failed check: its grabbed keys, GNOME Shell's
+    action mode, the focused window, and the items of the first menu."""
+    return session.eval(f"""(() => {{
+        const extension = Main.extensionManager.lookup('{GLOBAL_MENU}')?.stateObj;
+        const bar = extension?._menuBar;
+        const first = bar?._buttons[0];
+        return {{
+            grabs: extension
+                ? [...extension._keyboard._grabs.keys()].map(a => imports.gi.Meta.external_binding_name_for_action(a))
+                : null,
+            actionMode: Main.actionMode,
+            focusWindow: global.display.focus_window?.title ?? null,
+            firstItems: first?.menu._getMenuItems().length ?? null,
+            focusOnOpen: bar?._focusOnOpen?.label.text ?? null,
+            menus: bar?._buttons.map(b => [b.label.text, b.menu._getMenuItems().length, b.menu.isOpen]) ?? null,
+            model: bar?._model?._topLevel?.().map(node => node.children?.length ?? null) ?? null,
+        }};
+    }})()""")
+
+
+def check_menu_keys(session, checks, name, titles, mnemonic):
+    """Checks the keys of the global menu. F10 and a tap of the left Alt open the menu of the application's name with
+    the keyboard focus on its first item, and Right moves from it to the first menu. Alt with the mnemonic of the first
+    menu opens that menu with the keyboard focus on its first item. Right and Left move to the next menu and back, and
+    Escape closes the menu. An application which exports no mnemonics, as Firefox, has mnemonic None, and the keys are
+    checked from the menu of the application's name."""
+    first, second = titles[0], titles[1]
+    app = menu_state(session)["titles"][0]
+
+    def first_item(state):
+        return next((item_label(i) for i in state["items"] or [] if i != "---"), None)
+
+    for how, key in (("F10", "F10"), ("a tap of the left Alt", "Alt_L")):
+        session.press(key)
+        state = wait_menu(session, lambda s: s["open"] == app)
+        checks.check(f"{name}: {how} opens the menu of the application's name with the keyboard focus on its first item",
+                     state["open"] == app and state["focus"] == first_item(state),
+                     str(state) if state["open"] == app else f"{state}, {global_menu_internals(session)}")
+        session.press("Escape")
+        wait_menu(session, lambda s: s["open"] is None)
+
+    session.press("Alt_L")
+    wait_menu(session, lambda s: s["open"] == app)
+    session.press("Right")
+    state = wait_menu(session, lambda s: s["open"] == first)
+    checks.check(f"{name}: Right moves from the menu of the application's name to {first}", state["open"] == first,
+                 str(state) if state["open"] == first else f"{state}, {global_menu_internals(session)}")
+    if mnemonic:
+        session.press("Escape")
+        wait_menu(session, lambda s: s["open"] is None)
+        session.press(mnemonic, "Alt_L")
+        state = wait_menu(session, lambda s: s["open"] == first)
+        checks.check(f"{name}: Alt+{mnemonic.upper()} opens {first} with the keyboard focus on its first item",
+                     state["open"] == first and state["focus"] == first_item(state), str(state))
+        # Right on a submenu, as LibreOffice's first item New is, opens the submenu, so the focus moves on to an item.
+        submenus = {i["label"] for i in state["items"] or [] if isinstance(i, dict)}
+        for _ in range(5):
+            if state["focus"] not in submenus:
+                break
+            session.press("Down")
+            state = wait_menu(session, lambda s, focus=state["focus"]: s["focus"] != focus, 2)
+    session.press("Right")
+    state = wait_menu(session, lambda s: s["open"] == second)
+    checks.check(f"{name}: Right moves to {second}", state["open"] == second, str(state))
+    session.press("Left")
+    state = wait_menu(session, lambda s: s["open"] == first)
+    checks.check(f"{name}: Left moves back to {first}", state["open"] == first, str(state))
+    session.press("Escape")
+    state = wait_menu(session, lambda s: s["open"] is None)
+    checks.check(f"{name}: Escape closes the menu", state["open"] is None, str(state))
+
+def menu_app(session, checks, out_dir, toolkit):
+    """The test application apps/menuapp.py, whose menu bar the global menu shows instead of the window: the keys open
+    its menus, its items act when clicked or chosen with the keyboard, also in a submenu, a checked item shows its mark,
+    and the window keeps its keyboard focus throughout."""
+    install_global_menu(session)
+    log = out_dir / f"menuapp-{toolkit}.log"
+    session.login()
+    session.call("spawnCommandLine", f"env QT_QPA_PLATFORM=wayland python3 {APPS_DIR}/menuapp.py {toolkit} {log}")
+    title = f"menu-test-{toolkit}"
+    window = shown_window(session, None, lambda w: w["title"] == title, 30)
+    checks.check(f"{toolkit}: the window opened", bool(window), str(window_summary(window)))
+
+    titles = ["File", "Edit", "View"]
+    check_menu_titles(session, checks, toolkit, titles)
+    hidden = wait_for(lambda: [e["value"] for e in read_events(log) if e["event"] == "menubar-hidden"], 10)
+    checks.check(f"{toolkit}: the window hides its own menu bar", bool(hidden) and all(hidden), str(hidden))
+    check_menu_keys(session, checks, toolkit, titles, "f")
+
+    def activated():
+        return [e["value"] for e in read_events(log) if e["event"] == "activate"]
+
+    session.press("f", "Alt_L")
+    wait_menu(session, lambda s: s["open"] == "File")
+    session.press("Return")
+    checks.check(f"{toolkit}: Return activates the item with the keyboard focus, New",
+                 wait_for(lambda: "_New" in activated(), 5), str(activated()))
+    click_path(session, ["Edit", "Paste"])
+    checks.check(f"{toolkit}: clicking Edit, Paste activates Paste", wait_for(lambda: "_Paste" in activated(), 5),
+                 str(activated()))
+    click_path(session, ["View", "Zoom", "Zoom In"])
+    checks.check(f"{toolkit}: clicking View, Zoom, Zoom In activates the item of the submenu",
+                 wait_for(lambda: "Zoom _In" in activated(), 5), str(activated()))
+    click_path(session, ["View", "Show Toolbar"])
+    checks.check(f"{toolkit}: clicking View, Show Toolbar activates it", wait_for(lambda: "Show _Toolbar" in activated(), 5),
+                 str(activated()))
+    session.call("clickGlobalMenu", "View")
+    state = wait_menu(session, lambda s: s["open"] == "View" and "[x] Show Toolbar" in (s["items"] or []))
+    checks.check(f"{toolkit}: Show Toolbar shows its check mark", "[x] Show Toolbar" in (state["items"] or []), str(state))
+    session.press("Escape")
+
+    events = read_events(log)
+    lost = [e for e in events if e["event"] in ("active", "focus") and e["value"] is False]
+    checks.check(f"{toolkit}: the window never lost its active state or its keyboard focus", not lost, str(events))
+    session.logout()
+    return {"events": events}
+
+
+@test
+def global_menu_gtk3(session, checks, out_dir):
+    """The global menu with a GTK 3 window, which GTK exports through gtk_shell1, see menu_app()."""
+    return menu_app(session, checks, out_dir, "gtk3")
+
+
+@test
+def global_menu_gtk4(session, checks, out_dir):
+    """The global menu with a GTK 4 window, which GTK exports through gtk_shell1, see menu_app()."""
+    return menu_app(session, checks, out_dir, "gtk4")
+
+
+@test
+def global_menu_qt(session, checks, out_dir):
+    """The global menu with a Qt 6 window, which Qt exports over com.canonical.dbusmenu and names with
+    org_kde_kwin_appmenu, see menu_app()."""
+    return menu_app(session, checks, out_dir, "qt")
+
+
+@test
+def global_menu_app_name(session, checks, out_dir):
+    """An application without menus, Ptyxis, has the menu of its name: the items of its desktop file, the items of the
+    window, and Quit, and Minimize there minimizes the window."""
+    install_global_menu(session)
+    session.login()
+    session.call("activateApp", PTYXIS)
+    window = shown_window(session, PTYXIS, lambda w: True, 30)
+    checks.check("Ptyxis opened a window", bool(window), str(window_summary(window)))
+    # The focus of a window at its start is the subject of the test ptyxis, and a window which did not receive it in a
+    # slow session is activated here.
+    if window and not window["focused"]:
+        session.call("activateWindow", window["id"])
+        window = shown_window(session, PTYXIS, lambda w: w["id"] == window["id"], 10)
+    state = wait_menu(session, lambda s: len(s["titles"]) == 1 and s["titles"][0] != "", 10)
+    checks.check("the top bar shows only the name of Ptyxis", len(state["titles"]) == 1 and state["titles"][0] != "",
+                 str(state))
+    name = state["titles"][0]
+    session.press("Alt_L")
+    state = wait_menu(session, lambda s: s["open"] == name)
+    checks.check("a tap of the left Alt opens the menu of the application's name", state["open"] == name, str(state))
+    labels = [item_label(i) for i in state["items"] or []]
+    checks.check("the menu has New Window, the window's items and Quit",
+                 "New Window" in labels and "Minimize" in labels and "Close" in labels and labels[-1] == "Quit", str(labels))
+    session.call("clickGlobalMenuItem", "Minimize")
+    minimized = wait_for(lambda: next((w["minimized"] for w in session.windows(PTYXIS) if w["id"] == window["id"]), None), 5)
+    checks.check("Minimize minimizes the window", bool(minimized), str(session.windows(PTYXIS)))
+    session.logout()
+    return {"labels": labels}
+
+
+def electron_or_browser(session, checks, name, command, title, titles, mnemonic, effect, timeout=60):
+    """Starts an application with a menu, whose window has title in its title, checks the titles and keys of the global
+    menu, then clicks the path of effect, (path, description, check), and checks the effect with check(window), which
+    returns a truthy value when it happened."""
+    install_global_menu(session)
+    session.login()
+    session.call("spawnCommandLine", command)
+    window = shown_window(session, None, lambda w: title in (w["title"] or ""), timeout)
+    checks.check(f"{name}: the window opened, focused", bool(window and window["focused"]), str(window_summary(window)))
+    if not window:
+        return {}
+    titles = check_menu_titles(session, checks, name, titles, timeout)
+    if len(titles) >= 2:
+        check_menu_keys(session, checks, name, titles, mnemonic)
+    path, description, check = effect
+    click_path(session, path)
+    checks.check(f"{name}: clicking {', '.join(path)} {description}", wait_for(lambda: check(window), 10),
+                 str(session.windows()))
+    result = {"menu": menu_state(session), "windows": session.windows()}
+    session.logout()
+    return result
+
+
+def fullscreen(session):
+    return lambda window: next((w["fullscreen"] for w in session.windows() if w["id"] == window["id"]), False)
+
+
+def more_windows(session):
+    return lambda window: len(session.windows(window["app"])) > 1
+
+
+@test
+def global_menu_signal(session, checks, out_dir):
+    """Signal, an Electron application, registers its menu with global-menu-registrar, and its window is found by its
+    process. Toggle Full Screen in its View menu acts on the window only when Electron has a focused window, which the
+    window keeps while the menu is open only with patches/mutter/keep-keyboard-focus.patch."""
+    return electron_or_browser(session, checks, "Signal", f"{SIGNAL} --ozone-platform=wayland", "Signal",
+                               ["File", "Edit", "View", "Window", "Help"], "f",
+                               (["View", "Toggle Full Screen"], "makes the window fullscreen", fullscreen(session)))
+
+
+@test
+def global_menu_vscode(session, checks, out_dir):
+    """Visual Studio Code, with the native title bar configure-gnome-desktop.sh sets, registers its menu as Electron
+    does. Full Screen in its View menu acts only when Electron has a focused window. New Window would be the obvious
+    item, but in the container Visual Studio Code sometimes exits when it opens a second window, also with
+    Ctrl+Shift+N and without the global menu."""
+    settings = pathlib.Path.home() / ".config/Code/User/settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text('{"window.titleBarStyle": "native", "workbench.startupEditor": "none", '
+                        '"security.workspace.trust.enabled": false}\n')
+    return electron_or_browser(session, checks, "VS Code", "code --ozone-platform=wayland --new-window", "Visual Studio Code",
+                               ["File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help"], "f",
+                               (["View", "Appearance", "Full Screen"], "makes the window fullscreen", fullscreen(session)))
+
+
+@test
+def global_menu_chromium(session, checks, out_dir):
+    """Chromium names its menu with org_kde_kwin_appmenu, and New Window in its File menu opens a window."""
+    return electron_or_browser(session, checks, "Chromium", "chromium --ozone-platform=wayland about:blank", "Chromium",
+                               None, "f", (["File", "New window"], "opens a second window", more_windows(session)))
+
+
+@test
+def global_menu_firefox(session, checks, out_dir):
+    """Firefox names its menu with org_kde_kwin_appmenu with the preferences of firefox/policies.json, and New Window in
+    its File menu opens a window. Firefox exports its menus without mnemonics, so Alt with a letter stays with
+    Firefox."""
+    return electron_or_browser(session, checks, "Firefox", "firefox about:blank", "Firefox", None, None,
+                               (["File", "New Window"], "opens a second window", more_windows(session)))
+
+
+@test
+def global_menu_libreoffice(session, checks, out_dir):
+    """LibreOffice Writer exports its menu bar through gtk_shell1 with a GMenuModel, and New Window in its Window menu
+    opens a window."""
+    # The dialogs of a first start would take the focus from the document's window, as a new profile has them.
+    version = re.search(r"LibreOffice (\d+\.\d+)", subprocess.run(["soffice", "--version"], capture_output=True,
+                                                                  text=True).stdout)
+    profile = pathlib.Path.home() / ".config/libreoffice/4/user"
+    profile.mkdir(parents=True, exist_ok=True)
+    (profile / "registrymodifications.xcu").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n'
+        '<item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="FirstRun" oor:op="fuse">'
+        '<value>false</value></prop></item>\n'
+        '<item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="ShowTipOfTheDay" oor:op="fuse">'
+        '<value>false</value></prop></item>\n'
+        '<item oor:path="/org.openoffice.Setup/Product"><prop oor:name="ooSetupLastVersion" oor:op="fuse">'
+        f'<value>{version.group(1) if version else ""}</value></prop></item>\n'
+        '</oor:items>\n')
+    # The splash screen, which comes first, has the title "LibreOffice" with the version.
+    return electron_or_browser(session, checks, "LibreOffice", "env SAL_USE_VCLPLUGIN=gtk3 soffice --writer --norestore",
+                               "LibreOffice Writer", None, "f", (["Window", "New Window"], "opens a second window",
+                                                                 more_windows(session)))
+
+
+def registrar_owner(session):
+    """Returns the owner of com.canonical.AppMenu.Registrar, or None."""
+    try:
+        reply = session.bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetNameOwner",
+                                      GLib.Variant("(s)", ("com.canonical.AppMenu.Registrar",)), GLib.VariantType("(s)"),
+                                      Gio.DBusCallFlags.NONE, 5000, None)
+    except GLib.Error:
+        return None
+    return reply.unpack()[0]
+
+
+@test
+def global_menu_lock(session, checks, out_dir):
+    """Locking the screen hides the global menu, and GTK windows keep their menu bars hidden meanwhile, since the
+    extension stays enabled on the lock screen, so that the windows do not change their layouts twice. Disabling the
+    extension gives the menu bars back to GTK windows, and global-menu-registrar gives up its name."""
+    install_global_menu(session)
+    log = out_dir / "menuapp-gtk4.log"
+    session.login()
+    session.call("spawnCommandLine", f"python3 {APPS_DIR}/menuapp.py gtk4 {log}")
+    shown_window(session, None, lambda w: w["title"] == "menu-test-gtk4", 30)
+    check_menu_titles(session, checks, "gtk4", ["File", "Edit", "View"])
+
+    def hidden_events():
+        return [e["value"] for e in read_events(log) if e["event"] == "menubar-hidden"]
+
+    session.call("lock")
+    checks.check("the screen is locked", wait_for(lambda: session.call("locked"), 5))
+    state = wait_menu(session, lambda s: not s["shown"])
+    checks.check("the global menu is hidden while the screen is locked", not state["shown"], str(state))
+    session.call("unlock")
+    state = wait_menu(session, lambda s: s["shown"] and s["titles"][1:] == ["File", "Edit", "View"])
+    checks.check("the global menu returns after unlocking", state["shown"] and state["titles"][1:] == ["File", "Edit", "View"],
+                 str(state))
+    checks.check("the window kept its menu bar hidden through the lock",
+                 bool(hidden_events()) and all(hidden_events()), str(hidden_events()))
+
+    session.gsettings("org.gnome.shell", "enabled-extensions", f"['{TEST_EXTENSION}']")
+    checks.check("disabling the extension shows the window's menu bar again",
+                 wait_for(lambda: hidden_events()[-1:] == [False], 10), str(hidden_events()))
+    checks.check("disabling the extension makes global-menu-registrar give up its name",
+                 wait_for(lambda: registrar_owner(session) is None, 10), str(registrar_owner(session)))
+    session.logout()
+    return {"menubar_hidden": hidden_events()}
+
+
+EXTRA_MENUS = [f"Extra {letter}" for letter in "GHIJKLMNOPQRSU"]
+
+
+@test
+def global_menu_overflow(session, checks, out_dir):
+    """A window with more menus than fit into the top bar, the test window of apps/menuapp.py with 14 further menus.
+    The menus which fit keep their full width, and the others are submenus of the overflow button. Alt with the mnemonic
+    of such a menu opens its submenu there, and its item acts when clicked. When the top bar has less space, as with an
+    actor of 300 pixels added before the menus, more menus move into the overflow button, and back when it is gone."""
+    install_global_menu(session)
+    log = out_dir / "menuapp-gtk4.log"
+    session.login()
+    session.call("spawnCommandLine", f"env MENUAPP_EXTRA_MENUS={len(EXTRA_MENUS)} python3 {APPS_DIR}/menuapp.py gtk4 {log}")
+    window = shown_window(session, None, lambda w: w["title"] == "menu-test-gtk4", 30)
+    checks.check("the window opened", bool(window), str(window_summary(window)))
+
+    titles = ["File", "Edit", "View", *EXTRA_MENUS]
+    # Right after the buttons are created, the menus which fit are counted only at the next layout of the top bar.
+    state = wait_menu(session, lambda s: s["titles"][1:] == titles and 0 < len(s["overflowed"]) < len(titles), 30)
+    overflowed = state["overflowed"]
+    checks.check("the menus which do not fit are the last ones, in the overflow button",
+                 bool(overflowed) and len(overflowed) < len(titles) and overflowed == titles[len(titles) - len(overflowed):],
+                 str(state))
+    check_menu_keys(session, checks, "overflow", titles, "f")
+
+    last = overflowed[-1]
+    letter = last[-1]
+    session.press(letter.lower(), "Alt_L")
+    state = wait_menu(session, lambda s: menu_open(s, last) and s["focus"] == f"Item {letter}")
+    checks.check(f"Alt+{letter} opens {last} in the overflow button with the keyboard focus on its item",
+                 menu_open(state, last) and state["focus"] == f"Item {letter}", str(state))
+    session.press("Escape")
+    wait_menu(session, lambda s: s["open"] is None)
+
+    def activated():
+        return [e["value"] for e in read_events(log) if e["event"] == "activate"]
+
+    click_path(session, [last, f"Item {letter}"])
+    checks.check(f"clicking {last}, Item {letter} in the overflow button activates the item",
+                 wait_for(lambda: f"Item _{letter}" in activated(), 5), str(activated()))
+
+    session.eval("(() => { global._spacer = new imports.gi.St.Widget({width: 300}); "
+                 "Main.panel._leftBox.insert_child_at_index(global._spacer, 0); return 1; })()")
+    narrower = wait_menu(session, lambda s: len(s["overflowed"]) > len(overflowed))
+    checks.check("with less space in the top bar, more menus move into the overflow button",
+                 len(narrower["overflowed"]) > len(overflowed), f"{narrower['overflowed']}, was {overflowed}")
+    session.eval("(() => { global._spacer.destroy(); return 1; })()")
+    wider = wait_menu(session, lambda s: s["overflowed"] == overflowed)
+    checks.check("with the space back, the same menus fit again", wider["overflowed"] == overflowed,
+                 f"{wider['overflowed']}, was {overflowed}")
+    session.logout()
+    return {"overflowed": overflowed, "narrower": narrower["overflowed"]}
 
 
 def main():

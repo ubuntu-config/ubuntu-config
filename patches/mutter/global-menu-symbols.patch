@@ -1,0 +1,28 @@
+Description: List the functions the global menu patches add in the symbols file.
+ keep-keyboard-focus.patch, kde-appmenu.patch and shell-shows-menubar.patch add functions to libmutter-18,
+ and Ubuntu builds with DPKG_GENSYMBOLS_CHECK_LEVEL=4, which fails the build on any exported symbol the
+ symbols file does not list.
+Author: Mitar
+Forwarded: not-needed
+Last-Update: 2026-11-24
+--- a/debian/libmutter-18-0.symbols
++++ b/debian/libmutter-18-0.symbols
+@@ -238,7 +238,9 @@
+  meta_display_lookup_stack_id@Base 43.0
+  meta_display_remove_keybinding@Base 43.0
+  meta_display_request_pad_osd@Base 43.0
++ meta_display_set_grab_keeps_keyboard_focus@Base 50.1
+  meta_display_set_input_focus@Base 43.0
++ meta_display_set_shell_shows_menubar@Base 50.1
+  meta_display_sort_windows_by_stacking@Base 43.0
+  meta_display_ungrab_accelerator@Base 43.0
+  meta_display_unset_input_focus@Base 43.0
+@@ -848,6 +850,8 @@
+  meta_window_get_client_content_rect@Base 47.3
+  meta_window_get_client_type@Base 43.0
+  meta_window_get_compositor_private@Base 43.0
++ meta_window_get_dbus_appmenu_object_path@Base 50.1
++ meta_window_get_dbus_appmenu_service_name@Base 50.1
+  meta_window_get_description@Base 43.0
+  meta_window_get_display@Base 43.0
+  meta_window_get_frame_rect@Base 43.0

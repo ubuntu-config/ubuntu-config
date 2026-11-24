@@ -1,0 +1,1220 @@
+Description: Let GNOME Shell menus leave the keyboard focus of the focused window in place.
+ GNOME Shell grabs the stage for every menu it opens, and a stage grab moves the Wayland keyboard focus away
+ from the focused window. Chromium and Electron derive the active state of a window from its keyboard focus,
+ so they deactivate the window, and a click on a menu item of a global menu reaches an inactive window. VS
+ Code, for example, drops a menu action which finds no focused window.
+ meta_display_set_grab_keeps_keyboard_focus() marks an actor whose stage grabs leave the keyboard focus in
+ place. Key events still go only to the grab.
+ .
+ When such a grab starts, repeating keys the client received as pressed are released for it, because the
+ client would not receive their release otherwise and would repeat them. When it ends, the keys the client
+ received as pressed and which were released during the grab are released for it, and the modifier state is
+ sent again, because key releases and modifier changes during the grab did not reach the client, and Alt of
+ Alt+F, which opens a menu, would otherwise stay pressed for the client. During the grab, the input method
+ focus leaves the window. Xwayland keeps the usual behavior: X11 clients do not lose their active state when
+ Xwayland loses the keyboard focus, and Xwayland releases the keys it holds as pressed only on a leave.
+ .
+ ClutterStage notifies a new grab-actor property whenever the actor of its topmost grab changes, and the
+ keyboard focus is decided again then. Moving from a marked menu to an unmarked one, such as the date menu,
+ while the stage stays grabbed, changes the decision.
+ .
+ The test wayland-keep-keyboard-focus checks that a marked grab sends no leave, releases a held repeating key
+ but not a held modifier when it starts, delivers no key events during the grab, and releases the modifier
+ released meanwhile and sends the modifier state when it ends,
+ that an unmarked grab sends a leave and an enter, and that moving the grab from a marked actor to an
+ unmarked one and back sends a leave and an enter.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-24
+diff --git a/clutter/clutter/clutter-stage.c b/clutter/clutter/clutter-stage.c
+index 4b63077..a6ece67 100644
+--- a/clutter/clutter/clutter-stage.c
++++ b/clutter/clutter/clutter-stage.c
+@@ -124,6 +124,7 @@ enum
+   PROP_PERSPECTIVE,
+   PROP_KEY_FOCUS,
+   PROP_IS_GRABBED,
++  PROP_GRAB_ACTOR,
+ 
+   PROP_LAST
+ };
+@@ -1310,6 +1311,10 @@ clutter_stage_get_property (GObject    *gobject,
+       g_value_set_boolean (value, !!priv->topmost_grab);
+       break;
+ 
++    case PROP_GRAB_ACTOR:
++      g_value_set_object (value, clutter_stage_get_grab_actor (stage));
++      break;
++
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (gobject, prop_id, pspec);
+       break;
+@@ -1492,6 +1497,20 @@ clutter_stage_class_init (ClutterStageClass *klass)
+                             G_PARAM_STATIC_STRINGS |
+                             G_PARAM_EXPLICIT_NOTIFY);
+ 
++  /**
++   * ClutterStage:grab-actor:
++   *
++   * The actor of the topmost grab on the stage, or %NULL. Unlike
++   * #ClutterStage:is-grabbed it also changes when one grab follows
++   * another, for example when the user moves from one menu to the next.
++   */
++  obj_props[PROP_GRAB_ACTOR] =
++      g_param_spec_object ("grab-actor", NULL, NULL,
++                           CLUTTER_TYPE_ACTOR,
++                           G_PARAM_READABLE |
++                           G_PARAM_STATIC_STRINGS |
++                           G_PARAM_EXPLICIT_NOTIFY);
++
+   g_object_class_install_properties (gobject_class, PROP_LAST, obj_props);
+ 
+   /**
+@@ -3044,6 +3063,8 @@ clutter_stage_notify_grab (ClutterStage *stage,
+                              priv->topmost_grab,
+                              cur_actor,
+                              old_actor);
++
++  g_object_notify_by_pspec (G_OBJECT (stage), obj_props[PROP_GRAB_ACTOR]);
+ }
+ 
+ static ClutterGrab *
+diff --git a/src/core/display-private.h b/src/core/display-private.h
+index b99bb8f..f17a31f 100644
+--- a/src/core/display-private.h
++++ b/src/core/display-private.h
+@@ -275,6 +275,9 @@ void meta_display_cancel_touch (MetaDisplay *display);
+ 
+ gboolean meta_display_windows_are_interactable (MetaDisplay *display);
+ 
++gboolean meta_display_grab_keeps_keyboard_focus (MetaDisplay  *display,
++                                                 ClutterActor *grab_actor);
++
+ void meta_display_queue_focus (MetaDisplay *display,
+                                MetaWindow  *window);
+ 
+diff --git a/src/core/display.c b/src/core/display.c
+index 2f70510..c086b83 100644
+--- a/src/core/display.c
++++ b/src/core/display.c
+@@ -136,6 +136,10 @@ typedef struct _MetaDisplayPrivate
+ 
+   gboolean enable_input_capture;
+ 
++  /* Actors whose stage grabs leave the Wayland keyboard focus in place,
++   * mapped to the handler of their destroy signal. */
++  GHashTable *keyboard_focus_keeping_actors;
++
+   MetaWindow *pointer_window;
+   gulong pointer_window_unmanaging_handler_id;
+ 
+@@ -228,6 +232,8 @@ static void on_is_grabbed_changed (ClutterStage *stage,
+                                    GParamSpec   *pspec,
+                                    MetaDisplay  *display);
+ 
++static void clear_keyboard_focus_keeping_actors (MetaDisplay *display);
++
+ static void clear_sticky_mouse_focus (MetaDisplay *display);
+ 
+ static MetaBackend *
+@@ -604,8 +610,9 @@ create_compositor (MetaDisplay *display)
+ static void
+ meta_display_init (MetaDisplay *display)
+ {
+-  /* Some stuff could go in here that's currently in _open,
+-   * but it doesn't really matter. */
++  MetaDisplayPrivate *priv = meta_display_get_instance_private (display);
++
++  priv->keyboard_focus_keeping_actors = g_hash_table_new (NULL, NULL);
+ }
+ 
+ void
+@@ -1097,6 +1104,8 @@ meta_display_close (MetaDisplay *display,
+   g_hash_table_destroy (display->wayland_windows);
+   g_hash_table_destroy (display->stamps);
+ 
++  clear_keyboard_focus_keeping_actors (display);
++
+   meta_display_shutdown_keys (display);
+ 
+   g_signal_handlers_disconnect_by_func (stage, on_is_grabbed_changed, display);
+@@ -1156,6 +1165,99 @@ meta_display_windows_are_interactable (MetaDisplay *display)
+   return TRUE;
+ }
+ 
++static void
++clear_keyboard_focus_keeping_actors (MetaDisplay *display)
++{
++  MetaDisplayPrivate *priv = meta_display_get_instance_private (display);
++  GHashTableIter iter;
++  gpointer actor, handler_id;
++
++  if (!priv->keyboard_focus_keeping_actors)
++    return;
++
++  g_hash_table_iter_init (&iter, priv->keyboard_focus_keeping_actors);
++  while (g_hash_table_iter_next (&iter, &actor, &handler_id))
++    g_signal_handler_disconnect (actor, GPOINTER_TO_SIZE (handler_id));
++
++  g_clear_pointer (&priv->keyboard_focus_keeping_actors, g_hash_table_unref);
++}
++
++static void
++on_keyboard_focus_keeping_actor_destroy (ClutterActor *actor,
++                                         MetaDisplay  *display)
++{
++  MetaDisplayPrivate *priv = meta_display_get_instance_private (display);
++
++  g_hash_table_remove (priv->keyboard_focus_keeping_actors, actor);
++}
++
++/**
++ * meta_display_set_grab_keeps_keyboard_focus:
++ * @display: a #MetaDisplay
++ * @actor: the actor which stage grabs are made for
++ * @keeps_focus: whether a stage grab for @actor leaves the keyboard focus
++ *   of Wayland clients in place
++ *
++ * Sets whether a stage grab made for @actor leaves the Wayland keyboard focus
++ * of the focused window in place. The window keeps its keyboard focus, and
++ * so its active state in clients which derive it from the keyboard focus,
++ * while the grab receives all key events. This suits menus opened on behalf
++ * of the focused window, like a global menu.
++ *
++ * Keys the window received as pressed and which repeat are released for it
++ * when such a grab starts. When the grab ends, the keys released meanwhile are
++ * released for it and the modifier state is sent to it again. The input
++ * method focus leaves the window during the grab.
++ *
++ * The keyboard focus is decided when the actor of the topmost grab changes,
++ * so this has to be set before the grab for @actor is made.
++ */
++void
++meta_display_set_grab_keeps_keyboard_focus (MetaDisplay  *display,
++                                            ClutterActor *actor,
++                                            gboolean      keeps_focus)
++{
++  MetaDisplayPrivate *priv;
++  gulong handler_id;
++
++  g_return_if_fail (META_IS_DISPLAY (display));
++  g_return_if_fail (CLUTTER_IS_ACTOR (actor));
++
++  priv = meta_display_get_instance_private (display);
++  if (!priv->keyboard_focus_keeping_actors)
++    return;
++
++  handler_id =
++    GPOINTER_TO_SIZE (g_hash_table_lookup (priv->keyboard_focus_keeping_actors,
++                                           actor));
++
++  if (keeps_focus && !handler_id)
++    {
++      handler_id =
++        g_signal_connect (actor, "destroy",
++                          G_CALLBACK (on_keyboard_focus_keeping_actor_destroy),
++                          display);
++      g_hash_table_insert (priv->keyboard_focus_keeping_actors,
++                           actor, GSIZE_TO_POINTER (handler_id));
++    }
++  else if (!keeps_focus && handler_id)
++    {
++      g_signal_handler_disconnect (actor, handler_id);
++      g_hash_table_remove (priv->keyboard_focus_keeping_actors, actor);
++    }
++}
++
++gboolean
++meta_display_grab_keeps_keyboard_focus (MetaDisplay  *display,
++                                        ClutterActor *grab_actor)
++{
++  MetaDisplayPrivate *priv = meta_display_get_instance_private (display);
++
++  return priv->keyboard_focus_keeping_actors &&
++         g_hash_table_contains (priv->keyboard_focus_keeping_actors,
++                                grab_actor);
++}
++
+ static void
+ on_is_grabbed_changed (ClutterStage *stage,
+                        GParamSpec   *pspec,
+diff --git a/src/meta/display.h b/src/meta/display.h
+index 2308311..fff3eb1 100644
+--- a/src/meta/display.h
++++ b/src/meta/display.h
+@@ -21,6 +21,8 @@
+ 
+ #include <glib-object.h>
+ 
++#include "clutter/clutter.h"
++
+ #include "meta/types.h"
+ #include "meta/prefs.h"
+ #include "meta/common.h"
+@@ -133,6 +135,11 @@ MetaWindow* meta_display_get_tab_current (MetaDisplay   *display,
+ META_EXPORT
+ gboolean meta_display_is_grabbed (MetaDisplay *display);
+ 
++META_EXPORT
++void meta_display_set_grab_keeps_keyboard_focus (MetaDisplay  *display,
++                                                 ClutterActor *actor,
++                                                 gboolean      keeps_focus);
++
+ META_EXPORT
+ guint meta_display_add_keybinding    (MetaDisplay         *display,
+                                       const char          *name,
+diff --git a/src/tests/meson.build b/src/tests/meson.build
+index 5f1fe6f..9fae603 100644
+--- a/src/tests/meson.build
++++ b/src/tests/meson.build
+@@ -939,6 +939,17 @@ wayland_test_cases = [
+       test_client_executables.get('keyboard'),
+     ],
+   },
++  {
++    'name': 'wayland-keep-keyboard-focus',
++    'suite': 'wayland',
++    'sources': [
++      'wayland-keep-keyboard-focus-tests.c',
++      wayland_test_utils,
++    ],
++    'depends': [
++      test_client_executables.get('keep-keyboard-focus'),
++    ],
++  },
+   {
+     'name': 'wayland-fullscreen',
+     'suite': 'wayland',
+diff --git a/src/tests/wayland-keep-keyboard-focus-tests.c b/src/tests/wayland-keep-keyboard-focus-tests.c
+new file mode 100644
+index 0000000..871c5ad
+--- /dev/null
++++ b/src/tests/wayland-keep-keyboard-focus-tests.c
+@@ -0,0 +1,267 @@
++/*
++ * Copyright (C) 2026 Mitar
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "config.h"
++
++#include <linux/input-event-codes.h>
++
++#include "backends/meta-backend-private.h"
++#include "backends/meta-monitor-manager-private.h"
++#include "backends/meta-virtual-monitor.h"
++#include "meta-test/meta-context-test.h"
++#include "meta/display.h"
++#include "tests/meta-test-utils.h"
++#include "tests/meta-wayland-test-driver.h"
++#include "tests/meta-wayland-test-utils.h"
++
++static MetaContext *test_context;
++static MetaWaylandTestDriver *test_driver;
++static MetaVirtualMonitor *virtual_monitor;
++static ClutterVirtualInputDevice *virtual_keyboard;
++
++typedef struct
++{
++  ClutterActor *actor;
++  ClutterGrab *grab;
++  int key_releases;
++} TestGrab;
++
++static void
++wait_for_sync_point (unsigned int sync_point)
++{
++  meta_wayland_test_driver_wait_for_sync_point (test_driver, sync_point);
++}
++
++static gboolean
++on_key_release (ClutterActor *actor,
++                ClutterEvent *event,
++                TestGrab     *test_grab)
++{
++  test_grab->key_releases++;
++  return CLUTTER_EVENT_STOP;
++}
++
++/* Grabs the stage for a new actor and moves the key focus to it. GNOME Shell
++ * does both when it opens a menu. */
++static TestGrab *
++test_grab_new (gboolean keeps_keyboard_focus)
++{
++  MetaBackend *backend = meta_context_get_backend (test_context);
++  ClutterStage *stage = CLUTTER_STAGE (meta_backend_get_stage (backend));
++  MetaDisplay *display = meta_context_get_display (test_context);
++  TestGrab *test_grab;
++
++  test_grab = g_new0 (TestGrab, 1);
++  test_grab->actor = clutter_actor_new ();
++  clutter_actor_set_reactive (test_grab->actor, TRUE);
++  clutter_actor_add_child (CLUTTER_ACTOR (stage), test_grab->actor);
++  g_signal_connect (test_grab->actor, "key-release-event",
++                    G_CALLBACK (on_key_release), test_grab);
++
++  if (keeps_keyboard_focus)
++    {
++      meta_display_set_grab_keeps_keyboard_focus (display, test_grab->actor,
++                                                  TRUE);
++    }
++
++  test_grab->grab = clutter_stage_grab (stage, test_grab->actor);
++  clutter_stage_set_key_focus (stage, test_grab->actor);
++
++  return test_grab;
++}
++
++static void
++test_grab_free (TestGrab *test_grab)
++{
++  clutter_grab_dismiss (test_grab->grab);
++  g_object_unref (test_grab->grab);
++  clutter_actor_destroy (test_grab->actor);
++  g_free (test_grab);
++}
++
++static void
++notify_key (uint32_t        key,
++            ClutterKeyState state)
++{
++  clutter_virtual_input_device_notify_key (virtual_keyboard,
++                                           g_get_monotonic_time (),
++                                           key, state);
++}
++
++static void
++press_and_release_key (uint32_t key)
++{
++  notify_key (key, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (key, CLUTTER_KEY_STATE_RELEASED);
++}
++
++static void
++keep_keyboard_focus_keep_focus (void)
++{
++  MetaWaylandTestClient *wayland_test_client;
++  TestGrab *test_grab;
++
++  wayland_test_client =
++    meta_wayland_test_client_new_with_args (test_context,
++                                            "keep-keyboard-focus",
++                                            "keep-focus",
++                                            NULL);
++  wait_for_sync_point (0);
++  g_assert_nonnull (meta_find_client_window (test_context, "keep-focus"));
++
++  notify_key (KEY_LEFTSHIFT, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (KEY_A, CLUTTER_KEY_STATE_PRESSED);
++  wait_for_sync_point (1);
++
++  test_grab = test_grab_new (TRUE);
++  wait_for_sync_point (2);
++
++  /* The grab receives the releases, the client does not. */
++  notify_key (KEY_A, CLUTTER_KEY_STATE_RELEASED);
++  notify_key (KEY_LEFTSHIFT, CLUTTER_KEY_STATE_RELEASED);
++  while (test_grab->key_releases < 2)
++    g_main_context_iteration (NULL, TRUE);
++
++  g_clear_pointer (&test_grab, test_grab_free);
++  wait_for_sync_point (3);
++
++  press_and_release_key (KEY_B);
++  wait_for_sync_point (4);
++
++  meta_wayland_test_client_finish (wayland_test_client);
++}
++
++static void
++keep_keyboard_focus_unmarked_grab (void)
++{
++  MetaWaylandTestClient *wayland_test_client;
++  TestGrab *test_grab;
++
++  wayland_test_client =
++    meta_wayland_test_client_new_with_args (test_context,
++                                            "keep-keyboard-focus",
++                                            "unmarked-grab",
++                                            NULL);
++  wait_for_sync_point (0);
++  g_assert_nonnull (meta_find_client_window (test_context, "unmarked-grab"));
++
++  test_grab = test_grab_new (FALSE);
++  wait_for_sync_point (1);
++
++  g_clear_pointer (&test_grab, test_grab_free);
++  wait_for_sync_point (2);
++
++  meta_wayland_test_client_finish (wayland_test_client);
++}
++
++static void
++keep_keyboard_focus_grab_switch (void)
++{
++  MetaWaylandTestClient *wayland_test_client;
++  TestGrab *marked_grab;
++  TestGrab *unmarked_grab;
++
++  wayland_test_client =
++    meta_wayland_test_client_new_with_args (test_context,
++                                            "keep-keyboard-focus",
++                                            "grab-switch",
++                                            NULL);
++  wait_for_sync_point (0);
++  g_assert_nonnull (meta_find_client_window (test_context, "grab-switch"));
++
++  /* The stage stays grabbed while the grab moves from the marked actor to
++   * the unmarked one and back. */
++  marked_grab = test_grab_new (TRUE);
++  unmarked_grab = test_grab_new (FALSE);
++  wait_for_sync_point (1);
++
++  g_clear_pointer (&unmarked_grab, test_grab_free);
++  wait_for_sync_point (2);
++
++  g_clear_pointer (&marked_grab, test_grab_free);
++  press_and_release_key (KEY_B);
++  wait_for_sync_point (3);
++
++  meta_wayland_test_client_finish (wayland_test_client);
++}
++
++static void
++on_before_tests (void)
++{
++  MetaWaylandCompositor *compositor =
++    meta_context_get_wayland_compositor (test_context);
++  MetaBackend *backend = meta_context_get_backend (test_context);
++  MetaMonitorManager *monitor_manager =
++    meta_backend_get_monitor_manager (backend);
++  ClutterSeat *seat = meta_backend_get_default_seat (backend);
++
++  test_driver = meta_wayland_test_driver_new (compositor);
++  virtual_monitor = meta_create_test_monitor (test_context, 640, 480, 60.0);
++  meta_monitor_manager_reload (monitor_manager);
++
++  /* The headless backend has no keyboard of its own, and without one the
++   * clients receive no keyboard focus at all. */
++  virtual_keyboard = clutter_seat_create_virtual_device (seat,
++                                                         CLUTTER_KEYBOARD_DEVICE);
++}
++
++static void
++on_after_tests (void)
++{
++  g_clear_object (&virtual_keyboard);
++  g_clear_object (&test_driver);
++  g_clear_object (&virtual_monitor);
++}
++
++static void
++init_tests (void)
++{
++  g_test_add_func ("/wayland/keep-keyboard-focus/keep-focus",
++                   keep_keyboard_focus_keep_focus);
++  g_test_add_func ("/wayland/keep-keyboard-focus/unmarked-grab",
++                   keep_keyboard_focus_unmarked_grab);
++  g_test_add_func ("/wayland/keep-keyboard-focus/grab-switch",
++                   keep_keyboard_focus_grab_switch);
++}
++
++int
++main (int   argc,
++      char *argv[])
++{
++  g_autoptr (MetaContext) context = NULL;
++
++#ifdef MUTTER_PRIVILEGED_TEST
++  return 0;
++#endif
++
++  context = meta_create_test_context (META_CONTEXT_TEST_TYPE_HEADLESS,
++                                      META_CONTEXT_TEST_FLAG_NO_X11 |
++                                      META_CONTEXT_TEST_FLAG_TEST_CLIENT);
++  g_assert_true (meta_context_configure (context, &argc, &argv, NULL));
++
++  test_context = context;
++
++  init_tests ();
++
++  g_signal_connect (context, "before-tests",
++                    G_CALLBACK (on_before_tests), NULL);
++  g_signal_connect (context, "after-tests",
++                    G_CALLBACK (on_after_tests), NULL);
++
++  return meta_context_test_run_tests (META_CONTEXT_TEST (context),
++                                      META_TEST_RUN_FLAG_NONE);
++}
+diff --git a/src/tests/wayland-test-clients/keep-keyboard-focus.c b/src/tests/wayland-test-clients/keep-keyboard-focus.c
+new file mode 100644
+index 0000000..7bb4e83
+--- /dev/null
++++ b/src/tests/wayland-test-clients/keep-keyboard-focus.c
+@@ -0,0 +1,310 @@
++/*
++ * Copyright (C) 2026 Mitar
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/*
++ * Test client for meta_display_set_grab_keeps_keyboard_focus(). The first
++ * argument names the scenario, which is also the window title. The client
++ * asserts the keyboard events it receives and reports its progress with sync
++ * points, which the compositor side of the test waits for before its next
++ * step.
++ */
++
++#include "config.h"
++
++#include <glib.h>
++#include <linux/input-event-codes.h>
++#include <wayland-client.h>
++
++#include "wayland-test-client-utils.h"
++
++#define SHIFT_MASK (1 << 0)
++
++static gboolean running;
++static struct wl_seat *wl_seat;
++static struct wl_keyboard *wl_keyboard;
++static const char *test_name;
++static int enter_count;
++static int leave_count;
++static int key_count;
++static gboolean shift_pressed;
++static gboolean modifiers_resent;
++
++static void
++sync_point (WaylandDisplay *display,
++            uint32_t        sequence)
++{
++  test_driver_sync_point (display->test_driver, sequence, NULL);
++}
++
++static gboolean
++is_test (const char *name)
++{
++  return g_strcmp0 (test_name, name) == 0;
++}
++
++static void
++keyboard_handle_keymap (void               *data,
++                        struct wl_keyboard *keyboard,
++                        uint32_t            format,
++                        int                 fd,
++                        uint32_t            size)
++{
++}
++
++static void
++keyboard_handle_enter (void               *data,
++                       struct wl_keyboard *keyboard,
++                       uint32_t            serial,
++                       struct wl_surface  *surface,
++                       struct wl_array    *keys)
++{
++  WaylandDisplay *display = data;
++
++  enter_count++;
++
++  if (enter_count == 1)
++    {
++      sync_point (display, 0);
++    }
++  else if (is_test ("unmarked-grab") || is_test ("grab-switch"))
++    {
++      g_assert_cmpint (enter_count, ==, 2);
++      g_assert_cmpint (leave_count, ==, 1);
++      sync_point (display, 2);
++
++      if (is_test ("unmarked-grab"))
++        running = FALSE;
++    }
++  else
++    {
++      g_assert_not_reached ();
++    }
++}
++
++static void
++keyboard_handle_leave (void               *data,
++                       struct wl_keyboard *keyboard,
++                       uint32_t            serial,
++                       struct wl_surface  *surface)
++{
++  WaylandDisplay *display = data;
++
++  /* A grab for an actor which keeps the keyboard focus never sends a leave. */
++  g_assert_false (is_test ("keep-focus"));
++
++  leave_count++;
++  g_assert_cmpint (leave_count, ==, 1);
++  sync_point (display, 1);
++}
++
++static void
++keyboard_handle_key (void               *data,
++                     struct wl_keyboard *keyboard,
++                     uint32_t            serial,
++                     uint32_t            time,
++                     uint32_t            key,
++                     uint32_t            state)
++{
++  WaylandDisplay *display = data;
++
++  key_count++;
++
++  if (is_test ("keep-focus"))
++    {
++      switch (key_count)
++        {
++        case 1:
++          g_assert_cmpint (key, ==, KEY_LEFTSHIFT);
++          g_assert_cmpint (state, ==, WL_KEYBOARD_KEY_STATE_PRESSED);
++          break;
++        case 2:
++          g_assert_cmpint (key, ==, KEY_A);
++          g_assert_cmpint (state, ==, WL_KEYBOARD_KEY_STATE_PRESSED);
++          g_assert_true (shift_pressed);
++          sync_point (display, 1);
++          break;
++        case 3:
++          /* The grab started, which releases the held repeating key, but not
++           * the held modifier. */
++          g_assert_cmpint (key, ==, KEY_A);
++          g_assert_cmpint (state, ==, WL_KEYBOARD_KEY_STATE_RELEASED);
++          g_assert_true (shift_pressed);
++          sync_point (display, 2);
++          break;
++        case 4:
++          /* The grab ended, and Shift, released during it, is released for
++           * the client before the modifier state is sent again. */
++          g_assert_cmpint (key, ==, KEY_LEFTSHIFT);
++          g_assert_cmpint (state, ==, WL_KEYBOARD_KEY_STATE_RELEASED);
++          g_assert_true (shift_pressed);
++          g_assert_false (modifiers_resent);
++          break;
++        case 5:
++          /* The release of A during the grab did not reach the client, which
++           * received it when the grab started. */
++          g_assert_cmpint (key, ==, KEY_B);
++          g_assert_cmpint (state, ==, WL_KEYBOARD_KEY_STATE_PRESSED);
++          g_assert_true (modifiers_resent);
++          g_assert_cmpint (enter_count, ==, 1);
++          sync_point (display, 4);
++          break;
++        case 6:
++          g_assert_cmpint (key, ==, KEY_B);
++          g_assert_cmpint (state, ==, WL_KEYBOARD_KEY_STATE_RELEASED);
++          running = FALSE;
++          break;
++        default:
++          g_assert_not_reached ();
++        }
++    }
++  else if (is_test ("grab-switch"))
++    {
++      /* The key pressed after all grabs ended reaches the client, which kept
++       * its focus when the last grab ended. */
++      g_assert_cmpint (key, ==, KEY_B);
++      g_assert_cmpint (enter_count, ==, 2);
++      g_assert_cmpint (leave_count, ==, 1);
++
++      if (state == WL_KEYBOARD_KEY_STATE_PRESSED)
++        {
++          sync_point (display, 3);
++        }
++      else
++        {
++          running = FALSE;
++        }
++    }
++  else
++    {
++      g_assert_not_reached ();
++    }
++}
++
++static void
++keyboard_handle_modifiers (void               *data,
++                           struct wl_keyboard *keyboard,
++                           uint32_t            serial,
++                           uint32_t            mods_pressed,
++                           uint32_t            mods_latched,
++                           uint32_t            mods_locked,
++                           uint32_t            group)
++{
++  WaylandDisplay *display = data;
++
++  shift_pressed = (mods_pressed & SHIFT_MASK) != 0;
++
++  /* The grab ended, and the modifiers changed during it are sent at once,
++   * not only with the next key. */
++  if (is_test ("keep-focus") && key_count == 4)
++    {
++      g_assert_false (shift_pressed);
++      g_assert_false (modifiers_resent);
++      modifiers_resent = TRUE;
++      sync_point (display, 3);
++    }
++}
++
++static const struct wl_keyboard_listener keyboard_listener = {
++  keyboard_handle_keymap,
++  keyboard_handle_enter,
++  keyboard_handle_leave,
++  keyboard_handle_key,
++  keyboard_handle_modifiers,
++};
++
++static void
++seat_handle_capabilities (void                    *data,
++                          struct wl_seat          *seat,
++                          enum wl_seat_capability  caps)
++{
++  WaylandDisplay *display = data;
++
++  if (caps & WL_SEAT_CAPABILITY_KEYBOARD && !wl_keyboard)
++    {
++      wl_keyboard = wl_seat_get_keyboard (seat);
++      wl_keyboard_add_listener (wl_keyboard, &keyboard_listener, display);
++    }
++}
++
++static void
++seat_handle_name (void           *data,
++                  struct wl_seat *seat,
++                  const char     *name)
++{
++}
++
++static const struct wl_seat_listener seat_listener = {
++  seat_handle_capabilities,
++  seat_handle_name,
++};
++
++static void
++handle_registry_global (void               *data,
++                        struct wl_registry *registry,
++                        uint32_t            id,
++                        const char         *interface,
++                        uint32_t            version)
++{
++  WaylandDisplay *display = data;
++
++  if (strcmp (interface, "wl_seat") == 0)
++    {
++      wl_seat = wl_registry_bind (registry, id, &wl_seat_interface, 1);
++      wl_seat_add_listener (wl_seat, &seat_listener, display);
++    }
++}
++
++static void
++handle_registry_global_remove (void               *data,
++                               struct wl_registry *registry,
++                               uint32_t            name)
++{
++}
++
++static const struct wl_registry_listener registry_listener = {
++  handle_registry_global,
++  handle_registry_global_remove
++};
++
++int
++main (int    argc,
++      char **argv)
++{
++  g_autoptr (WaylandDisplay) display = NULL;
++  g_autoptr (WaylandSurface) surface = NULL;
++  struct wl_registry *registry;
++
++  g_assert_cmpint (argc, ==, 2);
++  test_name = argv[1];
++
++  display = wayland_display_new (WAYLAND_DISPLAY_CAPABILITY_TEST_DRIVER);
++
++  registry = wl_display_get_registry (display->display);
++  wl_registry_add_listener (registry, &registry_listener, display);
++  wl_display_roundtrip (display->display);
++
++  surface = wayland_surface_new (display, test_name, 100, 100, 0xffffffff);
++  wl_surface_commit (surface->wl_surface);
++
++  running = TRUE;
++  while (running)
++    wayland_display_dispatch (display);
++
++  wl_display_roundtrip (display->display);
++
++  return EXIT_SUCCESS;
++}
+diff --git a/src/tests/wayland-test-clients/meson.build b/src/tests/wayland-test-clients/meson.build
+index 441ccf1..46f4df3 100644
+--- a/src/tests/wayland-test-clients/meson.build
++++ b/src/tests/wayland-test-clients/meson.build
+@@ -157,6 +157,9 @@ wayland_test_clients = [
+   {
+     'name': 'keyboard',
+   },
++  {
++    'name': 'keep-keyboard-focus',
++  },
+   {
+     'name': 'invalid-geometry',
+   },
+diff --git a/src/wayland/meta-wayland-input.c b/src/wayland/meta-wayland-input.c
+index cd254ca..5980be2 100644
+--- a/src/wayland/meta-wayland-input.c
++++ b/src/wayland/meta-wayland-input.c
+@@ -25,7 +25,10 @@
+ 
+ #include "wayland/meta-wayland-input.h"
+ 
++#include "core/display-private.h"
++#include "wayland/meta-wayland-keyboard.h"
+ #include "wayland/meta-wayland-seat.h"
++#include "wayland/meta-wayland-surface-private.h"
+ #include "wayland/meta-wayland-tablet-seat.h"
+ #include "wayland/meta-wayland.h"
+ 
+@@ -46,6 +49,8 @@ struct _MetaWaylandInput
+   struct wl_list event_handler_list;
+   ClutterStage *stage;
+   ClutterGrab *grab;
++
++  gboolean keyboard_focus_kept;
+ };
+ 
+ static void meta_wayland_input_sync_focus (MetaWaylandInput *input);
+@@ -104,34 +109,102 @@ meta_wayland_input_new (MetaWaylandSeat *seat)
+   g_signal_connect_swapped (input->stage, "notify::is-grabbed",
+                             G_CALLBACK (on_stage_is_grabbed_change),
+                             input);
++  /* Whether the keyboard focus stays depends on the actor of the grab, which
++   * can change while the stage stays grabbed. */
++  g_signal_connect_swapped (input->stage, "notify::grab-actor",
++                            G_CALLBACK (on_stage_is_grabbed_change),
++                            input);
+ 
+   return input;
+ }
+ 
++static gboolean
++grab_keeps_keyboard_focus (MetaWaylandInput *input)
++{
++  MetaContext *context =
++    meta_wayland_compositor_get_context (input->seat->compositor);
++  MetaDisplay *display = meta_context_get_display (context);
++  ClutterActor *grab_actor = clutter_stage_get_grab_actor (input->stage);
++
++  return display && grab_actor &&
++         meta_display_grab_keeps_keyboard_focus (display, grab_actor);
++}
++
+ static void
+ meta_wayland_event_handler_invalidate_focus (MetaWaylandEventHandler *handler,
+                                              ClutterFocus            *focus)
+ {
+   MetaWaylandInput *input = handler->input;
++  MetaWaylandSeat *seat = input->seat;
+   MetaWaylandSurface *surface = NULL;
++  gboolean is_current_handler;
++  gboolean keep_keyboard_focus = FALSE;
++  gboolean keyboard_focus_was_kept = FALSE;
+ 
+   if (!focus || !handler->iface->focus)
+     return;
+ 
++  is_current_handler = meta_wayland_input_is_current_handler (input, handler);
++
++  if (CLUTTER_IS_KEY_FOCUS (focus) && is_current_handler)
++    {
++      keep_keyboard_focus = grab_keeps_keyboard_focus (input);
++      keyboard_focus_was_kept = input->keyboard_focus_kept;
++    }
++
+   if (handler->iface->get_focus_surface &&
+       /* Only the first handler can focus other than a NULL surface */
+-      meta_wayland_input_is_current_handler (input, handler) &&
+-      /* Stage should either be ungrabbed, or grabbed to self */
++      is_current_handler &&
++      /* Stage should either be ungrabbed, or grabbed to self, or grabbed
++       * for an actor whose grabs leave the keyboard focus in place */
+       (!clutter_stage_get_grab_actor (input->stage) ||
+-       (input->grab && !clutter_grab_is_revoked (input->grab))))
++       (input->grab && !clutter_grab_is_revoked (input->grab)) ||
++       keep_keyboard_focus))
+     {
+       surface = handler->iface->get_focus_surface (handler, focus,
+                                                    handler->user_data);
+     }
+ 
++  /* X11 clients do not lose their focus when Xwayland loses the keyboard
++   * focus, so Xwayland keeps the usual behavior, which also keeps its idea of
++   * the pressed keys right. */
++  if (keep_keyboard_focus && surface &&
++      meta_wayland_surface_is_xwayland (surface))
++    {
++      keep_keyboard_focus = FALSE;
++      surface = NULL;
++    }
++
++  if (CLUTTER_IS_KEY_FOCUS (focus) && is_current_handler)
++    input->keyboard_focus_kept = keep_keyboard_focus;
++
++  /* Key events do not reach clients during the grab, so a client would never
++   * receive the release of a key held when the grab starts, and would keep
++   * repeating it. */
++  if (keep_keyboard_focus && !keyboard_focus_was_kept &&
++      meta_wayland_seat_has_keyboard (seat))
++    meta_wayland_keyboard_release_delivered_keys (seat->keyboard);
++
+   handler->iface->focus (handler,
+                          focus, surface,
+                          handler->user_data);
++
++  /* Key releases and modifier changes during the grab did not reach the
++   * client either, so a modifier the client received as pressed would stay
++   * pressed for it. Each release is sent before the modifier state, the order
++   * of every key release. */
++  if (keyboard_focus_was_kept && !keep_keyboard_focus &&
++      meta_wayland_seat_has_keyboard (seat))
++    {
++      meta_wayland_keyboard_release_keys_not_pressed (seat->keyboard);
++      meta_wayland_seat_maybe_update_modifiers (seat);
++    }
++}
++
++gboolean
++meta_wayland_input_is_keyboard_focus_kept (MetaWaylandInput *input)
++{
++  return input->keyboard_focus_kept;
+ }
+ 
+ static gboolean
+diff --git a/src/wayland/meta-wayland-input.h b/src/wayland/meta-wayland-input.h
+index 65754e6..7c01e21 100644
+--- a/src/wayland/meta-wayland-input.h
++++ b/src/wayland/meta-wayland-input.h
+@@ -73,6 +73,8 @@ struct _MetaWaylandEventInterface
+ 
+ MetaWaylandInput * meta_wayland_input_new (MetaWaylandSeat *seat);
+ 
++gboolean meta_wayland_input_is_keyboard_focus_kept (MetaWaylandInput *input);
++
+ MetaWaylandEventHandler * meta_wayland_input_attach_event_handler (MetaWaylandInput                *input,
+                                                                    const MetaWaylandEventInterface *iface,
+                                                                    gboolean                         grab,
+diff --git a/src/wayland/meta-wayland-keyboard.c b/src/wayland/meta-wayland-keyboard.c
+index 339e354..0094b25 100644
+--- a/src/wayland/meta-wayland-keyboard.c
++++ b/src/wayland/meta-wayland-keyboard.c
+@@ -83,6 +83,8 @@ struct _MetaWaylandKeyboard
+   uint32_t focus_serial;
+ 
+   struct wl_array pressed_keys;
++  /* Keys the focused client received as pressed and not yet released */
++  struct wl_array delivered_keys;
+   GHashTable *key_down_serials;
+   uint32_t last_key_up_serial;
+   uint32_t last_key_up;
+@@ -96,6 +98,9 @@ G_DEFINE_TYPE (MetaWaylandKeyboard, meta_wayland_keyboard,
+ 
+ static void meta_wayland_keyboard_update_xkb_state (MetaWaylandKeyboard *keyboard);
+ static void notify_modifiers (MetaWaylandKeyboard *keyboard);
++static gboolean update_pressed_keys (struct wl_array *keys,
++                                     uint32_t         evdev_code,
++                                     gboolean         is_press);
+ 
+ static MetaBackend *
+ backend_from_keyboard (MetaWaylandKeyboard *keyboard)
+@@ -273,6 +278,12 @@ meta_wayland_keyboard_broadcast_key (MetaWaylandKeyboard *keyboard,
+           keyboard->last_key_up = key;
+         }
+ 
++      if (clutter_event_type (event) == CLUTTER_KEY_PRESS &&
++          !(clutter_event_get_flags (event) & CLUTTER_EVENT_FLAG_REPEATED))
++        update_pressed_keys (&keyboard->delivered_keys, key, TRUE);
++      else if (clutter_event_type (event) == CLUTTER_KEY_RELEASE)
++        update_pressed_keys (&keyboard->delivered_keys, key, FALSE);
++
+       wl_resource_for_each (resource, &keyboard->focus_resource_list)
+         {
+           if (clutter_event_get_flags (event) & CLUTTER_EVENT_FLAG_REPEATED)
+@@ -444,6 +455,7 @@ meta_wayland_keyboard_enable (MetaWaylandKeyboard *keyboard)
+   keyboard->settings = g_settings_new ("org.gnome.desktop.peripherals.keyboard");
+ 
+   wl_array_init (&keyboard->pressed_keys);
++  wl_array_init (&keyboard->delivered_keys);
+ 
+   keyboard->key_down_serials = g_hash_table_new (NULL, NULL);
+ 
+@@ -488,6 +500,7 @@ meta_wayland_keyboard_disable (MetaWaylandKeyboard *keyboard)
+   keyboard->last_key_up_serial = 0;
+ 
+   wl_array_release (&keyboard->pressed_keys);
++  wl_array_release (&keyboard->delivered_keys);
+ 
+   g_clear_object (&keyboard->settings);
+ }
+@@ -751,6 +764,7 @@ meta_wayland_keyboard_set_focus (MetaWaylandKeyboard *keyboard,
+ 
+       wl_list_remove (&keyboard->focus_surface_listener.link);
+       keyboard->focus_surface = NULL;
++      keyboard->delivered_keys.size = 0;
+     }
+ 
+   if (surface != NULL)
+@@ -891,6 +905,94 @@ meta_wayland_keyboard_get_focus_surface (MetaWaylandKeyboard *keyboard)
+   return keyboard->focus_surface;
+ }
+ 
++/*
++ * Sends a release of each repeating key the focused client received as
++ * pressed. Modifiers do not repeat and can still be held when key events
++ * reach the client again, so they are left as they are.
++ */
++void
++meta_wayland_keyboard_release_delivered_keys (MetaWaylandKeyboard *keyboard)
++{
++  MetaWaylandInputDevice *input_device = META_WAYLAND_INPUT_DEVICE (keyboard);
++  struct wl_array kept_keys;
++  uint32_t time = (uint32_t) (g_get_monotonic_time () / 1000);
++  uint32_t *key;
++
++  wl_array_init (&kept_keys);
++
++  wl_array_for_each (key, &keyboard->delivered_keys)
++    {
++      struct wl_resource *resource;
++      uint32_t serial;
++
++      if (!xkb_keymap_key_repeats (keyboard->xkb_info.keymap, *key + 8))
++        {
++          uint32_t *kept = wl_array_add (&kept_keys, sizeof (*kept));
++
++          *kept = *key;
++          continue;
++        }
++
++      serial = meta_wayland_input_device_next_serial (input_device);
++      wl_resource_for_each (resource, &keyboard->focus_resource_list)
++        {
++          wl_keyboard_send_key (resource, serial, time, *key,
++                                WL_KEYBOARD_KEY_STATE_RELEASED);
++        }
++    }
++
++  wl_array_release (&keyboard->delivered_keys);
++  keyboard->delivered_keys = kept_keys;
++}
++
++/*
++ * Sends a release of each key the focused client received as pressed and
++ * which is no longer pressed, after key events did not reach the client for a
++ * while.
++ */
++void
++meta_wayland_keyboard_release_keys_not_pressed (MetaWaylandKeyboard *keyboard)
++{
++  MetaWaylandInputDevice *input_device = META_WAYLAND_INPUT_DEVICE (keyboard);
++  struct wl_array still_pressed;
++  uint32_t time = (uint32_t) (g_get_monotonic_time () / 1000);
++  uint32_t *key;
++
++  wl_array_init (&still_pressed);
++
++  wl_array_for_each (key, &keyboard->delivered_keys)
++    {
++      struct wl_resource *resource;
++      gboolean pressed = FALSE;
++      uint32_t *pressed_key;
++      uint32_t serial;
++
++      wl_array_for_each (pressed_key, &keyboard->pressed_keys)
++        {
++          if (*pressed_key == *key)
++            pressed = TRUE;
++        }
++
++      if (pressed)
++        {
++          uint32_t *kept = wl_array_add (&still_pressed, sizeof (*kept));
++
++          *kept = *key;
++          continue;
++        }
++
++      serial = meta_wayland_input_device_next_serial (input_device);
++      wl_resource_for_each (resource, &keyboard->focus_resource_list)
++        {
++          wl_keyboard_send_key (resource, serial, time, *key,
++                                WL_KEYBOARD_KEY_STATE_RELEASED);
++        }
++    }
++
++  wl_array_release (&keyboard->delivered_keys);
++  keyboard->delivered_keys = still_pressed;
++}
++
+ void
+ meta_wayland_keyboard_maybe_update_modifiers (MetaWaylandKeyboard *keyboard)
+ {
+diff --git a/src/wayland/meta-wayland-keyboard.h b/src/wayland/meta-wayland-keyboard.h
+index 0983683..dcd6427 100644
+--- a/src/wayland/meta-wayland-keyboard.h
++++ b/src/wayland/meta-wayland-keyboard.h
+@@ -87,3 +87,7 @@ META_EXPORT_TEST
+ MetaWaylandSurface * meta_wayland_keyboard_get_focus_surface (MetaWaylandKeyboard *keyboard);
+ 
+ void meta_wayland_keyboard_maybe_update_modifiers (MetaWaylandKeyboard *keyboard);
++
++void meta_wayland_keyboard_release_delivered_keys (MetaWaylandKeyboard *keyboard);
++
++void meta_wayland_keyboard_release_keys_not_pressed (MetaWaylandKeyboard *keyboard);
+diff --git a/src/wayland/meta-wayland-seat.c b/src/wayland/meta-wayland-seat.c
+index 203ca1d..e876b65 100644
+--- a/src/wayland/meta-wayland-seat.c
++++ b/src/wayland/meta-wayland-seat.c
+@@ -243,7 +243,14 @@ default_focus (MetaWaylandEventHandler *handler,
+       meta_wayland_data_device_primary_set_focus (&seat->primary_data_device,
+                                                   surface);
+       meta_wayland_tablet_seat_set_pad_focus (seat->tablet_seat, surface);
+-      meta_wayland_text_input_set_focus (seat->text_input, surface);
++
++      /* Key events go to the grab while the keyboard focus is kept during a
++       * grab, so they must not pass through the input method of the window. */
++      if (seat->input_handler &&
++          meta_wayland_input_is_keyboard_focus_kept (seat->input_handler))
++        meta_wayland_text_input_set_focus (seat->text_input, NULL);
++      else
++        meta_wayland_text_input_set_focus (seat->text_input, surface);
+       return;
+     }
+ 

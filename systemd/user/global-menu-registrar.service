@@ -1,0 +1,25 @@
+# Installed as /etc/systemd/user/global-menu-registrar.service by configure-gnome-desktop.sh, which overwrites edits
+# made there, and enabled for every user.
+#
+# Runs /usr/local/libexec/global-menu-registrar, which owns com.canonical.AppMenu.Registrar for the global menu
+# extension global-menu@mitar.tnode.com while the extension is enabled. Electron applications export their menus only
+# when the name has an owner at the moment they set their menus, so the name has to have an owner before the
+# applications started at login start. Those are ordered after graphical-session.target, and this service, which
+# notifies systemd once it owns the name, before it.
+
+[Unit]
+Description=Registrar of application menus for the global menu in the top bar
+PartOf=graphical-session.target
+Before=graphical-session.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/libexec/global-menu-registrar
+# The applications started at login wait for this service, so a registrar which never becomes ready must not hold
+# them for long.
+TimeoutStartSec=5s
+Restart=on-failure
+Slice=session.slice
+
+[Install]
+WantedBy=graphical-session.target

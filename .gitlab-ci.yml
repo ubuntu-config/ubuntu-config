@@ -314,6 +314,35 @@ test_session:
       - cores/
     expire_in: never
 
+# The tests of the global menu (gnome-extensions/global-menu@mitar.tnode.com), each with the applications it needs,
+# which prepare-container.sh installs as SESSION_TEST_APPS names them.
+test_global_menu:
+  extends: test_session
+
+  parallel:
+    matrix:
+      - TEST:
+          - global-menu-login
+          - global-menu-signal
+        SESSION_TEST_APPS: signal
+      - TEST:
+          - global-menu-gtk3
+          - global-menu-gtk4
+          - global-menu-lock
+          - global-menu-overflow
+        SESSION_TEST_APPS: gtk
+      - TEST: global-menu-qt
+        SESSION_TEST_APPS: qt
+      - TEST: global-menu-vscode
+        SESSION_TEST_APPS: vscode
+      - TEST: global-menu-libreoffice
+        SESSION_TEST_APPS: libreoffice
+      - TEST:
+          - global-menu-chromium
+          - global-menu-firefox
+          - global-menu-app-name
+        SESSION_TEST_APPS: ""
+
 # Chromium runs with its sandbox, which needs the namespaces a privileged container allows, as on GitLab's hosted
 # runners. chromium-sandbox is its setuid helper, for when unprivileged user namespaces are not allowed.
 test_mutter_chromium:

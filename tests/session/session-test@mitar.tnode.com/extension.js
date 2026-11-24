@@ -38,6 +38,78 @@ function appById(appId) {
 }
 
 /**
+ * Waits for a while.
+ *
+ * @param {number} ms - how long, in milliseconds
+ * @returns {Promise<void>} resolved after the time
+ */
+function sleep(ms) {
+    return new Promise(resolve => GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+        resolve();
+        return GLib.SOURCE_REMOVE;
+    }));
+}
+
+/**
+ * Returns the buttons of the global menu in the top bar (gnome-extensions/global-menu@mitar.tnode.com), the first
+ * being the one with the application's name, without the overflow button, which globalMenuOverflow() returns.
+ *
+ * @returns {object[]|null} the buttons, or null when the extension shows no menu bar
+ */
+function globalMenuButtons() {
+    const bar = Main.panel._leftBox.get_children().find(child => child.has_style_class_name?.('global-menu-bar'));
+    return bar ? bar.get_children().map(container => container.get_child())
+        .filter(button => !button.has_style_class_name('global-menu-overflow')) : null;
+}
+
+/**
+ * @returns {object|null} the overflow button of the global menu, which has the menus which do not fit
+ */
+function globalMenuOverflow() {
+    const bar = Main.panel._leftBox.get_children().find(child => child.has_style_class_name?.('global-menu-bar'));
+    return bar?.get_children().map(container => container.get_child())
+        .find(button => button.has_style_class_name('global-menu-overflow')) ?? null;
+}
+
+/**
+ * Describes the items of a menu for the tests: a separator as "---", an item by its label, a submenu as an object with
+ * its label and items, and a checked item with a leading "[x] ".
+ *
+ * @param {object} menu - the menu
+ * @returns {Array} the items
+ */
+function describeItems(menu) {
+    return menu._getMenuItems().map(item => {
+        if (item.menu)
+            return {label: item.label.text, open: item.menu.isOpen, items: describeItems(item.menu)};
+        if (item.has_style_class_name('popup-separator-menu-item'))
+            return '---';
+        const checked = item._ornament === 1 || item._ornament === 2;
+        return `${checked ? '[x] ' : ''}${item.label.text}${item.sensitive ? '' : ' (disabled)'}`;
+    });
+}
+
+/**
+ * Finds an item of an open menu by its label, also in its open submenus.
+ *
+ * @param {object} menu - the menu
+ * @param {string} label - the label
+ * @returns {object|null} the item
+ */
+function findItem(menu, label) {
+    for (const item of menu._getMenuItems()) {
+        if (item.label?.text === label)
+            return item;
+        if (item.menu?.isOpen) {
+            const found = findItem(item.menu, label);
+            if (found)
+                return found;
+        }
+    }
+    return null;
+}
+
+/**
  * The methods the session tests call through Eval, as globalThis.sessionTest.<method>(...). Every method returns a
  * value which JSON can represent.
  */
@@ -202,15 +274,7 @@ class SessionTest {
      * @param {string[]} modifiers - the names of the modifiers' keysyms held meanwhile, such as Control_L
      */
     async pressKey(key, modifiers = []) {
-        if (!this._keyboard) {
-            const seat = Clutter.get_default_backend().get_default_seat();
-            this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
-            // Keys sent before the new device is set up are lost.
-            await new Promise(resolve => GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
-                resolve();
-                return GLib.SOURCE_REMOVE;
-            }));
-        }
+        await this._ensureKeyboard();
         const keyvals = [...modifiers, key].map(name => {
             const keyval = Clutter[`KEY_${name}`];
             if (keyval === undefined)
@@ -337,6 +401,138 @@ class SessionTest {
      */
     locked() {
         return Main.sessionMode.isLocked;
+    }
+
+    /**
+     * @returns {object} the global menu in the top bar: whether the extension shows it, the titles of its buttons, the
+     *     first being the application's name, the titles of the menus which do not fit and are in the overflow button,
+     *     the title of the open menu, which is the label of the overflow button for it, and its items, see
+     *     describeItems(), and the label of the item which has the keyboard focus
+     */
+    globalMenu() {
+        this._ensurePointer();
+        const buttons = globalMenuButtons();
+        if (!buttons)
+            return {shown: false, titles: [], overflowed: [], open: null, items: null, focus: null};
+        const overflow = globalMenuOverflow();
+        const open = [...buttons, overflow].find(button => button?.menu.isOpen);
+        const focus = global.stage.get_key_focus();
+        return {
+            shown: buttons[0].get_parent().get_parent().visible,
+            titles: buttons.map(button => button.label.text),
+            overflowed: buttons.slice(1).filter(button => !button.reactive).map(button => button.label.text),
+            open: open?.label.text ?? null,
+            items: open ? describeItems(open.menu) : null,
+            focus: focus?.label?.text ?? null,
+        };
+    }
+
+    async _ensureKeyboard() {
+        if (this._keyboard)
+            return;
+        const seat = Clutter.get_default_backend().get_default_seat();
+        this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        // Keys sent before the new device is set up are lost.
+        await sleep(500);
+    }
+
+    /**
+     * Creates the virtual pointer and moves it to the middle of the screen. A pointer created while a menu is open
+     * does not click its items, its press closes the menu instead, so the tests of the global menu create it before
+     * they open a menu, by asking for its state.
+     *
+     * @returns {Promise<void>} resolved once the pointer is ready
+     */
+    _ensurePointer() {
+        if (!this._pointerReady) {
+            const seat = Clutter.get_default_backend().get_default_seat();
+            this._pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+            this._pointerReady = sleep(500).then(() => {
+                this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), global.stage.width / 2,
+                    global.stage.height / 2);
+                return sleep(300);
+            });
+        }
+        return this._pointerReady;
+    }
+
+    async _click(actor) {
+        await this._ensurePointer();
+        // A submenu opens with an animation, which moves the items below it, so the pointer goes to an item only
+        // once its place stayed the same for a moment.
+        let place = null;
+        for (let i = 0; i < 30; i++) {
+            const current = JSON.stringify([actor.get_transformed_position(), actor.get_transformed_size()]);
+            if (current === place && actor.mapped)
+                break;
+            place = current;
+            // eslint-disable-next-line no-await-in-loop
+            await sleep(100);
+        }
+        const [x, y] = actor.get_transformed_position();
+        const [width, height] = actor.get_transformed_size();
+        this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), x + width / 2, y + height / 2);
+        await sleep(200);
+        this._pointer.notify_button(GLib.get_monotonic_time(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+        await sleep(50);
+        this._pointer.notify_button(GLib.get_monotonic_time(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+    }
+
+    /**
+     * Clicks a title of the global menu with a virtual pointer, which opens its menu, or closes it when it is open.
+     *
+     * @param {string} title - the title, or the application's name for its menu
+     */
+    async clickGlobalMenu(title) {
+        const overflow = globalMenuOverflow();
+        const button = title === overflow?.label.text ? overflow : globalMenuButtons()?.find(b => b.label.text === title);
+        if (!button)
+            throw new Error(`No global menu ${title}`);
+        // A menu which does not fit is a submenu of the overflow button.
+        if (!button.reactive) {
+            if (!overflow.menu.isOpen)
+                await this._click(overflow);
+            await this.clickGlobalMenuItem(title);
+            return;
+        }
+        await this._click(button);
+    }
+
+    /**
+     * Clicks an item of the open global menu with a virtual pointer, also an item of an open submenu, and clicking a
+     * submenu opens it.
+     *
+     * @param {string} label - the label of the item
+     */
+    async clickGlobalMenuItem(label) {
+        const open = [...globalMenuButtons() ?? [], globalMenuOverflow()].find(button => button?.menu.isOpen);
+        let item = open && findItem(open.menu, label);
+        // The submenu which has the item can still be opening.
+        for (let i = 0; i < 20 && open && !item; i++) {
+            // eslint-disable-next-line no-await-in-loop
+            await sleep(100);
+            item = findItem(open.menu, label);
+        }
+        if (!item) {
+            throw new Error(`No item ${label} in the open global menu, ` +
+                `which has ${JSON.stringify(open ? describeItems(open.menu) : null)}`);
+        }
+        await this._click(item);
+    }
+
+    /**
+     * Presses a key and releases it later, so that the key is held meanwhile, as pressKey() does not do.
+     *
+     * @param {string} key - the name of the key's keysym
+     * @param {boolean} pressed - whether to press or release it
+     */
+    async setKey(key, pressed) {
+        await this._ensureKeyboard();
+        const keyval = Clutter[`KEY_${key}`];
+        if (keyval === undefined)
+            throw new Error(`No key ${key}`);
+        this._keyboard.notify_keyval(GLib.get_monotonic_time(), keyval,
+            pressed ? Clutter.KeyState.PRESSED : Clutter.KeyState.RELEASED);
     }
 }
 

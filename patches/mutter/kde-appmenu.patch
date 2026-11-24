@@ -1,0 +1,808 @@
+Description: Offer KDE's org_kde_kwin_appmenu protocol and give the menu address of a window to the Shell.
+ Chromium, Firefox and Qt name the D-Bus address of the com.canonical.dbusmenu menu of a Wayland window with
+ org_kde_kwin_appmenu, which KWin offers, and a shell can then show the menu of the focused window in its own
+ panel. Mutter keeps the address on the surface, because a client can name it before the surface has a
+ window, and gives it to the Shell as the MetaWindow properties dbus-appmenu-service-name and
+ dbus-appmenu-object-path, which are notified when the address changes. Destroying the appmenu object
+ withdraws the address it named, since the protocol has clients remove the object when they no longer offer a
+ menu. The protocol XML is a copy of src/protocols/appmenu.xml of plasma-wayland-protocols (MIT license).
+ .
+ The test wayland-kde-appmenu has a client name an address, name it again unchanged, change it and release
+ it, and checks the getters, the properties and their notifications after each step.
+Author: Mitar
+Forwarded: not-needed
+Last-Update: 2026-11-24
+diff --git a/src/core/window-private.h b/src/core/window-private.h
+index 32221e6..cf140dc 100644
+--- a/src/core/window-private.h
++++ b/src/core/window-private.h
+@@ -957,6 +957,8 @@ gboolean meta_window_get_a11y_properties (MetaWindow  *window,
+                                           const char **a11y_dbus_name,
+                                           const char **toplevel_object_path);
+ 
++void meta_window_notify_dbus_appmenu_address (MetaWindow *window);
++
+ void meta_window_set_target_monitor (MetaWindow         *window,
+                                      MetaLogicalMonitor *logical_monitor);
+ 
+diff --git a/src/core/window.c b/src/core/window.c
+index 6a78a78..35085f9 100644
+--- a/src/core/window.c
++++ b/src/core/window.c
+@@ -236,6 +236,8 @@ enum
+   PROP_TAG,
+   PROP_A11Y_DBUS_NAME,
+   PROP_A11Y_OBJECT_PATH,
++  PROP_DBUS_APPMENU_SERVICE_NAME,
++  PROP_DBUS_APPMENU_OBJECT_PATH,
+ 
+   PROP_LAST,
+ };
+@@ -535,6 +537,14 @@ meta_window_get_property (GObject         *object,
+     case PROP_A11Y_OBJECT_PATH:
+       g_value_set_string (value, window->a11y_object_path);
+       break;
++    case PROP_DBUS_APPMENU_SERVICE_NAME:
++      g_value_set_string (value,
++                          meta_window_get_dbus_appmenu_service_name (window));
++      break;
++    case PROP_DBUS_APPMENU_OBJECT_PATH:
++      g_value_set_string (value,
++                          meta_window_get_dbus_appmenu_object_path (window));
++      break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+       break;
+@@ -729,6 +739,30 @@ meta_window_class_init (MetaWindowClass *klass)
+                          G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY |
+                          G_PARAM_STATIC_STRINGS);
+ 
++  /**
++   * MetaWindow:dbus-appmenu-service-name:
++   *
++   * The D-Bus name of the client which exports the com.canonical.dbusmenu
++   * menu of the window, as named with the org_kde_kwin_appmenu protocol.
++   */
++  obj_props[PROP_DBUS_APPMENU_SERVICE_NAME] =
++    g_param_spec_string ("dbus-appmenu-service-name", NULL, NULL,
++                         NULL,
++                         G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY |
++                         G_PARAM_STATIC_STRINGS);
++
++  /**
++   * MetaWindow:dbus-appmenu-object-path:
++   *
++   * The D-Bus object path of the com.canonical.dbusmenu menu of the window,
++   * as named with the org_kde_kwin_appmenu protocol.
++   */
++  obj_props[PROP_DBUS_APPMENU_OBJECT_PATH] =
++    g_param_spec_string ("dbus-appmenu-object-path", NULL, NULL,
++                         NULL,
++                         G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY |
++                         G_PARAM_STATIC_STRINGS);
++
+   g_object_class_install_properties (object_class, PROP_LAST, obj_props);
+ 
+   window_signals[WORKSPACE_CHANGED] =
+@@ -9179,6 +9213,21 @@ meta_window_set_a11y_properties (MetaWindow *window,
+     }
+ }
+ 
++/*
++ * Notifies the properties of the address of the com.canonical.dbusmenu menu
++ * of @window, which its Wayland surface keeps.
++ */
++void
++meta_window_notify_dbus_appmenu_address (MetaWindow *window)
++{
++  g_object_freeze_notify (G_OBJECT (window));
++  g_object_notify_by_pspec (G_OBJECT (window),
++                            obj_props[PROP_DBUS_APPMENU_SERVICE_NAME]);
++  g_object_notify_by_pspec (G_OBJECT (window),
++                            obj_props[PROP_DBUS_APPMENU_OBJECT_PATH]);
++  g_object_thaw_notify (G_OBJECT (window));
++}
++
+ gboolean
+ meta_window_get_a11y_properties (MetaWindow  *window,
+                                  const char **a11y_dbus_name,
+diff --git a/src/meson.build b/src/meson.build
+index d321452..792fd17 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -578,6 +578,8 @@ mutter_sources += [
+   'wayland/meta-wayland-input.h',
+   'wayland/meta-wayland-input-device.c',
+   'wayland/meta-wayland-input-device.h',
++  'wayland/meta-wayland-kde-appmenu.c',
++  'wayland/meta-wayland-kde-appmenu.h',
+   'wayland/meta-wayland-keyboard.c',
+   'wayland/meta-wayland-keyboard.h',
+   'wayland/meta-wayland-legacy-xdg-foreign.c',
+@@ -1063,6 +1065,7 @@ wayland_protocols = [
+   ['fractional-scale', 'staging', 1, ],
+   ['fifo', 'staging', 1, ],
+   ['gtk-shell', 'private', ],
++  ['kde-appmenu', 'private', ],
+   ['idle-inhibit', 'unstable', 1, ],
+   ['keyboard-shortcuts-inhibit', 'unstable', 1, ],
+   ['linux-dmabuf', 'stable', 1, ],
+diff --git a/src/meta/window.h b/src/meta/window.h
+index 761896b..646a488 100644
+--- a/src/meta/window.h
++++ b/src/meta/window.h
+@@ -203,6 +203,12 @@ const char * meta_window_get_gtk_app_menu_object_path (MetaWindow *window);
+ META_EXPORT
+ const char * meta_window_get_gtk_menubar_object_path (MetaWindow *window);
+ 
++META_EXPORT
++const char * meta_window_get_dbus_appmenu_service_name (MetaWindow *window);
++
++META_EXPORT
++const char * meta_window_get_dbus_appmenu_object_path (MetaWindow *window);
++
+ META_EXPORT
+ void meta_window_move_frame(MetaWindow *window, gboolean user_op, int root_x_nw, int root_y_nw);
+ 
+diff --git a/src/tests/meson.build b/src/tests/meson.build
+index 9fae603..235fb08 100644
+--- a/src/tests/meson.build
++++ b/src/tests/meson.build
+@@ -950,6 +950,17 @@ wayland_test_cases = [
+       test_client_executables.get('keep-keyboard-focus'),
+     ],
+   },
++  {
++    'name': 'wayland-kde-appmenu',
++    'suite': 'wayland',
++    'sources': [
++      'wayland-kde-appmenu-tests.c',
++      wayland_test_utils,
++    ],
++    'depends': [
++      test_client_executables.get('kde-appmenu'),
++    ],
++  },
+   {
+     'name': 'wayland-fullscreen',
+     'suite': 'wayland',
+diff --git a/src/tests/wayland-kde-appmenu-tests.c b/src/tests/wayland-kde-appmenu-tests.c
+new file mode 100644
+index 0000000..35fc3a5
+--- /dev/null
++++ b/src/tests/wayland-kde-appmenu-tests.c
+@@ -0,0 +1,163 @@
++/*
++ * Copyright (C) 2026 Mitar
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "config.h"
++
++#include "backends/meta-monitor-manager-private.h"
++#include "backends/meta-virtual-monitor.h"
++#include "meta-test/meta-context-test.h"
++#include "meta/window.h"
++#include "tests/meta-test-utils.h"
++#include "tests/meta-wayland-test-driver.h"
++#include "tests/meta-wayland-test-utils.h"
++
++static MetaContext *test_context;
++static MetaWaylandTestDriver *test_driver;
++static MetaVirtualMonitor *virtual_monitor;
++
++static void
++on_notify (MetaWindow *window,
++           GParamSpec *pspec,
++           int        *count)
++{
++  (*count)++;
++}
++
++static void
++assert_address (MetaWindow *window,
++                const char *service_name,
++                const char *object_path)
++{
++  g_autofree char *property_service_name = NULL;
++  g_autofree char *property_object_path = NULL;
++
++  g_assert_cmpstr (meta_window_get_dbus_appmenu_service_name (window), ==,
++                   service_name);
++  g_assert_cmpstr (meta_window_get_dbus_appmenu_object_path (window), ==,
++                   object_path);
++
++  g_object_get (window,
++                "dbus-appmenu-service-name", &property_service_name,
++                "dbus-appmenu-object-path", &property_object_path,
++                NULL);
++  g_assert_cmpstr (property_service_name, ==, service_name);
++  g_assert_cmpstr (property_object_path, ==, object_path);
++}
++
++static void
++kde_appmenu_address (void)
++{
++  MetaWaylandTestClient *wayland_test_client;
++  MetaWindow *window;
++  int service_name_notifies = 0;
++  int object_path_notifies = 0;
++
++  wayland_test_client =
++    meta_wayland_test_client_new (test_context, "kde-appmenu");
++  meta_wayland_test_driver_wait_for_sync_point (test_driver, 0);
++
++  window = meta_find_client_window (test_context, "kde-appmenu");
++  g_assert_nonnull (window);
++  assert_address (window, NULL, NULL);
++
++  g_signal_connect (window, "notify::dbus-appmenu-service-name",
++                    G_CALLBACK (on_notify), &service_name_notifies);
++  g_signal_connect (window, "notify::dbus-appmenu-object-path",
++                    G_CALLBACK (on_notify), &object_path_notifies);
++
++  meta_wayland_test_driver_emit_sync_event (test_driver, 0);
++  meta_wayland_test_driver_wait_for_sync_point (test_driver, 1);
++  assert_address (window, ":1.42", "/MenuBar/1");
++  g_assert_cmpint (service_name_notifies, ==, 1);
++  g_assert_cmpint (object_path_notifies, ==, 1);
++
++  meta_wayland_test_driver_emit_sync_event (test_driver, 1);
++  meta_wayland_test_driver_wait_for_sync_point (test_driver, 2);
++  assert_address (window, ":1.42", "/MenuBar/2");
++  g_assert_cmpint (service_name_notifies, ==, 2);
++  g_assert_cmpint (object_path_notifies, ==, 2);
++
++  meta_wayland_test_driver_emit_sync_event (test_driver, 2);
++  meta_wayland_test_driver_wait_for_sync_point (test_driver, 3);
++  assert_address (window, NULL, NULL);
++  g_assert_cmpint (service_name_notifies, ==, 3);
++  g_assert_cmpint (object_path_notifies, ==, 3);
++
++  g_signal_handlers_disconnect_by_func (window, on_notify,
++                                        &service_name_notifies);
++  g_signal_handlers_disconnect_by_func (window, on_notify,
++                                        &object_path_notifies);
++
++  meta_wayland_test_driver_emit_sync_event (test_driver, 3);
++  meta_wayland_test_client_finish (wayland_test_client);
++}
++
++static void
++on_before_tests (void)
++{
++  MetaWaylandCompositor *compositor =
++    meta_context_get_wayland_compositor (test_context);
++  MetaBackend *backend = meta_context_get_backend (test_context);
++  MetaMonitorManager *monitor_manager =
++    meta_backend_get_monitor_manager (backend);
++
++  test_driver = meta_wayland_test_driver_new (compositor);
++  virtual_monitor = meta_create_test_monitor (test_context, 640, 480, 60.0);
++  meta_monitor_manager_reload (monitor_manager);
++}
++
++static void
++on_after_tests (void)
++{
++  g_clear_object (&test_driver);
++  g_clear_object (&virtual_monitor);
++}
++
++static void
++init_tests (void)
++{
++  g_test_add_func ("/wayland/kde-appmenu/address",
++                   kde_appmenu_address);
++}
++
++int
++main (int   argc,
++      char *argv[])
++{
++  g_autoptr (MetaContext) context = NULL;
++
++#ifdef MUTTER_PRIVILEGED_TEST
++  return 0;
++#endif
++
++  context = meta_create_test_context (META_CONTEXT_TEST_TYPE_HEADLESS,
++                                      META_CONTEXT_TEST_FLAG_NO_X11 |
++                                      META_CONTEXT_TEST_FLAG_TEST_CLIENT);
++  g_assert_true (meta_context_configure (context, &argc, &argv, NULL));
++
++  test_context = context;
++
++  init_tests ();
++
++  g_signal_connect (context, "before-tests",
++                    G_CALLBACK (on_before_tests), NULL);
++  g_signal_connect (context, "after-tests",
++                    G_CALLBACK (on_after_tests), NULL);
++
++  return meta_context_test_run_tests (META_CONTEXT_TEST (context),
++                                      META_TEST_RUN_FLAG_NONE);
++}
+diff --git a/src/tests/wayland-test-clients/kde-appmenu.c b/src/tests/wayland-test-clients/kde-appmenu.c
+new file mode 100644
+index 0000000..4ed1f87
+--- /dev/null
++++ b/src/tests/wayland-test-clients/kde-appmenu.c
+@@ -0,0 +1,104 @@
++/*
++ * Copyright (C) 2026 Mitar
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/*
++ * Test client for the org_kde_kwin_appmenu protocol: names the menu address
++ * of its window, names it again unchanged, changes it and releases it, each
++ * step after a sync event from the compositor side of the test.
++ */
++
++#include "config.h"
++
++#include <glib.h>
++#include <wayland-client.h>
++
++#include "wayland-test-client-utils.h"
++
++#include "kde-appmenu-client-protocol.h"
++
++static struct org_kde_kwin_appmenu_manager *appmenu_manager;
++
++static void
++handle_registry_global (void               *data,
++                        struct wl_registry *registry,
++                        uint32_t            id,
++                        const char         *interface,
++                        uint32_t            version)
++{
++  if (strcmp (interface, org_kde_kwin_appmenu_manager_interface.name) == 0)
++    {
++      appmenu_manager =
++        wl_registry_bind (registry, id,
++                          &org_kde_kwin_appmenu_manager_interface, 2);
++    }
++}
++
++static void
++handle_registry_global_remove (void               *data,
++                               struct wl_registry *registry,
++                               uint32_t            name)
++{
++}
++
++static const struct wl_registry_listener registry_listener = {
++  handle_registry_global,
++  handle_registry_global_remove
++};
++
++int
++main (int    argc,
++      char **argv)
++{
++  g_autoptr (WaylandDisplay) display = NULL;
++  g_autoptr (WaylandSurface) surface = NULL;
++  struct org_kde_kwin_appmenu *appmenu;
++  struct wl_registry *registry;
++
++  display = wayland_display_new (WAYLAND_DISPLAY_CAPABILITY_TEST_DRIVER);
++
++  registry = wl_display_get_registry (display->display);
++  wl_registry_add_listener (registry, &registry_listener, display);
++  wl_display_roundtrip (display->display);
++  g_assert_nonnull (appmenu_manager);
++
++  surface = wayland_surface_new (display, "kde-appmenu",
++                                 100, 100, 0xffffffff);
++  wl_surface_commit (surface->wl_surface);
++  wait_for_window_configured (display, surface);
++
++  appmenu = org_kde_kwin_appmenu_manager_create (appmenu_manager,
++                                                 surface->wl_surface);
++  test_driver_sync_point (display->test_driver, 0, NULL);
++
++  wait_for_sync_event (display, 0);
++  org_kde_kwin_appmenu_set_address (appmenu, ":1.42", "/MenuBar/1");
++  test_driver_sync_point (display->test_driver, 1, NULL);
++
++  /* Naming the same address again changes nothing, a new one replaces it. */
++  wait_for_sync_event (display, 1);
++  org_kde_kwin_appmenu_set_address (appmenu, ":1.42", "/MenuBar/1");
++  org_kde_kwin_appmenu_set_address (appmenu, ":1.42", "/MenuBar/2");
++  test_driver_sync_point (display->test_driver, 2, NULL);
++
++  wait_for_sync_event (display, 2);
++  org_kde_kwin_appmenu_release (appmenu);
++  test_driver_sync_point (display->test_driver, 3, NULL);
++
++  wait_for_sync_event (display, 3);
++
++  return EXIT_SUCCESS;
++}
+diff --git a/src/tests/wayland-test-clients/meson.build b/src/tests/wayland-test-clients/meson.build
+index 46f4df3..6be9693 100644
+--- a/src/tests/wayland-test-clients/meson.build
++++ b/src/tests/wayland-test-clients/meson.build
+@@ -160,6 +160,9 @@ wayland_test_clients = [
+   {
+     'name': 'keep-keyboard-focus',
+   },
++  {
++    'name': 'kde-appmenu',
++  },
+   {
+     'name': 'invalid-geometry',
+   },
+diff --git a/src/wayland/meta-wayland-kde-appmenu.c b/src/wayland/meta-wayland-kde-appmenu.c
+new file mode 100644
+index 0000000..8e51d78
+--- /dev/null
++++ b/src/wayland/meta-wayland-kde-appmenu.c
+@@ -0,0 +1,247 @@
++/*
++ * Copyright (C) 2026 Mitar
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/*
++ * The org_kde_kwin_appmenu protocol of KDE, with which Chromium, Firefox and
++ * Qt name the D-Bus address of the com.canonical.dbusmenu menu of a window.
++ * The address is kept on the surface, because a client can name it before
++ * the surface has a window, and is read through the MetaWindow of the
++ * surface.
++ */
++
++#include "config.h"
++
++#include "wayland/meta-wayland-kde-appmenu.h"
++
++#include "core/window-private.h"
++#include "wayland/meta-wayland-surface-private.h"
++#include "wayland/meta-wayland.h"
++
++#include "kde-appmenu-server-protocol.h"
++
++#define META_KDE_APPMENU_MANAGER_VERSION 2
++
++typedef struct
++{
++  MetaWaylandSurface *surface;
++} MetaKdeAppmenu;
++
++typedef struct
++{
++  /* The appmenu object which set the address */
++  MetaKdeAppmenu *appmenu;
++  char *service_name;
++  char *object_path;
++} MetaKdeAppmenuAddress;
++
++static GQuark address_quark;
++
++static void
++address_free (gpointer data)
++{
++  MetaKdeAppmenuAddress *address = data;
++
++  g_free (address->service_name);
++  g_free (address->object_path);
++  g_free (address);
++}
++
++static void
++notify_window (MetaWaylandSurface *surface)
++{
++  MetaWindow *window = meta_wayland_surface_get_window (surface);
++
++  if (window)
++    meta_window_notify_dbus_appmenu_address (window);
++}
++
++static void
++appmenu_set_address (struct wl_client   *client,
++                     struct wl_resource *resource,
++                     const char         *service_name,
++                     const char         *object_path)
++{
++  MetaKdeAppmenu *appmenu = wl_resource_get_user_data (resource);
++  MetaKdeAppmenuAddress *address;
++
++  if (!appmenu->surface)
++    return;
++
++  address = g_object_get_qdata (G_OBJECT (appmenu->surface), address_quark);
++  if (address && address->appmenu == appmenu &&
++      g_strcmp0 (address->service_name, service_name) == 0 &&
++      g_strcmp0 (address->object_path, object_path) == 0)
++    return;
++
++  address = g_new0 (MetaKdeAppmenuAddress, 1);
++  address->appmenu = appmenu;
++  address->service_name = g_strdup (service_name);
++  address->object_path = g_strdup (object_path);
++  g_object_set_qdata_full (G_OBJECT (appmenu->surface), address_quark,
++                           address, address_free);
++  notify_window (appmenu->surface);
++}
++
++static void
++appmenu_release (struct wl_client   *client,
++                 struct wl_resource *resource)
++{
++  wl_resource_destroy (resource);
++}
++
++static const struct org_kde_kwin_appmenu_interface appmenu_implementation =
++{
++  appmenu_set_address,
++  appmenu_release,
++};
++
++/* Destroying the appmenu object withdraws the address it set: the protocol
++ * has clients remove the object when they no longer offer a menu. */
++static void
++appmenu_resource_destroy (struct wl_resource *resource)
++{
++  MetaKdeAppmenu *appmenu = wl_resource_get_user_data (resource);
++
++  if (appmenu->surface)
++    {
++      MetaKdeAppmenuAddress *address =
++        g_object_get_qdata (G_OBJECT (appmenu->surface), address_quark);
++
++      if (address && address->appmenu == appmenu)
++        {
++          g_object_set_qdata (G_OBJECT (appmenu->surface), address_quark,
++                              NULL);
++          notify_window (appmenu->surface);
++        }
++
++      g_object_remove_weak_pointer (G_OBJECT (appmenu->surface),
++                                    (gpointer *) &appmenu->surface);
++    }
++
++  g_free (appmenu);
++}
++
++static void
++manager_create (struct wl_client   *client,
++                struct wl_resource *resource,
++                uint32_t            id,
++                struct wl_resource *surface_resource)
++{
++  MetaKdeAppmenu *appmenu;
++  struct wl_resource *appmenu_resource;
++
++  appmenu = g_new0 (MetaKdeAppmenu, 1);
++  appmenu->surface = wl_resource_get_user_data (surface_resource);
++  if (appmenu->surface)
++    {
++      g_object_add_weak_pointer (G_OBJECT (appmenu->surface),
++                                 (gpointer *) &appmenu->surface);
++    }
++
++  appmenu_resource = wl_resource_create (client,
++                                         &org_kde_kwin_appmenu_interface,
++                                         wl_resource_get_version (resource),
++                                         id);
++  wl_resource_set_implementation (appmenu_resource, &appmenu_implementation,
++                                  appmenu, appmenu_resource_destroy);
++}
++
++static void
++manager_release (struct wl_client   *client,
++                 struct wl_resource *resource)
++{
++  wl_resource_destroy (resource);
++}
++
++static const struct org_kde_kwin_appmenu_manager_interface manager_implementation =
++{
++  manager_create,
++  manager_release,
++};
++
++static void
++manager_bind (struct wl_client *client,
++              void             *user_data,
++              uint32_t          version,
++              uint32_t          id)
++{
++  struct wl_resource *resource;
++
++  resource = wl_resource_create (client,
++                                 &org_kde_kwin_appmenu_manager_interface,
++                                 version, id);
++  wl_resource_set_implementation (resource, &manager_implementation,
++                                  user_data, NULL);
++}
++
++void
++meta_wayland_init_kde_appmenu (MetaWaylandCompositor *compositor)
++{
++  struct wl_display *wl_display =
++    meta_wayland_compositor_get_wayland_display (compositor);
++
++  address_quark = g_quark_from_static_string ("meta-kde-appmenu-address");
++
++  if (!wl_global_create (wl_display,
++                         &org_kde_kwin_appmenu_manager_interface,
++                         META_KDE_APPMENU_MANAGER_VERSION,
++                         compositor,
++                         manager_bind))
++    g_error ("Failed to create org_kde_kwin_appmenu_manager global");
++}
++
++static MetaKdeAppmenuAddress *
++get_address (MetaWindow *window)
++{
++  MetaWaylandSurface *surface = meta_window_get_wayland_surface (window);
++
++  if (!surface || !address_quark)
++    return NULL;
++
++  return g_object_get_qdata (G_OBJECT (surface), address_quark);
++}
++
++/**
++ * meta_window_get_dbus_appmenu_service_name:
++ * @window: a #MetaWindow
++ *
++ * Returns: (nullable): the D-Bus name of the client which exports the
++ *   com.canonical.dbusmenu menu of @window, as named with the
++ *   org_kde_kwin_appmenu protocol, or %NULL
++ */
++const char *
++meta_window_get_dbus_appmenu_service_name (MetaWindow *window)
++{
++  MetaKdeAppmenuAddress *address = get_address (window);
++
++  return address ? address->service_name : NULL;
++}
++
++/**
++ * meta_window_get_dbus_appmenu_object_path:
++ * @window: a #MetaWindow
++ *
++ * Returns: (nullable): the D-Bus object path of the com.canonical.dbusmenu
++ *   menu of @window, as named with the org_kde_kwin_appmenu protocol, or %NULL
++ */
++const char *
++meta_window_get_dbus_appmenu_object_path (MetaWindow *window)
++{
++  MetaKdeAppmenuAddress *address = get_address (window);
++
++  return address ? address->object_path : NULL;
++}
+diff --git a/src/wayland/meta-wayland-kde-appmenu.h b/src/wayland/meta-wayland-kde-appmenu.h
+new file mode 100644
+index 0000000..28877e3
+--- /dev/null
++++ b/src/wayland/meta-wayland-kde-appmenu.h
+@@ -0,0 +1,22 @@
++/*
++ * Copyright (C) 2026 Mitar
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of the
++ * License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#pragma once
++
++#include "wayland/meta-wayland-types.h"
++
++void meta_wayland_init_kde_appmenu (MetaWaylandCompositor *compositor);
+diff --git a/src/wayland/meta-wayland.c b/src/wayland/meta-wayland.c
+index cc303d3..49e99e8 100644
+--- a/src/wayland/meta-wayland.c
++++ b/src/wayland/meta-wayland.c
+@@ -53,6 +53,7 @@
+ #include "wayland/meta-wayland-idle-inhibit.h"
+ #include "wayland/meta-wayland-inhibit-shortcuts-dialog.h"
+ #include "wayland/meta-wayland-inhibit-shortcuts.h"
++#include "wayland/meta-wayland-kde-appmenu.h"
+ #include "wayland/meta-wayland-legacy-xdg-foreign.h"
+ #include "wayland/meta-wayland-linux-drm-syncobj.h"
+ #include "wayland/meta-wayland-outputs.h"
+@@ -1041,6 +1042,7 @@ meta_wayland_compositor_new (MetaContext *context)
+   meta_wayland_init_color_management (compositor);
+   meta_wayland_xdg_session_management_init (compositor);
+   meta_wayland_init_system_bell (compositor);
++  meta_wayland_init_kde_appmenu (compositor);
+   meta_wayland_xdg_toplevel_tag_init (compositor);
+ #ifdef HAVE_NATIVE_BACKEND
+   meta_wayland_drm_lease_manager_init (compositor);
+diff --git a/src/wayland/protocol/kde-appmenu.xml b/src/wayland/protocol/kde-appmenu.xml
+new file mode 100644
+index 0000000..02a72f7
+--- /dev/null
++++ b/src/wayland/protocol/kde-appmenu.xml
+@@ -0,0 +1,40 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<protocol name="appmenu">
++  <copyright><![CDATA[
++    SPDX-FileCopyrightText: 2017 David Edmundson
++
++    SPDX-License-Identifier: MIT
++  ]]></copyright>
++  <interface name="org_kde_kwin_appmenu_manager" version="2">
++      <description summary="appmenu dbus address interface">
++          This interface allows a client to link a window (or wl_surface) to an com.canonical.dbusmenu
++          interface registered on DBus.
++      </description>
++      <request name="create">
++          <arg name="id" type="new_id" interface="org_kde_kwin_appmenu"/>
++          <arg name="surface" type="object" interface="wl_surface"/>
++      </request>
++      <!-- version 2 additions-->
++      <request name="release" type="destructor" since="2">
++          <description summary="destroy the org_kde_kwin_appmenu_manager object" />
++      </request>
++  </interface>
++  <interface name="org_kde_kwin_appmenu" version="2">
++      <description summary="appmenu dbus address interface">
++          The DBus service name and object path where the appmenu interface is present
++          The object should be registered on the session bus before sending this request.
++          If not applicable, clients should remove this object.
++      </description>
++      <request name="set_address">
++          <description summary="initialise or update the location of the AppMenu interface">
++              Set or update the service name and object path.
++              Strings should be formatted in Latin-1 matching the relevant DBus specifications.
++          </description>
++          <arg name="service_name" type="string" />
++          <arg name="object_path" type="string" />
++      </request>
++      <request name="release" type="destructor">
++        <description summary="release the appmenu object"/>
++      </request>
++  </interface>
++</protocol>

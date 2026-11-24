@@ -227,6 +227,8 @@ want_package gnome-shell-extension-drive-menu
 want_package kbd
 # Applies the patches of the Firefox add-ons from firefox-addons/ when they are built.
 want_package patch
+# Firefox loads it to export its menu to the global menu.
+want_package libdbusmenu-gtk3-4
 if [ "$MODE" = apply ] && [ "${#MISSING_PACKAGES[@]}" -gt 0 ]; then
   sudo apt-get install "${MISSING_PACKAGES[@]}"
 fi
@@ -243,10 +245,12 @@ install_remote smart-auto-move@khimaros.com
 install_local quick-settings-battery-time@mitar.tnode.com
 install_local cpu-throttle-indicator@mitar.tnode.com
 install_local reserve-space@mitar.tnode.com
+install_local global-menu@mitar.tnode.com
 
 want_extension quick-settings-battery-time@mitar.tnode.com enabled
 want_extension cpu-throttle-indicator@mitar.tnode.com enabled
 want_extension reserve-space@mitar.tnode.com enabled
+want_extension global-menu@mitar.tnode.com enabled
 want_extension auto-move-windows@gnome-shell-extensions.gcampax.github.com enabled
 want_extension drive-menu@gnome-shell-extensions.gcampax.github.com enabled
 want_extension ubuntu-appindicators@ubuntu.com enabled
@@ -400,6 +404,71 @@ install_chromium_flags() {
   CHANGED=$((CHANGED+1))
   [ "$MODE" = apply ] || return 0
   sudo install -m 644 "$src" "$dst"
+  return 0
+}
+
+# Installs firefox/policies.json from this repository as the root-owned /etc/firefox/policies/policies.json through
+# sudo, where Firefox reads its enterprise policies, replacing any other file there.
+install_firefox_policies() {
+  local src=$REPO_DIR/firefox/policies.json dst=/etc/firefox/policies/policies.json
+  cmp -s "$src" "$dst" && return 0
+  echo "  install $dst"
+  CHANGED=$((CHANGED+1))
+  [ "$MODE" = apply ] || return 0
+  sudo install -D -m 644 "$src" "$dst"
+  return 0
+}
+
+# Sets a setting of Visual Studio Code to a value given as JSON text, and adds it to settingsSync.ignoredSettings, so
+# that Settings Sync neither sends it to other machines nor replaces it with theirs. settings.json is JSON with
+# comments and trailing commas, so it is edited line by line: the line of the setting is replaced, or the setting is
+# added as the first one. A settingsSync.ignoredSettings written over several lines is left as it is, with a note.
+# Nothing is done before Visual Studio Code has created the file.
+set_vscode_setting() {
+  local key=$1 value=$2 file=${XDG_CONFIG_HOME:-$HOME/.config}/Code/User/settings.json msg
+  [ -e "$file" ] || return 0
+  msg=$(python3 -I - "$file" "$key" "$value" "$MODE" <<'PY'
+import json
+import re
+import sys
+
+path, key, value, mode = sys.argv[1:]
+text = original = open(path).read()
+messages = []
+
+
+def set_line(text, name, line):
+    """Replaces the line of a setting written on one line, or adds the line after the opening brace."""
+    pattern = re.compile(r'^([ \t]*)"' + re.escape(name) + r'"[ \t]*:.*$', re.M)
+    if pattern.search(text):
+        return pattern.sub(lambda m: m.group(1) + line, text, count=1)
+    return re.sub(r"^\{[ \t]*\n", lambda m: m.group(0) + "  " + line + "\n", text, count=1)
+
+
+current = re.search(r'^[ \t]*"' + re.escape(key) + r'"[ \t]*:[ \t]*(.*?),?[ \t]*$', text, re.M)
+if not current or current.group(1) != value:
+    messages.append(f"  {key} -> {value}")
+    text = set_line(text, key, f'"{key}": {value},')
+
+ignored = re.search(r'^[ \t]*"settingsSync\.ignoredSettings"[ \t]*:[ \t]*(.*?),?[ \t]*$', text, re.M)
+if ignored and not ignored.group(1).endswith("]"):
+    messages.append(f"  add {key} to settingsSync.ignoredSettings by hand, it spans several lines")
+else:
+    items = json.loads(re.sub(r",[ \t]*]$", "]", ignored.group(1))) if ignored else []
+    if key not in items:
+        messages.append(f"  add {key} to settingsSync.ignoredSettings")
+        text = set_line(text, "settingsSync.ignoredSettings",
+                        f'"settingsSync.ignoredSettings": {json.dumps(items + [key])},')
+
+if mode == "apply" and text != original:
+    with open(path, "w") as file:
+        file.write(text)
+print("\n".join(messages))
+PY
+)
+  [ -z "$msg" ] && return 0
+  echo "$msg"
+  CHANGED=$((CHANGED+$(grep -c . <<<"$msg")))
   return 0
 }
 
@@ -864,6 +933,15 @@ install_user_unit stop-application-scopes-before-shutdown.service
 install_libexec wait-for-status-notifier-watcher.sh wait-for-status-notifier-watcher
 install_autostart claude-desktop.desktop
 install_autostart slack.desktop
+# The global menu in the top bar (gnome-extensions/global-menu@mitar.tnode.com) needs its registrar to run before the
+# applications started at login, see the service. Firefox exports its menu only with two preferences, which the policy
+# sets as defaults, and Visual Studio Code only with its native title bar.
+install_libexec global-menu-registrar.py global-menu-registrar
+install_user_unit global-menu-registrar.service
+if [ -x /usr/lib/firefox/firefox ]; then
+  install_firefox_policies
+fi
+set_vscode_setting window.titleBarStyle '"native"'
 # Chromium returns its windows to their places only with this feature, see the file. Chromium is optional, so this is
 # done only when it is installed.
 if [ -d /etc/chromium.d ]; then

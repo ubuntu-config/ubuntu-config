@@ -1,42 +1,38 @@
-Description: Let a modifier tapped on its own send a key combination.
+Description: Let modifiers tapped on their own send key combinations.
  Mutter already treats a lone tap of two modifiers specially: the overlay key opens the overview and the
- locate-pointer key shows the pointer. This adds a third, configured with tap-key and tap-key-sends in
- org.gnome.mutter. When the tap-key modifier is pressed and released on its own, the accelerator in
- tap-key-sends is sent in its place. Pressed together with other keys it stays an ordinary modifier.
+ locate-pointer key shows the pointer. This adds more such keys, configured with tap-keys in
+ org.gnome.mutter, which maps a modifier to the accelerator sent in its place when the modifier is pressed
+ and released on its own. Pressed together with other keys it stays an ordinary modifier.
  .
  The tap detection is the one the other two keys use, including the reset on pointer buttons and the check
- for windows inhibiting shortcuts. The combination is sent through a virtual keyboard, so it passes through
- keybinding processing like a key pressed by hand and reaches keybindings and global shortcuts.
+ for windows inhibiting shortcuts. Each tap key has its own state and sees every key event, so a tap key
+ pressed while another one is held sends nothing for either. The combination is sent through a virtual
+ keyboard, so keybinding processing handles it and it reaches keybindings and global shortcuts.
  .
- The test in src/tests/keybindings.c holds the tap key together with another key, which must send nothing,
- and then taps it on its own, which must trigger a keybinding bound to the combination it sends.
+ The test in src/tests/keybindings.c configures two tap keys and holds each together with another key, also
+ with the other tap key, which must send nothing. Then it taps each on its own, which must trigger a
+ keybinding bound to the combination it sends.
 Author: Mitar
 Forwarded: not-needed
-Last-Update: 2026-09-21
+Last-Update: 2026-11-24
 --- a/data/org.gnome.mutter.gschema.xml.in
 +++ b/data/org.gnome.mutter.gschema.xml.in
-@@ -133,6 +133,27 @@
+@@ -133,6 +133,21 @@
        </description>
      </key>
  
-+    <key name="tap-key" type="s">
-+      <default>''</default>
-+      <summary>Modifier which sends tap-key-sends when tapped on its own</summary>
++    <key name="tap-keys" type="a{ss}">
++      <default>{}</default>
++      <summary>Modifiers which send a key combination when tapped on their own</summary>
 +      <description>
-+        When this key is pressed and released on its own, the key
-+        combination in tap-key-sends is sent in its place. Pressed together
-+        with other keys it stays an ordinary modifier. The overlay key has
-+        precedence when both name the same key. Empty disables it.
-+      </description>
-+    </key>
-+
-+    <key name="tap-key-sends" type="s">
-+      <default>''</default>
-+      <summary>Key combination sent when tap-key is tapped on its own</summary>
-+      <description>
-+        An accelerator such as "XF86Launch9" or "&lt;Shift&gt;F24". It is sent
-+        through a virtual keyboard, so it triggers keybindings and global
-+        shortcuts like a key pressed by hand.
++        Maps a modifier key, such as "Super_R" or "Alt_L", to the key
++        combination sent in its place when it is pressed and released on its
++        own, an accelerator such as "XF86Launch9" or "&lt;Shift&gt;F24". The
++        combination is sent through a virtual keyboard, so keybinding
++        processing handles it and it triggers keybindings and global
++        shortcuts. Pressed together with other keys, the modifier stays an
++        ordinary modifier.
++        The overlay key has precedence when both name the same key.
 +      </description>
 +    </key>
 +
@@ -45,33 +41,102 @@ Last-Update: 2026-09-21
        <summary>Timeout for check-alive ping</summary>
 --- a/src/core/keybindings.c
 +++ b/src/core/keybindings.c
-@@ -832,6 +832,11 @@
+@@ -636,6 +636,36 @@
+ }
+ 
+ static void
++tap_key_clear (MetaTapKey *tap_key)
++{
++  resolved_key_combo_reset (&tap_key->resolved_key_combo);
++  g_free (tap_key->sends);
++}
++
++static void
++reload_tap_keys (MetaKeyBindingManager *keys)
++{
++  GArray *tap_key_prefs = meta_prefs_get_tap_keys ();
++  unsigned int i;
++
++  g_clear_pointer (&keys->tap_keys, g_array_unref);
++  keys->tap_keys = g_array_new (FALSE, TRUE, sizeof (MetaTapKey));
++  g_array_set_clear_func (keys->tap_keys, (GDestroyNotify) tap_key_clear);
++
++  for (i = 0; tap_key_prefs && i < tap_key_prefs->len; i++)
++    {
++      MetaTapKeyPref *tap_key_pref =
++        &g_array_index (tap_key_prefs, MetaTapKeyPref, i);
++      MetaTapKey tap_key = { 0 };
++
++      resolve_special_key_combo (keys, tap_key_pref->combos,
++                                 &tap_key.resolved_key_combo);
++      tap_key.sends = g_strdup (tap_key_pref->sends);
++      g_array_append_val (keys->tap_keys, tap_key);
++    }
++}
++
++static void
+ resolve_key_combo (MetaKeyBindingManager *keys,
+                    MetaKeyCombo          *combo,
+                    MetaResolvedKeyCombo  *resolved_combo)
+@@ -832,6 +862,8 @@
                               combos,
                               &keys->locate_pointer_resolved_key_combo);
  
-+  meta_prefs_get_tap_key_bindings (combos);
-+  resolve_special_key_combo (keys,
-+                             combos,
-+                             &keys->tap_key_resolved_key_combo);
++  reload_tap_keys (keys);
 +
    reload_iso_next_group_combos (keys);
  
    g_hash_table_foreach (keys->key_bindings, binding_reload_combos_foreach, keys);
-@@ -1243,6 +1248,8 @@
+@@ -1243,6 +1275,8 @@
  
    resolved_key_combo_reset (&keys->overlay_resolved_key_combo);
    resolved_key_combo_reset (&keys->locate_pointer_resolved_key_combo);
-+  resolved_key_combo_reset (&keys->tap_key_resolved_key_combo);
++  g_clear_pointer (&keys->tap_keys, g_array_unref);
 +  g_clear_object (&keys->tap_key_device);
  
    clear_active_keyboard_layouts (keys);
  }
-@@ -1619,6 +1626,100 @@
-                                        (GFunc) handle_locate_pointer);
+@@ -1519,7 +1553,8 @@
+                               MetaWindow           *window,
+                               gboolean             *modifier_press_only,
+                               MetaResolvedKeyCombo *resolved_key_combo,
+-                              GFunc                 trigger_callback)
++                              GFunc                 trigger_callback,
++                              gpointer              user_data)
+ {
+   MetaKeyBindingManager *keys = &display->key_binding_manager;
+   ClutterModifierType modifiers;
+@@ -1555,7 +1590,7 @@
+           binding = get_keybinding (keys, resolved_key_combo);
+           if (!binding ||
+               !meta_compositor_filter_keybinding (display->compositor, binding))
+-            trigger_callback (display, NULL);
++            trigger_callback (display, user_data);
+         }
+ 
+       return CLUTTER_EVENT_STOP;
+@@ -1595,7 +1630,8 @@
+                                        window,
+                                        &keys->overlay_key_only_pressed,
+                                        &keys->overlay_resolved_key_combo,
+-                                       (GFunc) meta_display_overlay_key_activate);
++                                       (GFunc) meta_display_overlay_key_activate,
++                                       NULL);
  }
  
+ static void
+@@ -1616,7 +1652,119 @@
+                                        window,
+                                        &keys->locate_pointer_key_only_pressed,
+                                        &keys->locate_pointer_resolved_key_combo,
+-                                       (GFunc) handle_locate_pointer);
++                                       (GFunc) handle_locate_pointer,
++                                       NULL);
++}
++
 +static void
-+handle_tap_key (MetaDisplay *display)
++handle_tap_key (MetaDisplay *display,
++                MetaTapKey  *tap_key)
 +{
 +  MetaKeyBindingManager *keys = &display->key_binding_manager;
 +  static const struct {
@@ -85,7 +150,7 @@ Last-Update: 2026-09-21
 +    { CLUTTER_SUPER_MASK, XKB_KEY_Super_L },
 +    { CLUTTER_HYPER_MASK, XKB_KEY_Hyper_L },
 +  };
-+  const char *sends = meta_prefs_get_tap_key_sends ();
++  const char *sends = tap_key->sends;
 +  MetaKeyCombo combo;
 +  uint64_t now;
 +  int i;
@@ -93,7 +158,7 @@ Last-Update: 2026-09-21
 +  if (!sends || !meta_parse_accelerator (sends, &combo) || combo.keysym == 0)
 +    {
 +      meta_topic (META_DEBUG_KEYBINDINGS,
-+                  "Nothing to send for tap-key, tap-key-sends is \"%s\"",
++                  "Nothing to send for a key of tap-keys, it sends \"%s\"",
 +                  sends ? sends : "");
 +      return;
 +    }
@@ -138,182 +203,232 @@ Last-Update: 2026-09-21
 +}
 +
 +static gboolean
-+process_tap_key (MetaDisplay  *display,
-+                 ClutterEvent *event,
-+                 MetaWindow   *window)
++process_tap_keys (MetaDisplay  *display,
++                  ClutterEvent *event,
++                  MetaWindow   *window)
 +{
 +  MetaKeyBindingManager *keys = &display->key_binding_manager;
++  gboolean handled = FALSE;
++  unsigned int i;
 +
-+  /* Like the overlay key, a tap is a shortcut, so it does nothing while the
-+   * focused window inhibits shortcuts, such as a virtual machine viewer.
-+   */
-+  if (display->focus_window && !keys->tap_key_only_pressed)
++  if (!keys->tap_keys)
++    return FALSE;
++
++  /* Every tap key sees every event, so that each of them notices another
++   * key pressed while it is held. */
++  for (i = 0; i < keys->tap_keys->len; i++)
 +    {
-+      ClutterInputDevice *source;
++      MetaTapKey *tap_key = &g_array_index (keys->tap_keys, MetaTapKey, i);
 +
-+      source = clutter_event_get_source_device (event);
-+      if (meta_window_shortcuts_inhibited (display->focus_window, source))
-+        return FALSE;
++      /* A tap is a shortcut, so it does nothing while the focused window
++       * inhibits shortcuts, such as a virtual machine viewer.
++       */
++      if (display->focus_window && !tap_key->only_pressed)
++        {
++          ClutterInputDevice *source;
++
++          source = clutter_event_get_source_device (event);
++          if (meta_window_shortcuts_inhibited (display->focus_window, source))
++            continue;
++        }
++
++      if (process_special_modifier_key (display,
++                                        event,
++                                        window,
++                                        &tap_key->only_pressed,
++                                        &tap_key->resolved_key_combo,
++                                        (GFunc) handle_tap_key,
++                                        tap_key))
++        handled = TRUE;
 +    }
 +
-+  return process_special_modifier_key (display,
-+                                       event,
-+                                       window,
-+                                       &keys->tap_key_only_pressed,
-+                                       &keys->tap_key_resolved_key_combo,
-+                                       (GFunc) handle_tap_key);
-+}
-+
++  return handled;
+ }
+ 
  static gboolean
- process_iso_next_group (MetaDisplay  *display,
-                         ClutterEvent *event)
-@@ -1661,6 +1762,12 @@
+@@ -1661,6 +1809,12 @@
    if (process_locate_pointer_key (display, event, window))
      return FALSE;  /* Continue with the event even if handled */
  
 +  /* The release of the tapped key still reaches the client, which saw it
 +   * pressed, and the combination it sends follows as events of its own.
 +   */
-+  if (process_tap_key (display, event, window))
++  if (process_tap_keys (display, event, window))
 +    return FALSE;
 +
    if (process_iso_next_group (display, event))
      return TRUE;
  
-@@ -1698,6 +1805,7 @@
+@@ -1688,6 +1842,7 @@
+                                 const ClutterEvent *event)
+ {
+   MetaKeyBindingManager *keys = &display->key_binding_manager;
++  unsigned int i;
+ 
+   switch (clutter_event_type (event))
+     {
+@@ -1698,6 +1853,11 @@
      case CLUTTER_SCROLL:
        keys->overlay_key_only_pressed = FALSE;
        keys->locate_pointer_key_only_pressed = FALSE;
-+      keys->tap_key_only_pressed = FALSE;
++      if (keys->tap_keys)
++        {
++          for (i = 0; i < keys->tap_keys->len; i++)
++            g_array_index (keys->tap_keys, MetaTapKey, i).only_pressed = FALSE;
++        }
        return FALSE;
  
      case CLUTTER_KEY_PRESS:
 --- a/src/core/keybindings-private.h
 +++ b/src/core/keybindings-private.h
-@@ -118,6 +118,9 @@
+@@ -101,6 +101,21 @@
+   xkb_level_index_t n_levels;
+ } MetaKeyBindingKeyboardLayout;
+ 
++/* A key of the tap-keys setting, as read from the setting */
++typedef struct
++{
++  MetaKeyCombo combos[2];
++  char *sends;
++} MetaTapKeyPref;
++
++/* A key of the tap-keys setting, resolved to keycodes */
++typedef struct
++{
++  MetaResolvedKeyCombo resolved_key_combo;
++  gboolean only_pressed;
++  char *sends;
++} MetaTapKey;
++
+ typedef struct
+ {
+   MetaBackend *backend;
+@@ -118,6 +133,9 @@
    gboolean overlay_key_only_pressed;
    MetaResolvedKeyCombo locate_pointer_resolved_key_combo;
    gboolean locate_pointer_key_only_pressed;
-+  MetaResolvedKeyCombo tap_key_resolved_key_combo;
-+  gboolean tap_key_only_pressed;
++  /* MetaTapKey of each key of the tap-keys setting */
++  GArray *tap_keys;
 +  ClutterVirtualInputDevice *tap_key_device;
    MetaResolvedKeyCombo iso_next_group_combos[2];
    int n_iso_next_group_combos;
  
-@@ -152,6 +155,8 @@
+@@ -152,6 +170,7 @@
  GList * meta_prefs_get_keybindings (void);
  void meta_prefs_get_overlay_bindings (MetaKeyCombo combos[2]);
  void meta_prefs_get_locate_pointer_bindings (MetaKeyCombo combos[2]);
-+void meta_prefs_get_tap_key_bindings (MetaKeyCombo combos[2]);
-+const char * meta_prefs_get_tap_key_sends (void);
++GArray * meta_prefs_get_tap_keys (void);
  const char * meta_prefs_get_iso_next_group_option (void);
  gboolean meta_prefs_is_locate_pointer_enabled (void);
  
 --- a/src/core/prefs.c
 +++ b/src/core/prefs.c
-@@ -79,6 +79,7 @@
- static ClutterModifierType mouse_button_mods = CLUTTER_MOD1_MASK;
- static MetaKeyCombo overlay_key_combos[2] = { 0 };
- static MetaKeyCombo locate_pointer_key_combos[2] = { 0 };
-+static MetaKeyCombo tap_key_combos[2] = { 0 };
- static GDesktopFocusMode focus_mode = G_DESKTOP_FOCUS_MODE_CLICK;
- static GDesktopFocusNewWindows focus_new_windows = G_DESKTOP_FOCUS_NEW_WINDOWS_SMART;
- static gboolean raise_on_click = TRUE;
-@@ -100,6 +101,7 @@
+@@ -60,6 +60,7 @@
+ #define KEY_OVERLAY_KEY "overlay-key"
+ #define KEY_WORKSPACES_ONLY_ON_PRIMARY "workspaces-only-on-primary"
+ #define KEY_LOCATE_POINTER "locate-pointer"
++#define KEY_TAP_KEYS "tap-keys"
+ 
+ /* These are the different schemas we are keeping
+  * a GSettings instance for */
+@@ -100,6 +101,8 @@
  static gboolean locate_pointer_is_enabled = FALSE;
  static unsigned int check_alive_timeout = 5000;
  static char *cursor_theme = NULL;
-+static char *tap_key_sends = NULL;
++/* MetaTapKeyPref of each key of the tap-keys setting */
++static GArray *tap_keys = NULL;
  /* cursor_size will, when running as an X11 compositing window manager, be the
   * actual cursor size, multiplied with the global window scaling factor. On
   * Wayland, it will be the actual cursor size retrieved from gsettings.
-@@ -145,6 +147,7 @@
+@@ -145,6 +148,7 @@
  static gboolean button_layout_handler (GVariant*, gpointer*, gpointer);
  static gboolean overlay_key_handler (GVariant*, gpointer*, gpointer);
  static gboolean locate_pointer_key_handler (GVariant*, gpointer*, gpointer);
-+static gboolean tap_key_handler (GVariant*, gpointer*, gpointer);
++static void update_tap_keys (GSettings *settings);
  
  static gboolean iso_next_group_handler (GVariant*, gpointer*, gpointer);
  
-@@ -434,6 +437,22 @@
-       locate_pointer_key_handler,
-       NULL,
-     },
-+    {
-+      { "tap-key",
-+        SCHEMA_MUTTER,
-+        META_PREF_KEYBINDINGS,
-+      },
-+      tap_key_handler,
-+      NULL,
-+    },
-+    {
-+      { "tap-key-sends",
-+        SCHEMA_MUTTER,
-+        META_PREF_KEYBINDINGS,
-+      },
-+      NULL,
-+      &tap_key_sends,
-+    },
-     { { NULL, 0, 0 }, NULL },
-   };
+@@ -1023,6 +1027,7 @@
+   handle_preference_init_string_array ();
+   handle_preference_init_int ();
+   handle_preference_init_uint ();
++  update_tap_keys (g_hash_table_lookup (settings_schemas, SCHEMA_MUTTER));
  
-@@ -1560,6 +1579,40 @@
+   init_bindings ();
+ }
+@@ -1080,6 +1085,8 @@
+     handle_preference_update_uint (settings, key);
+   else if (g_variant_type_equal (type, G_VARIANT_TYPE_STRING_ARRAY))
+     handle_preference_update_string_array (settings, key);
++  else if (strcmp (key, KEY_TAP_KEYS) == 0)
++    update_tap_keys (settings);
+   else if (g_variant_type_equal (type, G_VARIANT_TYPE_STRING))
+     {
+       cursor = preferences_enum;
+@@ -1559,6 +1566,51 @@
+   return TRUE;
  }
  
- static gboolean
-+tap_key_handler (GVariant *value,
-+                 gpointer *result,
-+                 gpointer  data)
++static void
++tap_key_pref_clear (MetaTapKeyPref *tap_key)
 +{
-+  MetaKeyCombo combos[2] = { 0 };
-+  const gchar *string_value;
-+  int i;
-+
-+  *result = NULL; /* ignored */
-+  string_value = g_variant_get_string (value, NULL);
-+
-+  if (!string_value || !parse_special_key (string_value, combos))
-+    {
-+      meta_topic (META_DEBUG_KEYBINDINGS,
-+                  "Failed to parse value for tap-key");
-+      return FALSE;
-+    }
-+
-+  for (i = 0; i < G_N_ELEMENTS (combos); i++)
-+    {
-+      combos[i].modifiers = 0;
-+
-+      if (tap_key_combos[i].keysym != combos[i].keysym ||
-+          tap_key_combos[i].keycode != combos[i].keycode)
-+        {
-+          tap_key_combos[i] = combos[i];
-+          queue_changed (META_PREF_KEYBINDINGS);
-+        }
-+    }
-+
-+  return TRUE;
++  g_free (tap_key->sends);
 +}
 +
-+static gboolean
++/*
++ * Reads the tap-keys setting. A tapped key which cannot be parsed is left
++ * out.
++ */
++static void
++update_tap_keys (GSettings *settings)
++{
++  g_autoptr (GVariant) value = NULL;
++  GVariantIter iter;
++  const char *key;
++  const char *sends;
++
++  value = g_settings_get_value (settings, KEY_TAP_KEYS);
++
++  g_clear_pointer (&tap_keys, g_array_unref);
++  tap_keys = g_array_new (FALSE, TRUE, sizeof (MetaTapKeyPref));
++  g_array_set_clear_func (tap_keys, (GDestroyNotify) tap_key_pref_clear);
++
++  g_variant_iter_init (&iter, value);
++  while (g_variant_iter_next (&iter, "{&s&s}", &key, &sends))
++    {
++      MetaTapKeyPref tap_key = { 0 };
++
++      if (!parse_special_key (key, tap_key.combos))
++        {
++          meta_topic (META_DEBUG_KEYBINDINGS,
++                      "Failed to parse key \"%s\" of tap-keys", key);
++          continue;
++        }
++
++      tap_key.combos[0].modifiers = 0;
++      tap_key.combos[1].modifiers = 0;
++      tap_key.sends = g_strdup (sends);
++      g_array_append_val (tap_keys, tap_key);
++    }
++
++  queue_changed (META_PREF_KEYBINDINGS);
++}
++
+ static gboolean
  iso_next_group_handler (GVariant *value,
                          gpointer *result,
-                         gpointer  data)
-@@ -2062,6 +2115,19 @@
+@@ -2062,6 +2114,16 @@
    combos[1] = locate_pointer_key_combos[1];
  }
  
-+void
-+meta_prefs_get_tap_key_bindings (MetaKeyCombo combos[2])
++/*
++ * Returns: (transfer none): the MetaTapKeyPref of each key of the tap-keys
++ *   setting
++ */
++GArray *
++meta_prefs_get_tap_keys (void)
 +{
-+  combos[0] = tap_key_combos[0];
-+  combos[1] = tap_key_combos[1];
-+}
-+
-+const char *
-+meta_prefs_get_tap_key_sends (void)
-+{
-+  return tap_key_sends;
++  return tap_keys;
 +}
 +
  gboolean
@@ -321,7 +436,7 @@ Last-Update: 2026-09-21
  {
 --- a/src/tests/keybindings.c
 +++ b/src/tests/keybindings.c
-@@ -123,9 +123,88 @@
+@@ -123,9 +123,108 @@
  }
  
  static void
@@ -336,7 +451,7 @@ Last-Update: 2026-09-21
 +}
 +
 +static void
-+test_keybinding_tap_key (void)
++test_keybinding_tap_keys (void)
 +{
 +  MetaDisplay *display = meta_context_get_display (test_context);
 +  MetaBackend *backend = meta_context_get_backend (test_context);
@@ -356,8 +471,9 @@ Last-Update: 2026-09-21
 +   */
 +  mutter_settings = g_settings_new ("org.gnome.mutter");
 +  g_settings_set_string (mutter_settings, "overlay-key", "Super_L");
-+  g_settings_set_string (mutter_settings, "tap-key", "Super_R");
-+  g_settings_set_string (mutter_settings, "tap-key-sends", "<Super>t");
++  g_settings_set_value (mutter_settings, "tap-keys",
++                        g_variant_new_parsed ("{'Super_R': '<Super>t', "
++                                              "'Alt_L': '<Super>t'}"));
 +
 +  settings = g_settings_new ("org.gnome.mutter.test");
 +  meta_display_add_keybinding (display,
@@ -374,29 +490,48 @@ Last-Update: 2026-09-21
 +  while (!done)
 +    g_main_context_iteration (NULL, TRUE);
 +
-+  /* Held together with another key, the tap key is an ordinary modifier and
-+   * sends nothing.
++  /* Held together with another key, a tap key is an ordinary modifier and
++   * sends nothing. The other key can also be the other tap key.
 +   */
 +  notify_key (virtual_keyboard, KEY_RIGHTMETA, CLUTTER_KEY_STATE_PRESSED);
 +  notify_key (virtual_keyboard, KEY_A, CLUTTER_KEY_STATE_PRESSED);
 +  notify_key (virtual_keyboard, KEY_A, CLUTTER_KEY_STATE_RELEASED);
 +  notify_key (virtual_keyboard, KEY_RIGHTMETA, CLUTTER_KEY_STATE_RELEASED);
 +
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_A, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_A, CLUTTER_KEY_STATE_RELEASED);
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_RELEASED);
++
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_RIGHTMETA, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_RIGHTMETA, CLUTTER_KEY_STATE_RELEASED);
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_RELEASED);
++
 +  meta_flush_input (test_context);
 +  while (g_main_context_iteration (NULL, FALSE)) {}
 +  g_assert_false (triggered);
 +
-+  /* Tapped on its own, it sends <Super>t, which triggers the binding. */
++  /* Tapped on its own, each sends <Super>t, which triggers the binding. */
 +  notify_key (virtual_keyboard, KEY_RIGHTMETA, CLUTTER_KEY_STATE_PRESSED);
 +  notify_key (virtual_keyboard, KEY_RIGHTMETA, CLUTTER_KEY_STATE_RELEASED);
 +
 +  while (!triggered)
 +    g_main_context_iteration (NULL, TRUE);
 +
++  meta_flush_input (test_context);
++  while (g_main_context_iteration (NULL, FALSE)) {}
++  triggered = FALSE;
++
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_RELEASED);
++
++  while (!triggered)
++    g_main_context_iteration (NULL, TRUE);
++
 +  meta_display_remove_keybinding (display, "test-binding");
 +  g_settings_reset (mutter_settings, "overlay-key");
-+  g_settings_reset (mutter_settings, "tap-key");
-+  g_settings_reset (mutter_settings, "tap-key-sends");
++  g_settings_reset (mutter_settings, "tap-keys");
 +
 +  meta_flush_input (test_context);
 +  while (g_main_context_iteration (NULL, FALSE)) {}
@@ -406,7 +541,7 @@ Last-Update: 2026-09-21
  init_tests (void)
  {
    g_test_add_func ("/core/keybindings/remove-trigger", test_keybinding_remove_trigger);
-+  g_test_add_func ("/core/keybindings/tap-key", test_keybinding_tap_key);
++  g_test_add_func ("/core/keybindings/tap-keys", test_keybinding_tap_keys);
  }
  
  int

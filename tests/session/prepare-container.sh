@@ -2,7 +2,7 @@
 #
 # Prepare a container for run-session-tests.sh. See README.
 #
-# Usage: prepare-container.sh DEBS_DIR...
+# Usage: [SESSION_TEST_APPS=APP...] prepare-container.sh DEBS_DIR...
 #
 # Runs as root in a container, and refuses to run anywhere else, as it installs packages and system files. Installs a
 # GNOME session as Ubuntu ships it, with the applications the tests run, then the packages from the .deb files in each
@@ -10,6 +10,15 @@
 # in a later DEBS_DIR replaces one of the same name in an earlier one, so a build to test can come after the local
 # repository. Chromium is installed when a configured repository has it, as the xtradeb one does. Then installs this
 # repository's session files where configure-gnome-desktop.sh installs them, and the files the tests need besides.
+#
+# SESSION_TEST_APPS names further applications to install, for the tests of the global menu, so that each test
+# installs only the ones it runs:
+#
+#   signal        Signal Desktop, from the repository in sources.list.d/
+#   vscode        Visual Studio Code, from the repository in sources.list.d/
+#   libreoffice   LibreOffice Writer, with its GTK 3 interface
+#   qt            PyQt6, with Qt's Wayland platform
+#   gtk           GTK 3 and GTK 4 for Python
 
 set -euo pipefail
 
@@ -29,10 +38,31 @@ apt-get update -q
 apt-get install -y -q --no-install-recommends --no-upgrade \
   at-spi2-core dbus dbus-user-session dconf-gsettings-backend fonts-dejavu-core gnome-session gnome-shell \
   gnome-shell-extension-appindicator gnome-shell-extension-ubuntu-dock gnome-text-editor gsettings-desktop-schemas \
-  procps ptyxis python3 python3-gi systemd ubuntu-session util-linux xdg-desktop-portal xdg-desktop-portal-gnome \
-  xdg-utils
+  libdbusmenu-gtk3-4 procps ptyxis python3 python3-gi systemd ubuntu-session util-linux xdg-desktop-portal \
+  xdg-desktop-portal-gnome xdg-utils
 if [ -n "$(apt-cache policy chromium 2>/dev/null | awk '/Candidate:/ && $2 != "(none)" {print $2}')" ]; then
   apt-get install -y -q --no-install-recommends --no-upgrade chromium chromium-driver chromium-sandbox
+fi
+apps=()
+for app in ${SESSION_TEST_APPS:-}; do
+  case $app in
+    signal)
+      cp "$REPO_DIR/sources.list.d/signal-desktop.sources" /etc/apt/sources.list.d/
+      apps+=(signal-desktop)
+      ;;
+    vscode)
+      cp "$REPO_DIR/sources.list.d/vscode.sources" /etc/apt/sources.list.d/
+      apps+=(code)
+      ;;
+    libreoffice) apps+=(libreoffice-writer libreoffice-gtk3) ;;
+    qt) apps+=(python3-pyqt6 qt6-wayland) ;;
+    gtk) apps+=(gir1.2-gtk-3.0 gir1.2-gtk-4.0) ;;
+    *) echo "unknown application $app in SESSION_TEST_APPS" >&2; exit 2 ;;
+  esac
+done
+if [ ${#apps[@]} -gt 0 ]; then
+  apt-get update -q
+  apt-get install -y -q --no-install-recommends --no-upgrade "${apps[@]}"
 fi
 
 # The packages built here replace the installed ones of the same name, and Firefox is installed from them.
@@ -62,7 +92,8 @@ install -D -m 644 "$REPO_DIR/systemd/user/at-spi-dbus-bus.service.d/50-stop-laun
   /etc/systemd/user/at-spi-dbus-bus.service.d/50-stop-launcher-only.conf
 install -D -m 755 "$REPO_DIR/stop-application-scopes.sh" /usr/local/libexec/stop-application-scopes
 install -D -m 755 "$REPO_DIR/stop-application-scopes-before-shutdown.py" /usr/local/libexec/stop-application-scopes-before-shutdown
-for unit in stop-application-scopes.service stop-application-scopes-before-shutdown.service; do
+install -D -m 755 "$REPO_DIR/global-menu-registrar.py" /usr/local/libexec/global-menu-registrar
+for unit in stop-application-scopes.service stop-application-scopes-before-shutdown.service global-menu-registrar.service; do
   install -m 644 "$REPO_DIR/systemd/user/$unit" "/etc/systemd/user/$unit"
   systemctl --global enable --quiet "$unit"
 done
@@ -119,6 +150,17 @@ if [ -x /usr/lib/firefox/firefox ]; then
     }
   }
 }
+EOF
+  # Firefox reads only one policies.json, so the preferences of this repository's firefox/policies.json, which
+  # configure-gnome-desktop.sh installs, join the ones of the tests.
+  python3 - "$REPO_DIR/firefox/policies.json" /etc/firefox/policies/policies.json <<'EOF'
+import json
+import sys
+
+repository, tests = (json.load(open(path)) for path in sys.argv[1:])
+tests["policies"]["Preferences"].update(repository["policies"]["Preferences"])
+with open(sys.argv[2], "w") as file:
+    json.dump(tests, file, indent=2)
 EOF
 fi
 
