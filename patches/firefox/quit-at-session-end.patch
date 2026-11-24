@@ -15,12 +15,20 @@ Description: Quit cleanly when the desktop session ends, as the Inhibit portal r
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090663
 Forwarded: https://phabricator.services.mozilla.com/D340640
-Last-Update: 2026-11-18
+Last-Update: 2026-11-23
 diff --git a/toolkit/xre/nsNativeAppSupportUnix.cpp b/toolkit/xre/nsNativeAppSupportUnix.cpp
-index e629f582d43f..0b1e40cc9a9c 100644
+index e629f582d43f..a56e2cad860c 100644
 --- a/toolkit/xre/nsNativeAppSupportUnix.cpp
 +++ b/toolkit/xre/nsNativeAppSupportUnix.cpp
-@@ -39,8 +39,21 @@
+@@ -10,6 +10,7 @@
+ #include "nsIObserverService.h"
+ #include "nsIAppStartup.h"
+ #include "nsServiceManagerUtils.h"
++#include "prenv.h"
+ #include "prlink.h"
+ #include "nsXREDirProvider.h"
+ #include "nsReadableUtils.h"
+@@ -39,8 +40,21 @@
  
  #ifdef MOZ_ENABLE_DBUS
  #  include <dbus/dbus.h>
@@ -42,7 +50,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
  #if MOZ_X11
  #  undef IceSetIOErrorHandler
  #  undef IceAddConnectionWatch
-@@ -103,8 +116,6 @@ enum ClientState {
+@@ -103,8 +117,6 @@ enum ClientState {
    STATE_SHUTDOWN_CANCELLED
  };
  
@@ -51,7 +59,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
  static const char* gClientStateTable[] = {"DISCONNECTED", "REGISTERING", "IDLE",
                                            "INTERACTING", "SHUTDOWN_CANCELLED"};
  
-@@ -113,22 +124,31 @@ static LazyLogModule sMozSMLog("MozSM");
+@@ -113,22 +125,31 @@ static LazyLogModule sMozSMLog("MozSM");
  
  class nsNativeAppSupportUnix : public nsNativeAppSupportBase {
   public:
@@ -88,7 +96,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
    static void SaveYourselfCB(SmcConn smc_conn, SmPointer client_data,
                               int save_style, Bool shutdown, int interact_style,
                               Bool fast);
-@@ -145,8 +165,41 @@ class nsNativeAppSupportUnix : public nsNativeAppSupportBase {
+@@ -145,8 +166,41 @@ class nsNativeAppSupportUnix : public nsNativeAppSupportBase {
  
    SmcConn mSessionConnection;
    ClientState mClientState;
@@ -130,7 +138,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
  
  #if MOZ_X11
  static gboolean process_ice_messages(IceConn connection) {
-@@ -159,7 +212,7 @@ static gboolean process_ice_messages(IceConn connection) {
+@@ -159,7 +213,7 @@ static gboolean process_ice_messages(IceConn connection) {
        return TRUE;
  
      case IceProcessMessagesIOError: {
@@ -139,7 +147,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
            IceGetConnectionContext(connection));
        native->DisconnectFromSM();
      }
-@@ -215,10 +268,10 @@ static void ice_init(void) {
+@@ -215,10 +269,10 @@ static void ice_init(void) {
    }
  }
  
@@ -153,7 +161,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
  
    self->SetClientState(STATE_INTERACTING);
  
-@@ -229,11 +282,11 @@ void nsNativeAppSupportUnix::InteractCB(SmcConn smc_conn,
+@@ -229,11 +283,11 @@ void nsNativeAppSupportUnix::InteractCB(SmcConn smc_conn,
    // with a pending ShutdownCancelled, and we would certainly like to handle Die
    // whilst a dialog is displayed
    NS_DispatchToCurrentThread(
@@ -168,7 +176,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
    nsCOMPtr<nsIObserverService> obsServ =
        mozilla::services::GetObserverService();
    if (!obsServ) {
-@@ -257,12 +310,7 @@ void nsNativeAppSupportUnix::DoInteract() {
+@@ -257,12 +311,7 @@ void nsNativeAppSupportUnix::DoInteract() {
    if (!abortQuit && mClientState == STATE_DISCONNECTED) {
      // The session manager disappeared, whilst we were interacting, so
      // quit now
@@ -182,7 +190,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
    } else {
      if (mClientState != STATE_SHUTDOWN_CANCELLED) {
        // Only do this if the shutdown wasn't cancelled
-@@ -274,12 +322,12 @@ void nsNativeAppSupportUnix::DoInteract() {
+@@ -274,12 +323,12 @@ void nsNativeAppSupportUnix::DoInteract() {
    }
  }
  
@@ -198,7 +206,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
  
    // Expect a SaveYourselfCB if we're registering a new client.
    // All properties are already set in Start() so just reply with
-@@ -337,28 +385,23 @@ void nsNativeAppSupportUnix::SaveYourselfCB(SmcConn smc_conn,
+@@ -337,28 +386,23 @@ void nsNativeAppSupportUnix::SaveYourselfCB(SmcConn smc_conn,
    if (!status && shutdown && interact_style != SmInteractStyleNone) {
      if (self->mClientState != STATE_INTERACTING) {
        SmcInteractRequest(smc_conn, SmDialogNormal,
@@ -233,7 +241,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
  
    // Interacting is the only time when we wouldn't already have called
    // SmcSaveYourselfDone. Do that now, then set the state to make sure we
-@@ -369,7 +412,7 @@ void nsNativeAppSupportUnix::ShutdownCancelledCB(SmcConn smc_conn,
+@@ -369,7 +413,7 @@ void nsNativeAppSupportUnix::ShutdownCancelledCB(SmcConn smc_conn,
    }
  }
  
@@ -242,7 +250,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
    // the SM is free to exit any time after we disconnect, so callers must be
    // sure to have reached a sufficiently advanced phase of shutdown that there
    // is no risk of data loss:
-@@ -418,13 +461,14 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
+@@ -418,13 +462,14 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
  
    *aRetVal = true;
  
@@ -263,7 +271,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
  
    char** curarg = gArgv + 1;
    while (*curarg) {
-@@ -433,104 +477,122 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
+@@ -433,104 +478,122 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
        arg += 2;
        if (!strcmp(arg, "sm-disable")) {
          RemoveArg(curarg);
@@ -457,7 +465,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
  
    if (!mSessionConnection) {
      return NS_OK;
-@@ -538,8 +600,8 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
+@@ -538,8 +601,8 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
  
    LogModule::Init(
        gArgc, gArgv);  // need to make sure initialized before SetClientState
@@ -468,7 +476,7 @@ index e629f582d43f..0b1e40cc9a9c 100644
      SetClientState(STATE_REGISTERING);
    } else {
      SetClientState(STATE_IDLE);
-@@ -632,20 +694,190 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
+@@ -632,20 +695,190 @@ nsNativeAppSupportUnix::Start(bool* aRetVal) {
    SmcSetProperties(mSessionConnection, n, props);
  
    g_free(client_id);

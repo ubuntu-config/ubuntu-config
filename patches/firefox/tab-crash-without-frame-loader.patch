@@ -8,7 +8,8 @@ Description: Skip crashed browsers without a frame loader when sending them to t
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2094896
 Author: Mitar
 Forwarded: https://phabricator.services.mozilla.com/D344125
-Last-Update: 2026-11-19
+Applied-Upstream: 163, https://github.com/mozilla-firefox/firefox/commit/6f7b84191ac6f604eb09efe3fc4573c16a8c33e6
+Last-Update: 2026-11-23
 ---
 diff --git a/browser/modules/ContentCrashHandlers.sys.mjs b/browser/modules/ContentCrashHandlers.sys.mjs
 --- a/browser/modules/ContentCrashHandlers.sys.mjs
