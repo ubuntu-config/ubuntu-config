@@ -375,11 +375,12 @@ when there were none (`journal-digest.py`, `install-journal-digest.sh`, `cron.da
 journal of the system and of every user. A failed unit is listed with the last lines its failed run logged, which
 usually say why, and errors are grouped by what logged them and their text with the numbers in it left out, so that
 one which repeats is listed once with how often and when. New crash reports in `/var/crash` are listed too, since
-apport writes them without logging the crash as an error, and crashes of the
-[embedded controller](#embedded-controller-console-in-the-journal) with their whole record. Known noise can be left out with patterns in
-`journal-digest.ignore`. `journal-digest --since -7d` can be used to gather a week's load of messages to determine
-patterns from. With `--ignore journal-digest.ignore`, patterns are tried out from the repository before they are
-installed.
+apport writes them without logging the crash as an error. So are the kernel's own crash logs, with their last lines:
+the kernel saves them in EFI variables (pstore) when it panics, and `systemd-pstore` archives them at the next boot.
+Crashes of the [embedded controller](#embedded-controller-console-in-the-journal) are listed with their whole record.
+Known noise can be left out with patterns in `journal-digest.ignore`. `journal-digest --since -7d` can be used to
+gather a week's load of messages to determine patterns from. With `--ignore journal-digest.ignore`, patterns are tried
+out from the repository before they are installed.
 
 ### Embedded controller console in the journal
 

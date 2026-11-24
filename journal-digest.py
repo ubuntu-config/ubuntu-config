@@ -8,6 +8,8 @@ Reads the systemd journal, of the system and of every user, and prints:
 - the messages logged at priority err or more urgent, grouped by the program which logged them and by their text
   with the numbers in it left out, with when and how often,
 - the crash reports apport wrote to /var/crash, since a crash is otherwise logged only at a lower priority,
+- the kernel's crash logs which the kernel saved in pstore and systemd-pstore archived at the next boot, with their
+  last lines, which usually say why,
 - the new panic records of the embedded controller which ec-log logged, each in full.
 
 It prints nothing when there is nothing to report, so that cron mails only when there is. Each report starts right
@@ -17,8 +19,9 @@ order in which journald wrote the entries, so that it holds even when the clock 
 
 Patterns in /etc/journal-digest/ignore leave out the failures and messages they match: one Python regular expression
 per line, searched for in the line the report shows: "unit (system): result" or "unit (user): result" for a failure,
-"identifier: message" for a message, and "crash of executable (package): signal" for a crash report. Empty lines and
-lines starting with # are skipped.
+"identifier: message" for a message, "crash of executable (package): signal" for a crash report, and "kernel crash
+log (reason) in pstore" or "pstore record name" for a record in pstore. Empty lines and lines starting with # are
+skipped.
 
 
 Usage
@@ -47,6 +50,10 @@ STATE_FILE = f'{STATE_DIR}/state.json'
 IGNORE_FILE = '/etc/journal-digest/ignore'
 CRASH_DIR = '/var/crash'
 CRASH_FIELDS = ('ProblemType', 'Date', 'ExecutablePath', 'Package', 'SignalName')
+PSTORE_DIR = '/var/lib/systemd/pstore'
+# The line with which the kernel starts each part of a crash log it saves in pstore, naming the reason, such as Panic or
+# Oops.
+PSTORE_HEADER = re.compile(r'^(\w+)#[0-9]+ Part[0-9]+$')
 
 # The message ID systemd logs, both as the system manager and as a user's manager, when a unit fails.
 UNIT_FAILED = 'd9b373ed55a64feb8242e02dbe79a49c'
@@ -210,11 +217,57 @@ def crash_reports(since):
     return sorted(reports)
 
 
+def read_pstore_record(path):
+    """Returns the reason the kernel gave for a crash log it saved in pstore, such as Panic or Oops, and the last
+    CONTEXT_LINES lines of the log, shortened to MESSAGE_WIDTH.
+
+    A record which cannot be read, such as when not running as root, has no reason and no lines.
+    """
+    try:
+        with open(path, errors='replace') as file:
+            lines = file.read().splitlines()
+    except OSError:
+        return '', []
+    reason = next((match.group(1) for match in map(PSTORE_HEADER.match, lines) if match), '')
+    lines = [line.rstrip() for line in lines if line.strip() and not PSTORE_HEADER.match(line)]
+    return reason, [line if len(line) <= MESSAGE_WIDTH else line[:MESSAGE_WIDTH - 3] + '...'
+                    for line in lines[-CONTEXT_LINES:]]
+
+
+def pstore_records(since):
+    """Returns the records which systemd-pstore archived to PSTORE_DIR since a time in seconds since the epoch, oldest
+    first, as (time, path, reason, lines) tuples, with the time of the crash when the record names it, and the reason
+    and lines which read_pstore_record() returns.
+    """
+    records = []
+    for directory, _, names in os.walk(PSTORE_DIR):
+        for name in names:
+            # systemd-pstore puts each crash log together into a dmesg.txt in a directory of its own, next to the parts
+            # the kernel saved it in, and moves the records of other kinds into PSTORE_DIR itself.
+            if name != 'dmesg.txt' and directory != PSTORE_DIR:
+                continue
+            path = os.path.join(directory, name)
+            try:
+                archived = os.stat(path).st_mtime
+            except OSError:
+                continue
+            if archived < since:
+                continue
+            # A crash log of the EFI backend is in a directory named by the time of the crash, in seconds since the
+            # epoch, with a subdirectory named by its count.
+            crashed = archived
+            parent = os.path.basename(os.path.dirname(directory))
+            if parent.isdigit() and 0 < int(parent) <= archived:
+                crashed = int(parent)
+            records.append((crashed, path, *read_pstore_record(path)))
+    return sorted(records)
+
+
 def report(start, label, patterns, crashes_since):
     """Prints the failures, errors and panics of the embedded controller logged from where the journalctl arguments
-    in start begin to the end of the journal, and the crash reports of crashes since crashes_since, in seconds since
-    the epoch, under a heading naming label as the start. Leaves out the failures, errors and crash reports the
-    patterns match, and prints nothing when nothing is left.
+    in start begin to the end of the journal, and the crash reports and pstore records since crashes_since, in seconds
+    since the epoch, under a heading naming label as the start. Leaves out the failures, errors, crash reports and
+    pstore records the patterns match, and prints nothing when nothing is left.
 
     Returns the cursor of the last entry read, or None when no entry matched.
     """
@@ -252,7 +305,17 @@ def report(start, label, patterns, crashes_since):
         if not any(pattern.search(line) for pattern in patterns):
             crashes.append((crashed, path, line))
 
-    if failures or errors or crashes or panics:
+    kernel_crashes = []
+    for crashed, path, reason, lines in pstore_records(crashes_since):
+        if os.path.basename(path) == 'dmesg.txt':
+            line = f'kernel crash log ({reason})' if reason else 'kernel crash log'
+            line += ' in pstore'
+        else:
+            line = f'pstore record {os.path.basename(path)}'
+        if not any(pattern.search(line) for pattern in patterns):
+            kernel_crashes.append((crashed, path, line, lines))
+
+    if failures or errors or crashes or kernel_crashes or panics:
         print(f'Since {label}:')
     if crashes:
         print()
@@ -261,6 +324,17 @@ def report(start, label, patterns, crashes_since):
             print()
             print(f'  {line}')
             print(f'         {datetime.datetime.fromtimestamp(crashed):%Y-%m-%d %H:%M}, {path}')
+    if kernel_crashes:
+        print()
+        print(f'Kernel crash logs ({len(kernel_crashes)}):')
+        for crashed, path, line, lines in kernel_crashes:
+            print()
+            print(f'  {line}')
+            print(f'         {datetime.datetime.fromtimestamp(crashed):%Y-%m-%d %H:%M}, {path}')
+            if lines:
+                print('         ending with:')
+                for log_line in lines:
+                    print(f'           {log_line}')
     if panics:
         print()
         print(f'Embedded controller panics ({len(panics)}):')
