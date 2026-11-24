@@ -330,6 +330,7 @@ test_global_menu:
           - global-menu-gtk4
           - global-menu-lock
           - global-menu-overflow
+          - global-menu-quit-window-backed
         SESSION_TEST_APPS: gtk
       - TEST: global-menu-qt
         SESSION_TEST_APPS: qt
@@ -341,6 +342,8 @@ test_global_menu:
           - global-menu-chromium
           - global-menu-firefox
           - global-menu-app-name
+          - global-menu-quit-chromium
+          - global-menu-quit-firefox
         SESSION_TEST_APPS: ""
 
 # Chromium runs with its sandbox, which needs the namespaces a privileged container allows, as on GitLab's hosted

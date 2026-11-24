@@ -13,11 +13,13 @@ com.canonical.dbusmenu while com.canonical.AppMenu.Registrar has an owner.
 Each line of LOG is a JSON object with the event "activate" and the item's label for an activated menu item, "active"
 with the window's active state when it changes, "focus" with the text field's focus when it changes, and
 "menubar-hidden" with whether the window's own menu bar is hidden, two seconds after the window opened and, with GTK,
-also when it opened and whenever it changes.
+also when it opened and whenever it changes. With GTK, "close" is logged when the window is asked to close, and
+"signal" with "SIGTERM" when the process receives SIGTERM, after which it quits.
 """
 
 import json
 import os
+import signal
 import sys
 
 LABELS = {
@@ -98,6 +100,7 @@ def run_gtk(version):
             window.add(entry)
             entry.connect("focus-in-event", lambda *_args: log("focus", True))
             entry.connect("focus-out-event", lambda *_args: log("focus", False))
+            window.connect("delete-event", lambda *_args: log("close", True))
             window.show_all()
         else:
             window.set_child(entry)
@@ -105,6 +108,7 @@ def run_gtk(version):
             focus.connect("enter", lambda _controller: log("focus", True))
             focus.connect("leave", lambda _controller: log("focus", False))
             entry.add_controller(focus)
+            window.connect("close-request", lambda _window: log("close", True))
             window.present()
         window.connect("notify::is-active", lambda w, _pspec: log("active", w.is_active()))
         entry.grab_focus()
@@ -116,6 +120,8 @@ def run_gtk(version):
 
     app = Gtk.Application(application_id=f"local.MenuTest.Gtk{version}", flags=Gio.ApplicationFlags.NON_UNIQUE)
     app.connect("activate", on_activate)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM,
+                         lambda: (log("signal", "SIGTERM"), app.quit(), GLib.SOURCE_REMOVE)[-1])
     app.run([])
 
 

@@ -1556,6 +1556,109 @@ def global_menu_libreoffice(session, checks, out_dir):
                                                                  more_windows(session)))
 
 
+def quit_from_global_menu(session, checks, app, name, process, saved, count=7):
+    """Opens count windows of a browser, each on a workspace of its own and with a page, chooses Quit in the menu of
+    the application's name, and checks that the next start restores every window to its workspace. process is a
+    regular expression for the command line of the browser's processes, and saved() returns whether the browser saved
+    its session for the next start. The default count is more than the 5 windows which Firefox restores of those
+    closed one by one until it quits."""
+    home = pathlib.Path.home()
+    pages = home / "pages"
+    opened = [(i + 1, f"page-{i + 1}") for i in range(count)]
+    write_pages(pages, [page for _, page in opened])
+    server = serve(pages)
+    session.gsettings("org.gnome.shell", "favorite-apps", f"['{app}']")
+    install_global_menu(session)
+    url = f"localhost:{WEB_PORT}"
+    try:
+        session.login()
+        for workspace, page in opened:
+            session.call("activateWorkspace", workspace)
+            known = {w["id"] for w in session.windows(app)}
+            session.call("clickDockIcon", app)
+            if not shown_window(session, app, lambda w: w["id"] not in known, 60):
+                checks.check(f"{name}: a window opened on workspace {workspace + 1}", False)
+                return {}
+            time.sleep(2)
+            session.press("l", "Control_L")
+            time.sleep(0.5)
+            session.type_text(f"{url}/{page}.html\n")
+            wait_for(lambda: find(session.windows(app), titled(page)), 30)
+        # Both browsers save their sessions within a few seconds of a change.
+        time.sleep(5)
+        before = session.windows(app)
+        title = menu_state(session)["titles"][0]
+        started = time.time()
+        click_path(session, [title, f"Quit {count} Windows"])
+        gone = wait_for(lambda: not session.windows(app) and not processes(process), 30)
+        checks.check(f"{name}: Quit {count} Windows in the menu of the application's name quits it", gone,
+                     str([window_summary(w) for w in session.windows(app)]))
+        checks.check(f"{name}: the session is saved for the next start", saved())
+        crashes = [line for line in session.journal(started) if re.search(r"(SIGTRAP|SIGSEGV|core dumped|Crashpad)", line)]
+        checks.check(f"{name}: nothing crashed", not crashes, str(crashes[:5]))
+
+        session.call("activateWorkspace", count + 2)
+        session.call("clickDockIcon", app)
+        wait_for(lambda: session.windows(app), 60)
+        time.sleep(8)
+        after = session.windows(app)
+        for workspace, page in opened:
+            window = find(after, titled(page))
+            checks.check(f"{name}: the next start restores the window with {page} to its workspace",
+                         window and window["workspace"] == workspace, str([window_summary(w) for w in after]))
+        session.logout()
+        return {"before": before, "after": after}
+    finally:
+        server.terminate()
+
+
+@test
+def global_menu_quit_chromium(session, checks, out_dir):
+    """Quit in the menu of Chromium's name ends Chromium so that its next start restores all its windows: GNOME Shell
+    sends SIGTERM to Chromium, with patches/gnome-shell/quit-with-sigterm.patch, which Chromium handles as the end of the
+    session. Closing the windows one by one makes Chromium restore only the window closed last."""
+    def saved():
+        preferences = json.loads((pathlib.Path.home() / ".config/chromium/Default/Preferences").read_text())
+        return preferences.get("profile", {}).get("exit_type") in ("SessionEnded", "Normal")
+    return quit_from_global_menu(session, checks, CHROMIUM, "Chromium", r"^/usr/lib/chromium/chromium( |$)", saved)
+
+
+@test
+def global_menu_quit_firefox(session, checks, out_dir):
+    """Quit in the menu of Firefox's name ends Firefox so that its next start restores all its windows: GNOME Shell
+    sends SIGTERM to Firefox, with patches/gnome-shell/quit-with-sigterm.patch, which Firefox handles with
+    patches/firefox/sigterm-handler-after-app-shell.patch. Closing the windows one by one makes Firefox restore at most
+    browser.sessionstore.max_windows_undo of them, 5 by default."""
+    return quit_from_global_menu(session, checks, FIREFOX, "Firefox", r"^/usr/lib/firefox/firefox( |$)",
+                                 firefox_session_saved)
+
+
+@test
+def global_menu_quit_window_backed(session, checks, out_dir):
+    """Quit in the menu of the name of a window-backed application, one which GNOME Shell matched to no desktop file,
+    closes its window and sends its process no SIGTERM, with patches/gnome-shell/quit-with-sigterm.patch, as the
+    process of such a window can be a proxy, such as ssh for windows forwarded with ssh -X. The GTK 3 test window has no
+    desktop file and exports no quit action."""
+    install_global_menu(session)
+    log = out_dir / "menuapp-gtk3.log"
+    session.login()
+    session.call("spawnCommandLine", f"python3 {APPS_DIR}/menuapp.py gtk3 {log}")
+    window = shown_window(session, None, lambda w: w["title"] == "menu-test-gtk3", 30)
+    checks.check("the window opened, of a window-backed application", bool(window) and window["app"].startswith("window:"),
+                 str(window))
+    if not window:
+        return {}
+    process = r"menuapp\.py gtk3"
+    title = wait_menu(session, lambda s: s["shown"] and s["titles"][1:] == ["File", "Edit", "View"], 30)["titles"][0]
+    click_path(session, [title, "Quit"])
+    gone = wait_for(lambda: not find(session.windows(), lambda w: w["id"] == window["id"]) and not processes(process), 15)
+    events = [e for e in read_events(log) if e["event"] in ("close", "signal")]
+    checks.check("Quit ends the application", gone, str(events))
+    checks.check("Quit closes the window and sends no SIGTERM", events == [{"event": "close", "value": True}], str(events))
+    session.logout()
+    return {"events": events}
+
+
 def registrar_owner(session):
     """Returns the owner of com.canonical.AppMenu.Registrar, or None."""
     try:

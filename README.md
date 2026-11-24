@@ -190,18 +190,19 @@ with Fn key in the left bottom corner position, you can switch additionally thos
 ### Application menus in the top bar
 
 The top bar shows the menus of the focused window right of the workspace indicator, as macOS does, and the windows do
-not show their own menu bars. The bold name of the window's application comes first. Its menu has the items Ubuntu
-Dock shows for the application, such as New Window and the actions of its desktop file, then Minimize, Maximize or
-Restore and Close for the window, then Quit, or Quit with the number of windows when the application has several. An
-application without menus has only this one. Quit runs the quit action of an application which exports one, as GTK
-applications do, so an application which restores its windows restores all of them, and in most GTK applications this
-is the action of Ctrl+Q. The windows of other applications, such as Firefox, Chromium and Electron applications, are
-closed one by one. The Quit of Ubuntu Dock does the same. A tap of the physical Win key, which is Alt after the key
-rotation of [Keyboard like on macOS](#keyboard-like-on-macos), or F10, opens the menu of the application's name, and
-Alt with the underlined letter of a menu opens that menu. Firefox and some Electron applications export their menus
-without underlined letters, so there Alt with a letter stays with the application. The window stays active while one
-of these menus is open, and the keys of the menu go to the menu. Menus which do not fit into the left half of the top
-bar are submenus of a » button after the last menu which fits.
+not show their own menu bars. The bold name of the window's application comes first. Its menu has the items Ubuntu Dock
+shows for the application, such as New Window and the actions of its desktop file, then Minimize, Maximize or Restore
+and Close for the window, then Quit, or Quit with the number of windows when the application has several. An application
+without menus has only this one. Quit runs the quit action of an application which exports one, as GTK applications do,
+and in most GTK applications this is the action of Ctrl+Q. Other applications with a desktop file, such as Firefox,
+Chromium and Electron applications, receive SIGTERM, as at the end of the session (`patches/gnome-shell/`), so that
+Chromium and Firefox restore all their windows at their next start. The Quit of Ubuntu Dock and of the dash does the
+same. A tap of the physical Win key, which is Alt after the key rotation of
+[Keyboard like on macOS](#keyboard-like-on-macos), or F10, opens the menu of the application's name, and Alt with the
+underlined letter of a menu opens that menu. Firefox and some Electron applications export their menus without
+underlined letters, so there Alt with a letter stays with the application. The window stays active while one of these
+menus is open, and the keys of the menu go to the menu. Menus which do not fit into the left half of the top bar are
+submenus of a » button after the last menu which fits.
 
 GTK 3 and GTK 4 applications, Qt applications, Chromium, Firefox, LibreOffice and Electron applications such as Signal,
 Slack, Claude Desktop and Visual Studio Code show their menus there. GTK applications show their menu bars in their

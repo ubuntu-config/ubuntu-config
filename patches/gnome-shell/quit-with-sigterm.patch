@@ -1,0 +1,89 @@
+Description: Quit an application without a quit action with SIGTERM to the processes of its windows.
+ Quit in the dash, the app grid, Ubuntu Dock and the global menu extension calls shell_app_request_quit(), which
+ activates the "quit" action of an application which exports one over D-Bus, as GtkApplication does. For any other
+ application it closes the windows one by one, and Chromium, Firefox and Electron applications export no such action.
+ A browser treats windows closed one by one as windows the user closed: the next start of Chromium restores only the
+ window closed last, and Firefox restores at most browser.sessionstore.max_windows_undo of them (Mozilla bug 1827994).
+ .
+ With this patch, such an application receives SIGTERM instead, to each process which owns one of its windows, once,
+ as at the end of the session. Chromium handles it as the end of the session and restores every window at its next
+ start, and Firefox does so with patches/firefox/sigterm-handler-after-app-shell.patch (Mozilla bug 2086801). A window
+ whose process is not known, or which cannot receive the signal, is still closed, and so are the windows of a
+ window-backed application, one which GNOME Shell matched to no desktop file: their process can be a proxy, such as ssh
+ for windows forwarded with ssh -X, or waypipe, and SIGTERM would end the connection with every window forwarded through
+ it. An application which neither exports a quit action nor handles SIGTERM ends at once, without asking about unsaved
+ changes.
+Author: Mitar
+Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=1827994
+Forwarded: not-needed
+Last-Update: 2026-11-24
+
+diff --git a/src/shell-app.c b/src/shell-app.c
+--- a/src/shell-app.c
++++ b/src/shell-app.c
+@@ -2,7 +2,9 @@
+ 
+ #include "config.h"
+ 
++#include <signal.h>
+ #include <string.h>
++#include <unistd.h>
+ 
+ #include <glib/gi18n-lib.h>
+ 
+@@ -1206,6 +1208,11 @@
+  * The application may interact with the user, and the user
+  * might cancel the quit request from the application UI.
+  *
++ * An application which exports a "quit" action receives it. Otherwise
++ * the processes of its windows receive SIGTERM, and its windows whose
++ * process cannot receive it are closed. The windows of a window-backed
++ * application are closed.
++ *
+  * This operation may not be supported for all applications.
+  *
+  * Returns: %TRUE if a quit request is supported for this application
+@@ -1214,6 +1221,8 @@
+ shell_app_request_quit (ShellApp   *app)
+ {
+   GActionGroup *group = NULL;
++  g_autoptr (GHashTable) signalled = NULL;
++  gboolean terminate;
+   GSList *iter;
+ 
+   if (shell_app_get_state (app) != SHELL_APP_STATE_RUNNING)
+@@ -1232,10 +1241,33 @@
+       return TRUE;
+     }
+ 
+-  /* Otherwise, fall back to closing all the app's windows */
++  /* Otherwise, the processes of the app's windows are asked to quit with
++   * SIGTERM, as at the end of the session. Closing the windows one by one
++   * instead makes Chromium restore only the window closed last, and Firefox
++   * at most browser.sessionstore.max_windows_undo of them. A window whose
++   * process is not known, or cannot receive the signal, is closed.
++   *
++   * The windows of a window-backed app are closed too: the process which
++   * owns them can be a proxy for programs elsewhere, such as ssh for windows
++   * forwarded with ssh -X, or waypipe, and SIGTERM would end the connection
++   * with every window forwarded through it.
++   */
++  terminate = !shell_app_is_window_backed (app);
++  signalled = g_hash_table_new (NULL, NULL);
+   for (iter = app->running_state->windows; iter; iter = iter->next)
+     {
+       MetaWindow *win = iter->data;
++      pid_t pid = meta_window_get_pid (win);
++
++      if (terminate && pid > 0 && pid != getpid ())
++        {
++          gpointer key = GINT_TO_POINTER (pid);
++
++          if (!g_hash_table_contains (signalled, key))
++            g_hash_table_insert (signalled, key, GINT_TO_POINTER (kill (pid, SIGTERM) == 0));
++          if (GPOINTER_TO_INT (g_hash_table_lookup (signalled, key)))
++            continue;
++        }
+ 
+       if (!meta_window_can_close (win))
+         continue;

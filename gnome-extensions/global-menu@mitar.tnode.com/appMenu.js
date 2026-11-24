@@ -13,8 +13,8 @@ function countedWindows(app) {
 /**
  * Fills the menu of the application's name with the items of the application, the same ones Ubuntu Dock shows for it,
  * then the items of the focused window, then Quit. Quit calls Shell.App.request_quit(), which activates the quit action
- * of an application which exports one, so that an application which restores its windows restores all of them, and
- * closes the windows of any other application.
+ * of an application which exports one, and with patches/gnome-shell/ sends SIGTERM to any other application, so that
+ * an application which restores its windows restores all of them.
  *
  * @param {PopupMenu.PopupMenuBase} menu - the menu, which is emptied first
  * @param {Shell.App} app - the application of the focused window

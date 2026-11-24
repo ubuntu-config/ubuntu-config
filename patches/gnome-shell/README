@@ -84,3 +84,32 @@ run-time-limits-shutdown-first-tests.patch
     with connectObject(). The test opens no window, so no client writes to the shader cache, see
     disable-shader-cache-in-close-test.patch. Drop both once Ubuntu ships a GNOME Shell which runs
     the time limits manager's shutdown before destroying uiGroup.
+
+quit-with-sigterm.patch
+    Quit in the dash, the app grid, Ubuntu Dock and the menu of the application's name of the global
+    menu (gnome-extensions/global-menu@mitar.tnode.com) calls shell_app_request_quit() in
+    src/shell-app.c. It activates the quit action of an application which exports one over D-Bus, as
+    GtkApplication does. Chromium, Firefox and Electron applications export no such action, for which
+    GNOME Shell closes the windows one by one, and the browsers treat such windows as windows the user
+    closed: the next start of Chromium restores only the window closed last, and Firefox at most
+    browser.sessionstore.max_windows_undo of them, 5 by default (Mozilla bug 1827994). With the patch,
+    each process which owns a window of such an application receives SIGTERM once instead, as at the
+    end of the session, which Chromium handles as the end of the session, and Firefox as a quit with
+    patches/firefox/sigterm-handler-after-app-shell.patch. A window whose process is not known, or
+    which cannot receive the signal, is still closed, and so are the windows of a window-backed
+    application, one which GNOME Shell matched to no desktop file: their process can be a proxy, such
+    as ssh for windows forwarded with ssh -X, or waypipe, and SIGTERM would end the connection with
+    every window forwarded through it. An application which neither exports a quit action nor handles
+    SIGTERM ends at once, without asking about unsaved changes.
+
+    The session tests global-menu-quit-chromium and global-menu-quit-firefox quit each browser with
+    7 windows from the global menu and check that its next start restores all of them. Both fail
+    without the patch. global-menu-quit-window-backed quits the GTK test window of the global menu
+    tests, which has no desktop file, and checks that its window is closed and its process receives
+    no SIGTERM. After a version bump, check that shell_app_request_quit() still closes the
+    windows one by one as its last resort, which the patch replaces.
+
+    Check by hand after a rebuild and a new login, with three Chromium windows on different
+    workspaces:
+
+      Quit 3 Windows in the dock   should end Chromium, and its next start restores all 3 windows
