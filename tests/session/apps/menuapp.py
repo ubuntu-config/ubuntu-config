@@ -4,7 +4,7 @@
 Usage: [MENUAPP_EXTRA_MENUS=N] menuapp.py gtk3|gtk4|qt LOG
 
 The window is titled "menu-test-<toolkit>" and has a focused text field under its menu bar, which has the menus File
-(New with Ctrl+N, Open with an icon), Edit (Copy, Paste) and View (Show Toolbar, which can be checked, and the submenu
+(New with Ctrl+N, Open with an icon), Edit (Copy, Paste and Preferences, which shares its mnemonic with Paste) and View (Show Toolbar, which can be checked, and the submenu
 Zoom with Zoom In and Zoom Out). GTK names the icon of Open from the icon theme, and Qt exports it as an image. With MENUAPP_EXTRA_MENUS, up to 14 further menus follow, titled Extra G, Extra H and so on, each with
 the mnemonic of its letter and an item named after it, Item G, Item H and so on. GTK exports the menu bar through
 gtk_shell1 and hides it when GNOME Shell announces that it shows the menu bars, and Qt exports it over
@@ -29,6 +29,7 @@ LABELS = {
     "edit": "_Edit",
     "copy": "_Copy",
     "paste": "_Paste",
+    "preferences": "_Preferences",
     "view": "_View",
     "toolbar": "Show _Toolbar",
     "zoom": "_Zoom",
@@ -57,7 +58,7 @@ def run_gtk(version):
     from gi.repository import Gio, GLib, Gtk
 
     def on_activate(app):
-        for name in ("new", "open", "copy", "paste", "zoom-in", "zoom-out"):
+        for name in ("new", "open", "copy", "paste", "preferences", "zoom-in", "zoom-out"):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda _action, _parameter, name=name: log("activate", LABELS[name]))
             app.add_action(action)
@@ -77,6 +78,7 @@ def run_gtk(version):
         edit_menu = Gio.Menu()
         edit_menu.append(LABELS["copy"], "app.copy")
         edit_menu.append(LABELS["paste"], "app.paste")
+        edit_menu.append(LABELS["preferences"], "app.preferences")
         menubar.append_submenu(LABELS["edit"], edit_menu)
         view_menu = Gio.Menu()
         view_menu.append(LABELS["toolbar"], "app.toolbar")
@@ -156,6 +158,7 @@ def run_qt():
     edit_menu = window.menuBar().addMenu(qt_label(LABELS["edit"]))
     add(edit_menu, "copy")
     add(edit_menu, "paste")
+    add(edit_menu, "preferences")
     view_menu = window.menuBar().addMenu(qt_label(LABELS["view"]))
     add(view_menu, "toolbar", checkable=True)
     zoom_menu = view_menu.addMenu(qt_label(LABELS["zoom"]))

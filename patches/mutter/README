@@ -8,11 +8,9 @@ tap-key.patch
 
     The combination goes through a virtual keyboard, so keybinding processing handles it and it
     reaches keybindings and global shortcuts. configure-gnome-keys.sh sets tap-keys: the right Super
-    sends XF86Launch9, which no physical key sends, for Claude Desktop's Quick Entry shortcut, and Alt
-    (which with the repository's key rotation is only the left physical Win key) sends XF86Launch8,
-    with which the global menu extension opens the menu with the name of the focused window's
-    application. The tap keys do nothing until configure-gnome-keys.sh has set tap-keys. The release
-    of the tapped key still reaches the focused window, which saw it pressed.
+    sends XF86Launch9, which no physical key sends, for Claude Desktop's Quick Entry shortcut. The tap
+    keys do nothing until configure-gnome-keys.sh has set tap-keys. The release of the tapped key
+    still reaches the focused window, which saw it pressed.
 
     The test is added to src/tests/keybindings.c, which runs during the build. It configures two tap
     keys and holds each together with another key, also with the other tap key, which must send
@@ -28,8 +26,6 @@ tap-key.patch
 
       tap the right Super on its own     should send XF86Launch9, which opens Claude Quick Entry
       right Super with another key       should act as Super, for example Ctrl+Super+L locks
-      tap Alt on its own                 should open the menu of the application's name in the top bar
-      Alt with another key               should act as Alt, for example Alt+Tab switches windows
 
 xdg-session-management.patch
     Backport of https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/4806 from mutter 51. Mutter
@@ -288,9 +284,36 @@ shell-shows-menubar.patch
     Not proposed upstream yet. After a version bump, check calculate_capabilities() in
     src/wayland/meta-wayland-gtk-shell.c.
 
+watched-modifiers.patch
+    Adds meta_display_set_watched_modifiers(), which names modifier keys whose presses and releases
+    the display reports with the signals watched-modifier-pressed, when the key is pressed while no
+    other modifier is held, watched-modifier-combined, when another key or a pointer button is
+    pressed while it is held, and watched-modifier-released, which says whether the key was tapped
+    on its own. The keys still reach the focused window, and nothing is reported while the focused
+    window inhibits shortcuts. GNOME Shell otherwise receives a key only when it is bound or while it
+    has the keyboard. The global menu extension watches the left Alt, which with the repository's
+    key rotation is the physical Win key: while it is held on its own, the titles of the menus
+    underline the letters of their mnemonics, and a tap opens the menu of the application's name.
+
+    The test /core/keybindings/watched-modifiers is added to src/tests/keybindings.c, which runs
+    during the build. It checks the signals for a tap, for the key held together with another key,
+    for a press while another modifier is held and for the other Alt key, which is not watched, and
+    that nothing is reported once no key is watched.
+
+    Not proposed upstream yet. The reports come from process_key_event() and
+    meta_keybindings_process_event() in src/core/keybindings.c, next to the handling of the overlay
+    key, the locate-pointer key and tap-key.patch. After a version bump, check that every key event
+    still passes there.
+
+    Check by hand after a rebuild and a new login, with a window which has menus focused:
+
+      hold the physical Win key          should underline the letters of the menu titles
+      tap it                             should open the menu of the application's name
+      Win+Tab                            should switch windows, with the underlines gone
+
 global-menu-symbols.patch (debian-series)
-    Lists the functions keep-keyboard-focus.patch, kde-appmenu.patch and shell-shows-menubar.patch add
-    in debian/libmutter-18-0.symbols. Ubuntu builds with DPKG_GENSYMBOLS_CHECK_LEVEL=4, which fails the
+    Lists the functions keep-keyboard-focus.patch, kde-appmenu.patch, shell-shows-menubar.patch and
+    watched-modifiers.patch add in debian/libmutter-18-0.symbols. Ubuntu builds with DPKG_GENSYMBOLS_CHECK_LEVEL=4, which fails the
     build on any exported symbol the file does not list. It changes the packaging, so it is applied
     from debian-series rather than series.
 

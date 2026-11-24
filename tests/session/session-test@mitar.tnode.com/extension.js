@@ -90,10 +90,11 @@ function describeItems(menu) {
 }
 
 /**
- * Describes where the labels of the items of a menu start, and which items have an icon.
+ * Describes where the labels of the items of a menu start, which items have an icon, and which labels underline the
+ * letter of their mnemonic, which the global menu does with markup.
  *
  * @param {object} menu - the menu
- * @returns {object[]} each item with a label, as {label, x, icon}
+ * @returns {object[]} each item with a label, as {label, x, icon, underlined}
  */
 function describeLayout(menu) {
     return menu._getMenuItems()
@@ -103,6 +104,7 @@ function describeLayout(menu) {
             x: Math.round(item.label.get_transformed_position()[0]),
             icon: item.get_children().some(child => child instanceof St.Icon && child.gicon &&
                 child.has_style_class_name('popup-menu-icon')),
+            underlined: item.label.clutter_text.use_markup,
         }));
 }
 
@@ -441,6 +443,8 @@ class SessionTest {
             open: open?.label.text ?? null,
             items: open ? describeItems(open.menu) : null,
             layout: open ? describeLayout(open.menu) : null,
+            underlinedTitles: buttons.filter(button => button.label.clutter_text.use_markup)
+                .map(button => button.label.text),
             focus: focus?.label?.text ?? null,
         };
     }
@@ -472,6 +476,17 @@ class SessionTest {
             });
         }
         return this._pointerReady;
+    }
+
+    /**
+     * Moves the virtual pointer to the bottom of the screen, away from the menus, so that a menu which opens does not
+     * open under it, where the item under it would receive the keyboard focus.
+     */
+    async movePointerAway() {
+        await this._ensurePointer();
+        this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), global.stage.width / 2,
+            global.stage.height - 2);
+        await sleep(100);
     }
 
     async _click(actor) {

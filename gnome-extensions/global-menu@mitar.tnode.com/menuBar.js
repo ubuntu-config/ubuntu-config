@@ -11,6 +11,9 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Signals from 'resource:///org/gnome/shell/misc/signals.js';
 
 import {fillAppMenu} from './appMenu.js';
+import {
+    activateMnemonic, addSubmenuItem, setLabelMnemonic, setMenuMnemonicsShown, setMnemonicShown,
+} from './util.js';
 
 // How long a menu without items waits for the application to fill it before it gives up opening.
 const FILL_TIMEOUT_MS = 1000;
@@ -199,6 +202,12 @@ export class MenuBar extends Signals.EventEmitter {
         // Index to the submenu item of each menu in the overflow button.
         this._overflowItems = new Map();
         this._active = true;
+        // The letters of the mnemonics are underlined while Alt is held on its own, and from the moment the keyboard
+        // opened a menu, or was used in one, until no menu is open anymore.
+        this._keyboardUsed = false;
+        this._altHeld = false;
+        this._mnemonicsShown = false;
+        this._mnemonicsResetId = 0;
 
         this._box = new MenuBarBox();
         this._box.connectObject('overflow-changed', () => this._syncOverflow(), this);
@@ -218,13 +227,16 @@ export class MenuBar extends Signals.EventEmitter {
                 this._focusFirstItem(this._appButton);
             else if (!open)
                 this._rebuildIfPending();
+            this._onMnemonicsOpenStateChanged(open);
         }, this);
+        this._watchKeys(this._appButton);
         this._box.add_child(this._appButton.container);
 
         this._overflowButton = new MenuButton('\u00bb', 'global-menu-title', menu => this._fillOverflow(menu));
         this._overflowButton.add_style_class_name('global-menu-overflow');
         this._overflowButton.menu.connectObject('open-state-changed',
             (menu, open) => this._onOverflowOpenStateChanged(open), this);
+        this._watchKeys(this._overflowButton);
         this._box.add_child(this._overflowButton.container);
 
         global.display.connectObject('notify::focus-window', () => this._sync(), this);
@@ -234,6 +246,9 @@ export class MenuBar extends Signals.EventEmitter {
     }
 
     destroy() {
+        if (this._mnemonicsResetId)
+            GLib.source_remove(this._mnemonicsResetId);
+        this._mnemonicsResetId = 0;
         global.display.disconnectObject(this);
         this._tracker.disconnectObject(this);
         this._sources.disconnectObject(this);
@@ -255,12 +270,13 @@ export class MenuBar extends Signals.EventEmitter {
         if (!active)
             this.closeMenus();
         this._box.visible = active && !!this._app;
+        this._updateMnemonics();
     }
 
     /**
      * The top-level menus of the focused window, in their order, with their texts and mnemonics.
      *
-     * @type {{text: string, mnemonic: string|null}[]}
+     * @type {{text: string, mnemonic: string|null, index: number}[]}
      */
     get titles() {
         return this._active ? this._titles : [];
@@ -289,7 +305,66 @@ export class MenuBar extends Signals.EventEmitter {
         // The menu opens later when the application still has to fill it, and its first item has the focus then.
         this._focusOnOpen = button;
         this._focusIndex = overflowed ? index : -1;
+        this._keyboardUsed = true;
         button.menu.open();
+    }
+
+    // The keys pressed in an open menu show the letters of the mnemonics: Alt while it is held, any other key until no
+    // menu is open anymore. The letter of a mnemonic acts on its item.
+    _watchKeys(button) {
+        button.menu.actor.connectObject('captured-event', (actor, event) => {
+            const type = event.type();
+            if (type !== Clutter.EventType.KEY_PRESS && type !== Clutter.EventType.KEY_RELEASE)
+                return Clutter.EVENT_PROPAGATE;
+            const key = event.get_key_symbol();
+            if (key === Clutter.KEY_Alt_L || key === Clutter.KEY_Alt_R) {
+                this._altHeld = type === Clutter.EventType.KEY_PRESS;
+                this._updateMnemonics();
+                return Clutter.EVENT_PROPAGATE;
+            }
+            if (type !== Clutter.EventType.KEY_PRESS)
+                return Clutter.EVENT_PROPAGATE;
+            this._keyboardUsed = true;
+            this._updateMnemonics();
+            return activateMnemonic(button.menu, event) ? Clutter.EVENT_STOP : Clutter.EVENT_PROPAGATE;
+        }, this);
+    }
+
+    /**
+     * Underlines the letters of the mnemonics while Alt is held on its own, also while no menu is open.
+     *
+     * @param {boolean} held - whether Alt is held
+     */
+    setAltHeld(held) {
+        this._altHeld = held;
+        this._updateMnemonics();
+    }
+
+    _updateMnemonics() {
+        const shown = this._active && (this._altHeld || (this._keyboardUsed && this.isMenuOpen()));
+        if (shown === this._mnemonicsShown)
+            return;
+        this._mnemonicsShown = shown;
+        for (const button of this._buttons)
+            setMnemonicShown(button.label, shown);
+        for (const button of [this._appButton, ...this._buttons, this._overflowButton])
+            setMenuMnemonicsShown(button.menu, shown);
+    }
+
+    // Moving from one menu to the next closes one and opens the other, so the letters are hidden only once no menu
+    // stays open.
+    _queueMnemonicsReset() {
+        if (this._mnemonicsResetId)
+            return;
+        this._mnemonicsResetId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._mnemonicsResetId = 0;
+            if (!this.isMenuOpen()) {
+                this._keyboardUsed = false;
+                this._altHeld = false;
+            }
+            this._updateMnemonics();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _focusFirstItem(button) {
@@ -333,6 +408,13 @@ export class MenuBar extends Signals.EventEmitter {
     }
 
     // The buttons of the menus which do not fit are not shown, and cannot be focused or clicked either.
+    _onMnemonicsOpenStateChanged(open) {
+        if (open)
+            this._updateMnemonics();
+        else
+            this._queueMnemonicsReset();
+    }
+
     _syncOverflow() {
         this._buttons.forEach((button, index) => button.setSensitive(index < this._box.fitCount));
         this._overflowButton.setSensitive(this._box.fitCount < this._buttons.length);
@@ -343,17 +425,19 @@ export class MenuBar extends Signals.EventEmitter {
         menu.removeAll();
         this._overflowItems.clear();
         for (const index of this.overflowed) {
-            const item = new PopupMenu.PopupSubMenuMenuItem(this._titles[index].text);
+            const {text, index: mnemonicIndex} = this._titles[index];
+            const item = addSubmenuItem(menu, {text, mnemonicIndex});
             this._model.fill(index, item.menu);
             this._filledKeys.set(index, this._model.contentKey(index));
-            menu.addMenuItem(item);
             this._overflowItems.set(index, item);
         }
+        setMenuMnemonicsShown(menu, this._mnemonicsShown);
     }
 
     // The application fills its menus when told that they open, as LibreOffice does, so all menus in the overflow
     // button are prepared when it opens, and refilled when they change.
     _onOverflowOpenStateChanged(open) {
+        this._onMnemonicsOpenStateChanged(open);
         const model = this._model;
         if (!model)
             return;
@@ -380,6 +464,7 @@ export class MenuBar extends Signals.EventEmitter {
             return;
         const shown = item.menu.isOpen;
         this._model.fill(index, item.menu);
+        setMenuMnemonicsShown(item.menu, this._mnemonicsShown);
         this._filledKeys.set(index, key);
         if (shown)
             item.setSubmenuShown(true);
@@ -450,11 +535,14 @@ export class MenuBar extends Signals.EventEmitter {
         this._destroyButtons();
         const titles = this._model?.titles ?? [];
         this._titles = titles;
-        titles.forEach(({text}, index) => {
+        titles.forEach(({text, index: mnemonicIndex}, index) => {
             const button = new MenuButton(text, 'global-menu-title', menu => this._fill(index, menu),
                 done => this._prepareEmpty(index, done));
+            setLabelMnemonic(button.label, text, mnemonicIndex);
+            setMnemonicShown(button.label, this._mnemonicsShown);
             button.menu.connectObject('open-state-changed', (menu, open) => this._onOpenStateChanged(index, open),
                 this);
+            this._watchKeys(button);
             this._box.insert_child_below(button.container, this._overflowButton.container);
             this._buttons.push(button);
         });
@@ -464,6 +552,7 @@ export class MenuBar extends Signals.EventEmitter {
     }
 
     _onOpenStateChanged(index, open) {
+        this._onMnemonicsOpenStateChanged(open);
         const model = this._model;
         const button = this._buttons[index];
         if (!model || !button)
@@ -516,6 +605,7 @@ export class MenuBar extends Signals.EventEmitter {
 
     _fill(index, menu) {
         this._model.fill(index, menu);
+        setMenuMnemonicsShown(menu, this._mnemonicsShown);
         this._filledKeys.set(index, this._model.contentKey(index));
     }
 

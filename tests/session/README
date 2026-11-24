@@ -85,7 +85,7 @@ The tests:
                   bus.
 
 The tests of the global menu, gnome-extensions/global-menu@mitar.tnode.com with patches/mutter/, each install the
-extension for the test user and enable it at login, with the tap of the left Alt sending XF86Launch8:
+extension for the test user and enable it at login:
 
   global-menu-login
                   Signal started at login registers its menu with global-menu-registrar, which owns
@@ -97,7 +97,11 @@ extension for the test user and enable it at login, with the tap of the left Alt
                   application's name, from which Right moves to File. Return, and clicks on items, also in the
                   submenu of View, activate them, a checked item shows its mark, Open shows its icon, the labels of a
                   menu with a check mark or an icon line up, and the window never loses its active state or its
-                  keyboard focus meanwhile.
+                  keyboard focus meanwhile. Holding the left Alt underlines the letters of the mnemonics in the
+                  titles, until another key is pressed with it. A menu opened with Alt+F underlines them in its items
+                  and in the titles, while one opened with a click does not. The letter of an item activates it, the one of
+                  Zoom opens its submenu, and P, which Paste and Preferences share, moves the keyboard focus between
+                  them.
   global-menu-app-name
                   Ptyxis, which has no menus, has the menu of its name, which a tap of the left Alt opens, with New
                   Window, the items of the window and Quit, and Minimize there minimizes the window.

@@ -10,14 +10,15 @@ import {MenuSources} from './source.js';
 
 /**
  * Returns whether mutter has the calls of the patches of ubuntu-config which the extension needs: grabs which leave
- * the keyboard focus with the focused window, the menu addresses of the org_kde_kwin_appmenu protocol, and telling
- * GTK that the shell shows the menu bars.
+ * the keyboard focus with the focused window, the menu addresses of the org_kde_kwin_appmenu protocol, telling GTK
+ * that the shell shows the menu bars, and the reports of the presses of Alt.
  *
  * @returns {boolean} whether the calls are there
  */
 function mutterHasPatches() {
     return typeof global.display.set_grab_keeps_keyboard_focus === 'function' &&
         typeof global.display.set_shell_shows_menubar === 'function' &&
+        typeof global.display.set_watched_modifiers === 'function' &&
         typeof Meta.Window.prototype.get_dbus_appmenu_service_name === 'function';
 }
 

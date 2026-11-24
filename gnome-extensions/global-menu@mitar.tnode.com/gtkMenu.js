@@ -152,7 +152,7 @@ export class GtkMenuModel extends Signals.EventEmitter {
     /**
      * The top-level menus, in their order, with their texts and mnemonics.
      *
-     * @type {{text: string, mnemonic: string|null}[]}
+     * @type {{text: string, mnemonic: string|null, index: number}[]}
      */
     get titles() {
         return this._topLevel().map(t => parseMnemonic(t.label));
@@ -277,10 +277,10 @@ export class GtkMenuModel extends Signals.EventEmitter {
                 addSeparator(menu);
                 continue;
             }
-            const {text} = parseMnemonic(attribute(model, i, 'label', 's') ?? '');
+            const {text, index} = parseMnemonic(attribute(model, i, 'label', 's') ?? '');
             const submenu = model.get_item_link(i, Gio.MENU_LINK_SUBMENU);
             if (submenu) {
-                const item = addSubmenuItem(menu, {text, icon: iconOf(model, i)});
+                const item = addSubmenuItem(menu, {text, mnemonicIndex: index, icon: iconOf(model, i)});
                 this._fillModel(submenu, item.menu);
                 trimSeparator(item.menu);
                 continue;
@@ -300,6 +300,7 @@ export class GtkMenuModel extends Signals.EventEmitter {
             }
             addItem(menu, {
                 text,
+                mnemonicIndex: index,
                 // Until its group has listed its actions, an action is treated as existing and enabled.
                 enabled: exists ? group.get_action_enabled(name) : !!group && !this._loaded[prefix],
                 toggle,

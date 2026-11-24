@@ -199,10 +199,11 @@ Chromium and Electron applications, receive SIGTERM, as at the end of the sessio
 Chromium and Firefox restore all their windows at their next start. The Quit of Ubuntu Dock and of the dash does the
 same. A tap of the Alt key (which after the key rotation of [Keyboard like on macOS](#keyboard-like-on-macos) is only
 the left physical Win key) or F10 opens the menu of the application's name, and Alt with the underlined letter of a menu
-opens that menu. Firefox and some Electron applications export their menus without underlined letters, so there Alt with
-a letter stays with the application. The window stays active while one of these menus is open, and the keys of the menu
-go to the menu. Menus which do not fit into the left half of the top bar are submenus of a » button after the last menu
-which fits.
+opens that menu. In an open menu the letters are underlined while Alt is held, and once the keyboard opened the menu or
+was used in it, and pressing the letter of an item acts on that item. Firefox and some Electron applications export
+their menus without underlined letters, so there Alt with a letter stays with the application. The window stays active
+while one of these menus is open, and the keys of the menu go to the menu. Menus which do not fit into the left half of
+the top bar are submenus of a » button after the last menu which fits.
 
 GTK 3 and GTK 4 applications, Qt applications, Chromium, Firefox, LibreOffice and Electron applications such as Signal,
 Slack, Claude Desktop and Visual Studio Code show their menus there. GTK applications show their menu bars in their
@@ -214,7 +215,8 @@ Requirements:
   `configure-gnome-desktop.sh`.
 - Mutter keeping the keyboard focus of the focused window while a menu of the extension is open, without which
   Chromium and Electron make their window inactive and ignore the item chosen, offering KDE's protocol through which
-  Chromium, Firefox and Qt name their menus on Wayland, and telling GTK that the top bar shows its menu bars
+  Chromium, Firefox and Qt name their menus on Wayland, telling GTK that the top bar shows its menu bars, and
+  reporting the presses of Alt, which still reach the window, so that the extension sees Alt held and tapped
   (`patches/mutter/`).
 - A registrar of menus which runs before the applications started at login, because Electron exports its menu only
   when a registrar runs at the moment it sets its menu, and GNOME Shell enables extensions only after those
@@ -224,9 +226,6 @@ Requirements:
   (`firefox/policies.json`, installed by `configure-gnome-desktop.sh`), and with the `libdbusmenu-gtk3-4` package.
 - Visual Studio Code with its native title bar, without which it draws its menus itself and exports none
   (`window.titleBarStyle` set to `native` by `configure-gnome-desktop.sh`, and left out of Settings Sync).
-- A tap of the Alt key (which after the key rotation is only the left physical Win key) sending XF86Launch8, which
-  opens the menu of the application's name (`configure-gnome-keys.sh`, with the tap keys of
-  [One key for Claude Quick Entry](#one-key-for-claude-quick-entry)).
 
 ### Terminal shortcuts and palettes
 

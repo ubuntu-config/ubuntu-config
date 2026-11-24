@@ -1196,19 +1196,15 @@ def global_menu_login(session, checks, out_dir):
 
 
 APPS_DIR = REPO_DIR / "tests/session/apps"
-# The tap of the left Alt sends the key which opens the global menu, as configure-gnome-keys.sh sets it.
-TAP_KEYS = "{'Alt_L': 'XF86Launch8'}"
 
 
 def install_global_menu(session):
-    """Installs global-menu@mitar.tnode.com for the test user and enables it at the next login, with the tap of the left
-    Alt set up as configure-gnome-keys.sh sets it up."""
+    """Installs global-menu@mitar.tnode.com for the test user and enables it at the next login."""
     extensions = pathlib.Path.home() / ".local/share/gnome-shell/extensions"
     extensions.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(extensions / GLOBAL_MENU, ignore_errors=True)
     shutil.copytree(REPO_DIR / "gnome-extensions" / GLOBAL_MENU, extensions / GLOBAL_MENU)
     session.enable_extensions(GLOBAL_MENU)
-    session.gsettings("org.gnome.mutter", "tap-keys", TAP_KEYS)
     # The virtual pointer's first move into the top bar would otherwise open the overview through the hot corner.
     session.gsettings("org.gnome.desktop.interface", "enable-hot-corners", "false")
 
@@ -1378,18 +1374,65 @@ def menu_app(session, checks, out_dir, toolkit):
     check_menu_titles(session, checks, toolkit, titles)
     hidden = wait_for(lambda: [e["value"] for e in read_events(log) if e["event"] == "menubar-hidden"], 10)
     checks.check(f"{toolkit}: the window hides its own menu bar", bool(hidden) and all(hidden), str(hidden))
+
+    # Mutter reports the left Alt held on its own, with patches/mutter/watched-modifiers.patch.
+    session.call("setKey", "Alt_L", True)
+    held = wait_menu(session, lambda s: s["underlinedTitles"] == titles)
+    session.call("setKey", "Shift_L", True)
+    combined = wait_menu(session, lambda s: not s["underlinedTitles"])
+    session.call("setKey", "Shift_L", False)
+    session.call("setKey", "Alt_L", False)
+    time.sleep(0.5)
+    after = menu_state(session)
+    checks.check(f"{toolkit}: while the left Alt is held, the titles underline the letters of their mnemonics",
+                 held["underlinedTitles"] == titles and held["open"] is None, str(held))
+    checks.check(f"{toolkit}: another key pressed with Alt hides the underlines, and its release opens no menu",
+                 not combined["underlinedTitles"] and after["open"] is None and not after["underlinedTitles"],
+                 str([combined, after]))
     check_menu_keys(session, checks, toolkit, titles, "f")
 
     def activated():
         return [e["value"] for e in read_events(log) if e["event"] == "activate"]
 
     session.press("f", "Alt_L")
-    wait_menu(session, lambda s: s["open"] == "File")
+    state = wait_menu(session, lambda s: s["open"] == "File" and s["layout"] and all(i["underlined"] for i in s["layout"]))
+    checks.check(f"{toolkit}: a menu opened with Alt+F underlines the letters of the mnemonics, in the titles too",
+                 all(i["underlined"] for i in state["layout"] or []) and state["underlinedTitles"] == titles, str(state))
     session.press("Return")
     checks.check(f"{toolkit}: Return activates the item with the keyboard focus, New",
                  wait_for(lambda: "_New" in activated(), 5), str(activated()))
+    session.call("clickGlobalMenu", "Edit")
+    state = wait_menu(session, lambda s: s["open"] == "Edit" and s["layout"])
+    checks.check(f"{toolkit}: a menu opened with a click underlines no letters",
+                 not any(i["underlined"] for i in state["layout"] or []) and not state["underlinedTitles"], str(state))
+    session.press("Escape")
+    wait_menu(session, lambda s: s["open"] is None)
     click_path(session, ["Edit", "Paste"])
     checks.check(f"{toolkit}: clicking Edit, Paste activates Paste", wait_for(lambda: "_Paste" in activated(), 5),
+                 str(activated()))
+    # A menu which opens under the pointer gives the item there the keyboard focus.
+    session.call("movePointerAway")
+    session.press("e", "Alt_L")
+    wait_menu(session, lambda s: s["open"] == "Edit")
+    time.sleep(0.5)
+    before = menu_state(session)["focus"]
+    session.press("p")
+    first = wait_menu(session, lambda s: s["focus"] != before)["focus"]
+    session.press("p")
+    second = wait_menu(session, lambda s: s["focus"] != first)["focus"]
+    checks.check(f"{toolkit}: in Edit, P moves the keyboard focus between Paste and Preferences, which share it",
+                 {first, second} == {"Paste", "Preferences"} and "_Preferences" not in activated(),
+                 str((before, first, second)))
+    session.press("Escape")
+    wait_menu(session, lambda s: s["open"] is None)
+    session.press("v", "Alt_L")
+    wait_menu(session, lambda s: s["open"] == "View")
+    session.press("z")
+    state = wait_menu(session, lambda s: submenu_open(s["items"], "Zoom") and s["focus"] == "Zoom In")
+    checks.check(f"{toolkit}: in View, Z opens the submenu Zoom with the keyboard focus on Zoom In",
+                 submenu_open(state["items"], "Zoom") and state["focus"] == "Zoom In", str(state))
+    session.press("o")
+    checks.check(f"{toolkit}: then O activates Zoom Out", wait_for(lambda: "Zoom _Out" in activated(), 5),
                  str(activated()))
     click_path(session, ["View", "Zoom", "Zoom In"])
     checks.check(f"{toolkit}: clicking View, Zoom, Zoom In activates the item of the submenu",

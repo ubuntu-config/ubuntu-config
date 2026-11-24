@@ -95,7 +95,7 @@ export class DbusMenuModel extends Signals.EventEmitter {
     /**
      * The top-level menus, in their order, with their texts and mnemonics.
      *
-     * @type {{text: string, mnemonic: string|null}[]}
+     * @type {{text: string, mnemonic: string|null, index: number}[]}
      */
     get titles() {
         return this._topLevel().map(node => parseMnemonic(node.props.label ?? ''));
@@ -317,16 +317,19 @@ export class DbusMenuModel extends Signals.EventEmitter {
                 addSeparator(menu);
                 continue;
             }
-            const {text} = parseMnemonic(props.label ?? '');
+            const {text, index} = parseMnemonic(props.label ?? '');
             const path = [...parentPath, this._pathEntry(parent, node)];
             if (props['children-display'] === 'submenu' || node.children.length) {
-                const item = addSubmenuItem(menu, {text, enabled: props.enabled !== false, icon: iconOf(node)});
+                const item = addSubmenuItem(menu, {
+                    text, mnemonicIndex: index, enabled: props.enabled !== false, icon: iconOf(node),
+                });
                 this._fillChildren(node, item.menu, path);
                 continue;
             }
             const toggleType = props['toggle-type'];
             addItem(menu, {
                 text,
+                mnemonicIndex: index,
                 enabled: props.enabled !== false,
                 toggle: toggleType === 'checkmark' ? 'check' : toggleType === 'radio' ? 'radio' : null,
                 checked: props['toggle-state'] === 1,

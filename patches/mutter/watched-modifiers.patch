@@ -1,0 +1,545 @@
+Description: Report presses and releases of chosen modifier keys to GNOME Shell.
+ GNOME Shell receives a key only when it is bound or while the Shell has the keyboard, so it cannot show what a
+ modifier key does while the key is held, as a global menu does by underlining the letters of its menus while Alt is
+ held, and it learns about a lone tap of a modifier only for the overlay key. meta_display_set_watched_modifiers()
+ names modifier keys whose presses and releases the display reports with the signals watched-modifier-pressed, when
+ the key is pressed while no other modifier is held, watched-modifier-combined, when another key or a pointer button
+ is pressed while it is held, and watched-modifier-released, which says whether the key was tapped on its own. The
+ keys still reach the focused window, and a press is not reported while the focused window inhibits shortcuts.
+ .
+ The test /core/keybindings/watched-modifiers of src/tests/keybindings.c checks the signals for a tap, for the key
+ held together with another key, for a press while another modifier is held and for the other Alt key, which is
+ not watched, and that nothing is reported once no key is watched.
+Author: Mitar
+Forwarded: not-needed
+Last-Update: 2026-11-24
+
+diff --git a/src/core/display-private.h b/src/core/display-private.h
+index 745f992..5955431 100644
+--- a/src/core/display-private.h
++++ b/src/core/display-private.h
+@@ -248,6 +248,16 @@ void meta_display_queue_autoraise_callback  (MetaDisplay *display,
+ void meta_display_remove_autoraise_callback (MetaDisplay *display);
+ 
+ void meta_display_overlay_key_activate (MetaDisplay *display);
++
++void meta_display_watched_modifier_pressed (MetaDisplay *display,
++                                            const char  *key);
++
++void meta_display_watched_modifier_combined (MetaDisplay *display,
++                                             const char  *key);
++
++void meta_display_watched_modifier_released (MetaDisplay *display,
++                                             const char  *key,
++                                             gboolean     tapped);
+ void meta_display_accelerator_activate (MetaDisplay           *display,
+                                         guint                  action,
+                                         const ClutterEvent    *event);
+diff --git a/src/core/display.c b/src/core/display.c
+index 1a2a167..bb06ef7 100644
+--- a/src/core/display.c
++++ b/src/core/display.c
+@@ -169,6 +169,9 @@ enum
+   X11_DISPLAY_OPENED,
+   X11_DISPLAY_CLOSING,
+   OVERLAY_KEY,
++  WATCHED_MODIFIER_PRESSED,
++  WATCHED_MODIFIER_COMBINED,
++  WATCHED_MODIFIER_RELEASED,
+   ACCELERATOR_ACTIVATED,
+   ACCELERATOR_DEACTIVATED,
+   MODIFIERS_ACCELERATOR_ACTIVATED,
+@@ -331,6 +334,58 @@ meta_display_class_init (MetaDisplayClass *klass)
+                   NULL, NULL, NULL,
+                   G_TYPE_NONE, 0);
+ 
++  /**
++   * MetaDisplay::watched-modifier-pressed:
++   * @display: the #MetaDisplay instance
++   * @key: the name of the key, as given to
++   *   meta_display_set_watched_modifiers()
++   *
++   * Emitted when a watched modifier key is pressed while no other modifier
++   * is held.
++   */
++  display_signals[WATCHED_MODIFIER_PRESSED] =
++    g_signal_new ("watched-modifier-pressed",
++                  G_TYPE_FROM_CLASS (klass),
++                  G_SIGNAL_RUN_LAST,
++                  0,
++                  NULL, NULL, NULL,
++                  G_TYPE_NONE, 1, G_TYPE_STRING);
++
++  /**
++   * MetaDisplay::watched-modifier-combined:
++   * @display: the #MetaDisplay instance
++   * @key: the name of the key, as given to
++   *   meta_display_set_watched_modifiers()
++   *
++   * Emitted when another key, or a pointer button, is pressed while a watched
++   * modifier key is held, after #MetaDisplay::watched-modifier-pressed.
++   */
++  display_signals[WATCHED_MODIFIER_COMBINED] =
++    g_signal_new ("watched-modifier-combined",
++                  G_TYPE_FROM_CLASS (klass),
++                  G_SIGNAL_RUN_LAST,
++                  0,
++                  NULL, NULL, NULL,
++                  G_TYPE_NONE, 1, G_TYPE_STRING);
++
++  /**
++   * MetaDisplay::watched-modifier-released:
++   * @display: the #MetaDisplay instance
++   * @key: the name of the key, as given to
++   *   meta_display_set_watched_modifiers()
++   * @tapped: whether nothing else was pressed while the key was held
++   *
++   * Emitted when a watched modifier key is released, after
++   * #MetaDisplay::watched-modifier-pressed.
++   */
++  display_signals[WATCHED_MODIFIER_RELEASED] =
++    g_signal_new ("watched-modifier-released",
++                  G_TYPE_FROM_CLASS (klass),
++                  G_SIGNAL_RUN_LAST,
++                  0,
++                  NULL, NULL, NULL,
++                  G_TYPE_NONE, 2, G_TYPE_STRING, G_TYPE_BOOLEAN);
++
+   display_signals[ACCELERATOR_ACTIVATED] =
+     g_signal_new ("accelerator-activated",
+                   G_TYPE_FROM_CLASS (klass),
+@@ -2409,6 +2464,52 @@ meta_display_overlay_key_activate (MetaDisplay *display)
+   g_signal_emit (display, display_signals[OVERLAY_KEY], 0);
+ }
+ 
++void
++meta_display_watched_modifier_pressed (MetaDisplay *display,
++                                       const char  *key)
++{
++  g_signal_emit (display, display_signals[WATCHED_MODIFIER_PRESSED], 0, key);
++}
++
++void
++meta_display_watched_modifier_combined (MetaDisplay *display,
++                                        const char  *key)
++{
++  g_signal_emit (display, display_signals[WATCHED_MODIFIER_COMBINED], 0, key);
++}
++
++void
++meta_display_watched_modifier_released (MetaDisplay *display,
++                                        const char  *key,
++                                        gboolean     tapped)
++{
++  g_signal_emit (display, display_signals[WATCHED_MODIFIER_RELEASED], 0,
++                 key, tapped);
++}
++
++/**
++ * meta_display_set_watched_modifiers:
++ * @display: a #MetaDisplay
++ * @keys: (array zero-terminated=1) (nullable): the names of modifier keys,
++ *   such as "Alt_L", or "Alt" for both Alt keys
++ *
++ * Sets the modifier keys whose presses and releases @display reports with
++ * #MetaDisplay::watched-modifier-pressed,
++ * #MetaDisplay::watched-modifier-combined and
++ * #MetaDisplay::watched-modifier-released, for example to show what the key
++ * does while it is held, or to act on a tap of it. The keys still reach the
++ * focused window. A press while the focused window inhibits shortcuts is not
++ * reported. %NULL or an empty array stops the reports.
++ */
++void
++meta_display_set_watched_modifiers (MetaDisplay        *display,
++                                    const char * const *keys)
++{
++  g_return_if_fail (META_IS_DISPLAY (display));
++
++  meta_keybindings_set_watched_modifiers (display, keys);
++}
++
+ void
+ meta_display_accelerator_activate (MetaDisplay           *display,
+                                    guint                  action,
+diff --git a/src/core/keybindings-private.h b/src/core/keybindings-private.h
+index 9b3899a..75e8c4f 100644
+--- a/src/core/keybindings-private.h
++++ b/src/core/keybindings-private.h
+@@ -116,6 +116,18 @@ typedef struct
+   char *sends;
+ } MetaTapKey;
+ 
++/* A key of meta_display_set_watched_modifiers(), resolved to keycodes */
++typedef struct
++{
++  char *name;
++  MetaKeyCombo combos[2];
++  MetaResolvedKeyCombo resolved_key_combo;
++  /* Its press was reported, and its release not yet */
++  gboolean pressed;
++  /* Another key or a button was pressed since its press */
++  gboolean combined;
++} MetaWatchedModifier;
++
+ typedef struct
+ {
+   MetaBackend *backend;
+@@ -136,6 +148,8 @@ typedef struct
+   /* MetaTapKey of each key of the tap-keys setting */
+   GArray *tap_keys;
+   ClutterVirtualInputDevice *tap_key_device;
++  /* MetaWatchedModifier of each watched modifier key */
++  GArray *watched_modifiers;
+   MetaResolvedKeyCombo iso_next_group_combos[2];
+   int n_iso_next_group_combos;
+ 
+@@ -178,6 +192,9 @@ gboolean meta_display_process_keybinding_event (MetaDisplay        *display,
+                                                 const char         *name,
+                                                 const ClutterEvent *event);
+ 
++void meta_keybindings_set_watched_modifiers (MetaDisplay        *display,
++                                             const char * const *keys);
++
+ void meta_display_keybinding_foreach (MetaDisplay           *display,
+                                       MetaKeyBindingForeach  func,
+                                       gpointer               user_data);
+diff --git a/src/core/keybindings.c b/src/core/keybindings.c
+index 04a2241..d736472 100644
+--- a/src/core/keybindings.c
++++ b/src/core/keybindings.c
+@@ -843,6 +843,82 @@ reload_active_keyboard_layouts (MetaKeyBindingManager *keys)
+     }
+ }
+ 
++static void
++watched_modifier_clear (MetaWatchedModifier *modifier)
++{
++  resolved_key_combo_reset (&modifier->resolved_key_combo);
++  g_free (modifier->name);
++}
++
++static void
++resolve_watched_modifiers (MetaKeyBindingManager *keys)
++{
++  unsigned int i;
++
++  for (i = 0; keys->watched_modifiers && i < keys->watched_modifiers->len; i++)
++    {
++      MetaWatchedModifier *modifier =
++        &g_array_index (keys->watched_modifiers, MetaWatchedModifier, i);
++
++      resolve_special_key_combo (keys, modifier->combos,
++                                 &modifier->resolved_key_combo);
++    }
++}
++
++/* Parses the name of a key, such as "Alt_L", or of both keys of a modifier,
++ * such as "Alt", as the overlay key does. */
++static gboolean
++parse_modifier_key (const char   *name,
++                    MetaKeyCombo  combos[2])
++{
++  g_autofree char *name_l = NULL;
++  g_autofree char *name_r = NULL;
++
++  if (meta_parse_accelerator (name, &combos[0]))
++    return TRUE;
++
++  name_l = g_strconcat (name, "_L", NULL);
++  name_r = g_strconcat (name, "_R", NULL);
++  return meta_parse_accelerator (name_l, &combos[0]) &&
++         meta_parse_accelerator (name_r, &combos[1]);
++}
++
++void
++meta_keybindings_set_watched_modifiers (MetaDisplay        *display,
++                                        const char * const *names)
++{
++  MetaKeyBindingManager *keys = &display->key_binding_manager;
++  unsigned int i;
++
++  g_clear_pointer (&keys->watched_modifiers, g_array_unref);
++  if (!names || !names[0])
++    return;
++
++  keys->watched_modifiers = g_array_new (FALSE, TRUE,
++                                         sizeof (MetaWatchedModifier));
++  g_array_set_clear_func (keys->watched_modifiers,
++                          (GDestroyNotify) watched_modifier_clear);
++
++  for (i = 0; names[i]; i++)
++    {
++      MetaWatchedModifier modifier = { 0 };
++
++      if (!parse_modifier_key (names[i], modifier.combos))
++        {
++          meta_topic (META_DEBUG_KEYBINDINGS,
++                      "Failed to parse watched modifier \"%s\"", names[i]);
++          continue;
++        }
++
++      modifier.combos[0].modifiers = 0;
++      modifier.combos[1].modifiers = 0;
++      modifier.name = g_strdup (names[i]);
++      g_array_append_val (keys->watched_modifiers, modifier);
++    }
++
++  resolve_watched_modifiers (keys);
++}
++
+ static void
+ reload_combos (MetaKeyBindingManager *keys)
+ {
+@@ -864,6 +940,8 @@ reload_combos (MetaKeyBindingManager *keys)
+ 
+   reload_tap_keys (keys);
+ 
++  resolve_watched_modifiers (keys);
++
+   reload_iso_next_group_combos (keys);
+ 
+   g_hash_table_foreach (keys->key_bindings, binding_reload_combos_foreach, keys);
+@@ -1277,6 +1355,7 @@ meta_display_shutdown_keys (MetaDisplay *display)
+   resolved_key_combo_reset (&keys->locate_pointer_resolved_key_combo);
+   g_clear_pointer (&keys->tap_keys, g_array_unref);
+   g_clear_object (&keys->tap_key_device);
++  g_clear_pointer (&keys->watched_modifiers, g_array_unref);
+ 
+   clear_active_keyboard_layouts (keys);
+ }
+@@ -1767,6 +1846,84 @@ process_tap_keys (MetaDisplay  *display,
+   return handled;
+ }
+ 
++/* Reports the use of a pointer or touch while watched modifier keys are
++ * held. */
++static void
++combine_watched_modifiers (MetaDisplay *display)
++{
++  MetaKeyBindingManager *keys = &display->key_binding_manager;
++  unsigned int i;
++
++  for (i = 0; keys->watched_modifiers && i < keys->watched_modifiers->len; i++)
++    {
++      MetaWatchedModifier *modifier =
++        &g_array_index (keys->watched_modifiers, MetaWatchedModifier, i);
++
++      if (modifier->pressed && !modifier->combined)
++        {
++          modifier->combined = TRUE;
++          meta_display_watched_modifier_combined (display, modifier->name);
++        }
++    }
++}
++
++/* Reports the presses and releases of the watched modifier keys, which reach
++ * the focused window all the same. */
++static void
++process_watched_modifiers (MetaDisplay  *display,
++                           ClutterEvent *event)
++{
++  MetaKeyBindingManager *keys = &display->key_binding_manager;
++  ClutterEventType type = clutter_event_type (event);
++  uint32_t hardware_keycode = clutter_event_get_key_code (event);
++  unsigned int i;
++
++  for (i = 0; keys->watched_modifiers && i < keys->watched_modifiers->len; i++)
++    {
++      MetaWatchedModifier *modifier =
++        &g_array_index (keys->watched_modifiers, MetaWatchedModifier, i);
++      gboolean is_modifier =
++        resolved_key_combo_has_keycode (&modifier->resolved_key_combo,
++                                        hardware_keycode);
++
++      if (type == CLUTTER_KEY_PRESS && !is_modifier)
++        {
++          if (modifier->pressed && !modifier->combined)
++            {
++              modifier->combined = TRUE;
++              meta_display_watched_modifier_combined (display, modifier->name);
++            }
++        }
++      else if (type == CLUTTER_KEY_PRESS)
++        {
++          ClutterInputDevice *source = clutter_event_get_source_device (event);
++
++          /* A press with other modifiers held, which includes a repeated
++           * press of the key itself, starts no report. */
++          if ((get_modifiers (event) & ~(IGNORED_MODIFIERS) &
++               CLUTTER_MODIFIER_MASK) != 0)
++            continue;
++
++          if (display->focus_window &&
++              meta_window_shortcuts_inhibited (display->focus_window, source))
++            continue;
++
++          modifier->pressed = TRUE;
++          modifier->combined = FALSE;
++          meta_display_watched_modifier_pressed (display, modifier->name);
++        }
++      else if (type == CLUTTER_KEY_RELEASE && is_modifier && modifier->pressed)
++        {
++          gboolean tapped = !modifier->combined;
++
++          modifier->pressed = FALSE;
++          modifier->combined = FALSE;
++          meta_display_watched_modifier_released (display, modifier->name,
++                                                  tapped);
++        }
++    }
++}
++
+ static gboolean
+ process_iso_next_group (MetaDisplay  *display,
+                         ClutterEvent *event)
+@@ -1803,6 +1960,8 @@ process_key_event (MetaDisplay     *display,
+                    MetaWindow      *window,
+                    ClutterEvent    *event)
+ {
++  process_watched_modifiers (display, event);
++
+   if (process_overlay_key (display, event, window))
+     return TRUE;
+ 
+@@ -1853,6 +2012,7 @@ meta_keybindings_process_event (MetaDisplay        *display,
+     case CLUTTER_SCROLL:
+       keys->overlay_key_only_pressed = FALSE;
+       keys->locate_pointer_key_only_pressed = FALSE;
++      combine_watched_modifiers (display);
+       if (keys->tap_keys)
+         {
+           for (i = 0; i < keys->tap_keys->len; i++)
+diff --git a/src/meta/display.h b/src/meta/display.h
+index 64575ba..cb595ca 100644
+--- a/src/meta/display.h
++++ b/src/meta/display.h
+@@ -144,6 +144,10 @@ META_EXPORT
+ void meta_display_set_shell_shows_menubar (MetaDisplay *display,
+                                            gboolean     shows_menubar);
+ 
++META_EXPORT
++void meta_display_set_watched_modifiers (MetaDisplay        *display,
++                                         const char * const *keys);
++
+ META_EXPORT
+ guint meta_display_add_keybinding    (MetaDisplay         *display,
+                                       const char          *name,
+diff --git a/src/tests/keybindings.c b/src/tests/keybindings.c
+index 1c3a2ab..ab72454 100644
+--- a/src/tests/keybindings.c
++++ b/src/tests/keybindings.c
+@@ -220,11 +220,114 @@ test_keybinding_tap_keys (void)
+   while (g_main_context_iteration (NULL, FALSE)) {}
+ }
+ 
++static void
++on_watched_modifier_pressed (MetaDisplay *display,
++                             const char  *key,
++                             GString     *log)
++{
++  g_string_append_printf (log, "pressed %s;", key);
++}
++
++static void
++on_watched_modifier_combined (MetaDisplay *display,
++                              const char  *key,
++                              GString     *log)
++{
++  g_string_append_printf (log, "combined %s;", key);
++}
++
++static void
++on_watched_modifier_released (MetaDisplay *display,
++                              const char  *key,
++                              gboolean     tapped,
++                              GString     *log)
++{
++  g_string_append_printf (log, "released %s %s;",
++                          key, tapped ? "tapped" : "combined");
++}
++
++static void
++flush_events (void)
++{
++  meta_flush_input (test_context);
++  while (g_main_context_iteration (NULL, FALSE)) {}
++}
++
++static void
++test_keybinding_watched_modifiers (void)
++{
++  MetaDisplay *display = meta_context_get_display (test_context);
++  MetaBackend *backend = meta_context_get_backend (test_context);
++  const char *watched[] = { "Alt_L", NULL };
++  ClutterSeat *seat;
++  g_autoptr (ClutterVirtualInputDevice) virtual_keyboard = NULL;
++  g_autoptr (GString) log = g_string_new (NULL);
++  gboolean done = FALSE;
++
++  seat = meta_backend_get_default_seat (backend);
++  virtual_keyboard = clutter_seat_create_virtual_device (seat,
++                                                         CLUTTER_KEYBOARD_DEVICE);
++
++  g_signal_connect (display, "watched-modifier-pressed",
++                    G_CALLBACK (on_watched_modifier_pressed), log);
++  g_signal_connect (display, "watched-modifier-combined",
++                    G_CALLBACK (on_watched_modifier_combined), log);
++  g_signal_connect (display, "watched-modifier-released",
++                    G_CALLBACK (on_watched_modifier_released), log);
++  meta_display_set_watched_modifiers (display, watched);
++
++  g_idle_add_full (G_PRIORITY_LOW,
++                   set_true_cb,
++                   &done,
++                   NULL);
++  while (!done)
++    g_main_context_iteration (NULL, TRUE);
++
++  /* A tap. */
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_RELEASED);
++  flush_events ();
++  g_assert_cmpstr (log->str, ==, "pressed Alt_L;released Alt_L tapped;");
++  g_string_truncate (log, 0);
++
++  /* Held together with another key. */
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_A, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_A, CLUTTER_KEY_STATE_RELEASED);
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_RELEASED);
++  flush_events ();
++  g_assert_cmpstr (log->str, ==,
++                   "pressed Alt_L;combined Alt_L;released Alt_L combined;");
++  g_string_truncate (log, 0);
++
++  /* Pressed while another modifier is held, and the other Alt key, which is
++   * not watched. */
++  notify_key (virtual_keyboard, KEY_LEFTCTRL, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_RELEASED);
++  notify_key (virtual_keyboard, KEY_LEFTCTRL, CLUTTER_KEY_STATE_RELEASED);
++  notify_key (virtual_keyboard, KEY_RIGHTALT, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_RIGHTALT, CLUTTER_KEY_STATE_RELEASED);
++  flush_events ();
++  g_assert_cmpstr (log->str, ==, "");
++
++  /* Without watched keys nothing is reported. */
++  meta_display_set_watched_modifiers (display, NULL);
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (virtual_keyboard, KEY_LEFTALT, CLUTTER_KEY_STATE_RELEASED);
++  flush_events ();
++  g_assert_cmpstr (log->str, ==, "");
++
++  g_signal_handlers_disconnect_by_data (display, log);
++}
++
+ static void
+ init_tests (void)
+ {
+   g_test_add_func ("/core/keybindings/remove-trigger", test_keybinding_remove_trigger);
+   g_test_add_func ("/core/keybindings/tap-keys", test_keybinding_tap_keys);
++  g_test_add_func ("/core/keybindings/watched-modifiers",
++                   test_keybinding_watched_modifiers);
+ }
+ 
+ int

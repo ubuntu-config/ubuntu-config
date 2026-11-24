@@ -3,9 +3,12 @@ import Shell from 'gi://Shell';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-// F10 opens the menu bar in GTK and in the applications which follow it. XF86Launch8 is the key the tap-keys setting
-// of the patched mutter sends for a tap of the left Alt, and no physical key sends it.
-const OPEN_ACCELERATORS = ['F10', 'XF86Launch8'];
+// F10 opens the menu bar in GTK and in the applications which follow it.
+const OPEN_ACCELERATOR = 'F10';
+
+// The modifier whose tap opens the menu of the application's name, and which underlines the letters of the mnemonics
+// while it is held.
+const MENU_MODIFIER = 'Alt_L';
 
 // TODO: Leave F10 to the applications which use it themselves, chosen per application.
 //       F10 is grabbed for every window, so terminal programs such as htop and Midnight Commander never receive it.
@@ -15,7 +18,8 @@ const OPEN_ACCELERATORS = ['F10', 'XF86Launch8'];
 /**
  * The keys which open the menus of the menu bar: F10 and a tap of the left Alt open the menu of the application's name,
  * and Alt with the mnemonic of a top-level menu opens that menu. The mnemonics are grabbed only while the focused
- * window has menus with them, so in other windows these keys reach the window.
+ * window has menus with them, so in other windows these keys reach the window. While the left Alt is held on its own,
+ * the titles of the menus underline the letters of their mnemonics.
  */
 export class Keyboard {
     /**
@@ -27,12 +31,24 @@ export class Keyboard {
         this._grabs = new Map();
         this._mnemonicKey = '';
         this._active = true;
-        global.display.connectObject('accelerator-activated', (_display, action) => this._grabs.get(action)?.(), this);
+        global.display.connectObject(
+            'accelerator-activated', (_display, action) => this._grabs.get(action)?.(),
+            'watched-modifier-pressed', () => this._menuBar.setAltHeld(this._active),
+            'watched-modifier-combined', () => this._menuBar.setAltHeld(false),
+            'watched-modifier-released', (_display, _key, tapped) => {
+                this._menuBar.setAltHeld(false);
+                if (tapped && this._active)
+                    this._menuBar.toggleAppMenu();
+            },
+            this);
+        // Mutter reports the presses of the key, which still reaches the focused window.
+        global.display.set_watched_modifiers([MENU_MODIFIER]);
         menuBar.connectObject('changed', () => this._sync(), this);
         this._sync();
     }
 
     destroy() {
+        global.display.set_watched_modifiers([]);
         global.display.disconnectObject(this);
         this._menuBar.disconnectObject(this);
         this._ungrabAll();
@@ -76,8 +92,7 @@ export class Keyboard {
         if (!this._active)
             return;
         this._mnemonicKey = mnemonicKey;
-        for (const accelerator of OPEN_ACCELERATORS)
-            this._grab(accelerator, () => this._menuBar.toggleAppMenu());
+        this._grab(OPEN_ACCELERATOR, () => this._menuBar.toggleAppMenu());
         const grabbed = new Set();
         titles.forEach(({mnemonic}, index) => {
             if (!mnemonic || grabbed.has(mnemonic))

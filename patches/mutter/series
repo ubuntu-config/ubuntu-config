@@ -13,3 +13,4 @@ wayland-client-exited-subprocess.patch
 keep-keyboard-focus.patch
 kde-appmenu.patch
 shell-shows-menubar.patch
+watched-modifiers.patch
