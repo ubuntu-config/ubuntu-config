@@ -8,8 +8,8 @@ tap-key.patch
 
     The combination goes through a virtual keyboard, so keybinding processing handles it and it
     reaches keybindings and global shortcuts. configure-gnome-keys.sh sets tap-keys: the right Super
-    sends XF86Launch9, which no physical key sends, for Claude Desktop's Quick Entry shortcut, and the
-    left Alt, which is the physical Win key with the repository's key rotation, sends XF86Launch8,
+    sends XF86Launch9, which no physical key sends, for Claude Desktop's Quick Entry shortcut, and Alt
+    (which with the repository's key rotation is only the left physical Win key) sends XF86Launch8,
     with which the global menu extension opens the menu with the name of the focused window's
     application. The tap keys do nothing until configure-gnome-keys.sh has set tap-keys. The release
     of the tapped key still reaches the focused window, which saw it pressed.
@@ -28,8 +28,8 @@ tap-key.patch
 
       tap the right Super on its own     should send XF86Launch9, which opens Claude Quick Entry
       right Super with another key       should act as Super, for example Ctrl+Super+L locks
-      tap the physical Win key           should open the menu of the application's name in the top bar
-      physical Win key with another key  should act as Alt, for example Win+Tab switches windows
+      tap Alt on its own                 should open the menu of the application's name in the top bar
+      Alt with another key               should act as Alt, for example Alt+Tab switches windows
 
 xdg-session-management.patch
     Backport of https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/4806 from mutter 51. Mutter

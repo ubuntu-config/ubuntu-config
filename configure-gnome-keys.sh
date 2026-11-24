@@ -114,8 +114,8 @@ set_key org.gnome.desktop.input-sources xkb-options \
 set_key org.gnome.desktop.input-sources sources "[('xkb', 'us'), ('xkb', 'si+us')]"
 
 # Modifiers tapped on their own: the left Super opens the overview, the right Super sends XF86Launch9, which no
-# physical key sends, for Claude Desktop's Quick Entry shortcut, and the left Alt, which is the physical Win key after
-# the rotation above, sends XF86Launch8, with which the global menu extension opens the menu with the name of the
+# physical key sends, for Claude Desktop's Quick Entry shortcut, and Alt (which after the rotation above is only the
+# left physical Win key) sends XF86Launch8, with which the global menu extension opens the menu with the name of the
 # focused window's application.
 # The tap-keys setting comes from patches/mutter, and without the patched mutter it is skipped.
 set_key org.gnome.mutter overlay-key "'Super_L'"
