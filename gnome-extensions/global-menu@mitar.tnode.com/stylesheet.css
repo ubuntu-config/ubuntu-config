@@ -5,3 +5,8 @@
 .global-menu-shortcut {
     padding-left: 2em;
 }
+
+/* The space of an icon, for an item without one in a menu with icons, as wide as .popup-menu-icon. */
+.global-menu-icon-space {
+    width: 16px;
+}

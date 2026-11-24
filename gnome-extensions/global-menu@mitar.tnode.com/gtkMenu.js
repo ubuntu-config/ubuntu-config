@@ -4,7 +4,9 @@ import GLib from 'gi://GLib';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Signals from 'resource:///org/gnome/shell/misc/signals.js';
 
-import {addItem, addSeparator, formatGtkAccel, parseMnemonic, trimSeparator} from './util.js';
+import {
+    addItem, addSeparator, addSubmenuItem, alignItems, formatGtkAccel, parseMnemonic, trimSeparator,
+} from './util.js';
 
 /**
  * Returns an attribute of a menu item as a JavaScript value.
@@ -17,6 +19,20 @@ import {addItem, addSeparator, formatGtkAccel, parseMnemonic, trimSeparator} fro
  */
 function attribute(model, index, name, type) {
     return model.get_item_attribute_value(index, name, new GLib.VariantType(type))?.unpack() ?? null;
+}
+
+/**
+ * Returns the icon of a menu item, from its icon attribute, a serialized GIcon, or its verb-icon attribute, the name of
+ * an icon.
+ *
+ * @param {Gio.MenuModel} model - the menu
+ * @param {number} index - the index of the item
+ * @returns {Gio.Icon|null} the icon, or null without one
+ */
+function iconOf(model, index) {
+    const value = model.get_item_attribute_value(index, 'icon', null) ??
+        model.get_item_attribute_value(index, 'verb-icon', null);
+    return value ? Gio.Icon.deserialize(value) : null;
 }
 
 /**
@@ -216,9 +232,11 @@ export class GtkMenuModel extends Signals.EventEmitter {
                 const links = [Gio.MENU_LINK_SECTION, Gio.MENU_LINK_SUBMENU]
                     .map(link => model.get_item_link(i, link))
                     .map(linked => linked ? describe(linked) : null);
+                const icon = model.get_item_attribute_value(i, 'icon', null) ??
+                    model.get_item_attribute_value(i, 'verb-icon', null);
                 items.push([attribute(model, i, 'label', 's'), attribute(model, i, 'accel', 's'),
                     exists && group.get_action_enabled(name), exists && group.get_action_state(name)?.print(true),
-                    this._hidden(model, i), links]);
+                    this._hidden(model, i), icon?.print(true) ?? null, links]);
             }
             return items;
         };
@@ -238,6 +256,7 @@ export class GtkMenuModel extends Signals.EventEmitter {
         if (title)
             this._fillModel(title.model, menu);
         trimSeparator(menu);
+        alignItems(menu);
     }
 
     _fillModel(model, menu) {
@@ -261,8 +280,7 @@ export class GtkMenuModel extends Signals.EventEmitter {
             const {text} = parseMnemonic(attribute(model, i, 'label', 's') ?? '');
             const submenu = model.get_item_link(i, Gio.MENU_LINK_SUBMENU);
             if (submenu) {
-                const item = new PopupMenu.PopupSubMenuMenuItem(text);
-                menu.addMenuItem(item);
+                const item = addSubmenuItem(menu, {text, icon: iconOf(model, i)});
                 this._fillModel(submenu, item.menu);
                 trimSeparator(item.menu);
                 continue;
@@ -287,6 +305,7 @@ export class GtkMenuModel extends Signals.EventEmitter {
                 toggle,
                 checked,
                 shortcut: formatGtkAccel(attribute(model, i, 'accel', 's')),
+                icon: iconOf(model, i),
                 onActivate: () => group?.activate_action(name, target),
             });
         }

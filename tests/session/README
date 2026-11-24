@@ -95,8 +95,9 @@ extension for the test user and enable it at login, with the tap of the left Alt
                   File, Edit and View. Alt+F opens File with the keyboard focus on its first item, Right and Left move
                   between the menus, Escape closes them, and F10 and a tap of the left Alt open the menu of the
                   application's name, from which Right moves to File. Return, and clicks on items, also in the
-                  submenu of View, activate them, a checked item shows its mark, and the window never loses its active
-                  state or its keyboard focus meanwhile.
+                  submenu of View, activate them, a checked item shows its mark, Open shows its icon, the labels of a
+                  menu with a check mark or an icon line up, and the window never loses its active state or its
+                  keyboard focus meanwhile.
   global-menu-app-name
                   Ptyxis, which has no menus, has the menu of its name, which a tap of the left Alt opens, with New
                   Window, the items of the window and Quit, and Minimize there minimizes the window.

@@ -3,6 +3,10 @@ import St from 'gi://St';
 
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
+// Whether each item added by addItem() or addSubmenuItem() has a check or radio mark and an icon, which alignItems()
+// reads.
+const itemMarks = new WeakMap();
+
 /**
  * Splits a label with a mnemonic, written with an underscore before its letter as GTK and com.canonical.dbusmenu write
  * it, into the text to show and the mnemonic letter. Two underscores stand for one.
@@ -111,8 +115,8 @@ export function formatGtkAccel(accel) {
 }
 
 /**
- * Adds an item to a menu. An item with a shortcut shows it at its right end, and a check or radio item shows its state
- * with an ornament.
+ * Adds an item to a menu. An item with a shortcut shows it at its right end, a check or radio item shows its state
+ * with an ornament, and an item with an icon shows it before its label.
  *
  * @param {PopupMenu.PopupMenuBase} menu - the menu or section to add the item to
  * @param {object} params - the item
@@ -121,11 +125,15 @@ export function formatGtkAccel(accel) {
  * @param {string|null} [params.toggle] - "check" or "radio" for an item with a state, otherwise null
  * @param {boolean} [params.checked] - the state of a check or radio item
  * @param {string|null} [params.shortcut] - the text of its shortcut
+ * @param {Gio.Icon|null} [params.icon] - its icon
  * @param {function(Clutter.Event): void} params.onActivate - called when the item is activated
  * @returns {PopupMenu.PopupMenuItem} the item
  */
-export function addItem(menu, {text, enabled = true, toggle = null, checked = false, shortcut = null, onActivate}) {
+export function addItem(menu, {text, enabled = true, toggle = null, checked = false, shortcut = null, icon = null,
+    onActivate}) {
     const item = new PopupMenu.PopupMenuItem(text);
+    if (icon)
+        item.insert_child_below(new St.Icon({gicon: icon, style_class: 'popup-menu-icon'}), item.label);
     if (shortcut) {
         item.add_child(new St.Label({
             text: shortcut,
@@ -144,7 +152,54 @@ export function addItem(menu, {text, enabled = true, toggle = null, checked = fa
     item.setSensitive(enabled);
     item.connect('activate', (_item, event) => onActivate(event));
     menu.addMenuItem(item);
+    itemMarks.set(item, {toggle, icon: !!icon});
     return item;
+}
+
+/**
+ * Adds an item with a submenu to a menu. The submenu opens below the item, inside the menu.
+ *
+ * @param {PopupMenu.PopupMenuBase} menu - the menu or section to add the item to
+ * @param {object} params - the item
+ * @param {string} params.text - the label, without a mnemonic
+ * @param {boolean} [params.enabled] - whether it can be opened, true when not given
+ * @param {Gio.Icon|null} [params.icon] - its icon
+ * @returns {PopupMenu.PopupSubMenuMenuItem} the item, whose menu receives the items of the submenu
+ */
+export function addSubmenuItem(menu, {text, enabled = true, icon = null}) {
+    const item = new PopupMenu.PopupSubMenuMenuItem(text, !!icon);
+    if (icon)
+        item.icon.gicon = icon;
+    item.setSensitive(enabled);
+    menu.addMenuItem(item);
+    itemMarks.set(item, {toggle: null, icon: !!icon});
+    return item;
+}
+
+/**
+ * Aligns the labels of the items of a menu, and of the items of its submenus, as GTK and macOS do: when an item of a
+ * menu has a check or radio mark, every item of the menu has the space of one, and when an item has an icon, every
+ * item has the space of one.
+ *
+ * @param {PopupMenu.PopupMenuBase} menu - the menu, after all its items were added
+ */
+export function alignItems(menu) {
+    const items = menu._getMenuItems().filter(item => !(item instanceof PopupMenu.PopupSeparatorMenuItem));
+    const marks = items.some(item => itemMarks.get(item)?.toggle);
+    const icons = items.some(item => itemMarks.get(item)?.icon);
+    for (const item of items) {
+        const kind = itemMarks.get(item);
+        if (marks) {
+            if (!kind?.toggle)
+                item.setOrnament(PopupMenu.Ornament.NONE);
+            // GNOME Shell pads the space of a check mark, but not the one of a radio mark.
+            item.add_style_class_name('popup-ornamented-menu-item');
+        }
+        if (icons && !kind?.icon && item.label)
+            item.insert_child_below(new St.Widget({style_class: 'global-menu-icon-space'}), item.label);
+        if (item.menu)
+            alignItems(item.menu);
+    }
 }
 
 /**

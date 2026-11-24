@@ -4,8 +4,8 @@
 Usage: [MENUAPP_EXTRA_MENUS=N] menuapp.py gtk3|gtk4|qt LOG
 
 The window is titled "menu-test-<toolkit>" and has a focused text field under its menu bar, which has the menus File
-(New with Ctrl+N, Open), Edit (Copy, Paste) and View (Show Toolbar, which can be checked, and the submenu Zoom with Zoom
-In and Zoom Out). With MENUAPP_EXTRA_MENUS, up to 14 further menus follow, titled Extra G, Extra H and so on, each with
+(New with Ctrl+N, Open with an icon), Edit (Copy, Paste) and View (Show Toolbar, which can be checked, and the submenu
+Zoom with Zoom In and Zoom Out). GTK names the icon of Open from the icon theme, and Qt exports it as an image. With MENUAPP_EXTRA_MENUS, up to 14 further menus follow, titled Extra G, Extra H and so on, each with
 the mnemonic of its letter and an item named after it, Item G, Item H and so on. GTK exports the menu bar through
 gtk_shell1 and hides it when GNOME Shell announces that it shows the menu bars, and Qt exports it over
 com.canonical.dbusmenu while com.canonical.AppMenu.Registrar has an owner.
@@ -70,7 +70,9 @@ def run_gtk(version):
         menubar = Gio.Menu()
         file_menu = Gio.Menu()
         file_menu.append(LABELS["new"], "app.new")
-        file_menu.append(LABELS["open"], "app.open")
+        open_item = Gio.MenuItem.new(LABELS["open"], "app.open")
+        open_item.set_icon(Gio.ThemedIcon.new("document-open-symbolic"))
+        file_menu.append_item(open_item)
         menubar.append_submenu(LABELS["file"], file_menu)
         edit_menu = Gio.Menu()
         edit_menu.append(LABELS["copy"], "app.copy")
@@ -137,16 +139,20 @@ def run_qt():
     window.setWindowTitle("menu-test-qt")
     window.resize(800, 500)
 
-    def add(menu, name, shortcut=None, checkable=False):
+    def add(menu, name, shortcut=None, checkable=False, icon=None):
         action = menu.addAction(qt_label(LABELS[name]))
         if shortcut:
             action.setShortcut(QtGui.QKeySequence(shortcut))
+        if icon:
+            action.setIcon(icon)
         action.setCheckable(checkable)
         action.triggered.connect(lambda _checked=False, name=name: log("activate", LABELS[name]))
 
     file_menu = window.menuBar().addMenu(qt_label(LABELS["file"]))
     add(file_menu, "new", "Ctrl+N")
-    add(file_menu, "open")
+    pixmap = QtGui.QPixmap(16, 16)
+    pixmap.fill(QtGui.QColor("#3584e4"))
+    add(file_menu, "open", icon=QtGui.QIcon(pixmap))
     edit_menu = window.menuBar().addMenu(qt_label(LABELS["edit"]))
     add(edit_menu, "copy")
     add(edit_menu, "paste")

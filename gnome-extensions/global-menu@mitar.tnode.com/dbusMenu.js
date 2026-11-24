@@ -1,10 +1,11 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Signals from 'resource:///org/gnome/shell/misc/signals.js';
 
-import {addItem, addSeparator, formatDbusmenuShortcut, parseMnemonic, trimSeparator} from './util.js';
+import {
+    addItem, addSeparator, addSubmenuItem, alignItems, formatDbusmenuShortcut, parseMnemonic, trimSeparator,
+} from './util.js';
 
 Gio._promisify(Gio.DBusConnection.prototype, 'call');
 
@@ -35,6 +36,20 @@ function parseLayout([id, props, children]) {
  */
 function isVisible(node) {
     return node.props.visible !== false;
+}
+
+/**
+ * Returns the icon of a node, given by the name of an icon of the icon theme or as the data of a PNG image.
+ *
+ * @param {{props: object}} node - the node
+ * @returns {Gio.Icon|null} the icon, or null without one
+ */
+function iconOf(node) {
+    if (node.props['icon-name'])
+        return Gio.ThemedIcon.new(node.props['icon-name']);
+    if (node.props['icon-data']?.length)
+        return Gio.BytesIcon.new(new GLib.Bytes(node.props['icon-data']));
+    return null;
 }
 
 /**
@@ -268,7 +283,8 @@ export class DbusMenuModel extends Signals.EventEmitter {
      */
     contentKey(index) {
         const describe = node => [node.props.label, node.props.enabled, node.props.visible, node.props.type,
-            node.props['toggle-type'], node.props['toggle-state'], node.props.shortcut, node.children.map(describe)];
+            node.props['toggle-type'], node.props['toggle-state'], node.props.shortcut, node.props['icon-name'],
+            node.props['icon-data']?.length, node.children.map(describe)];
         const node = this._topLevel()[index];
         return node ? JSON.stringify(describe(node)) : '';
     }
@@ -284,6 +300,7 @@ export class DbusMenuModel extends Signals.EventEmitter {
         const node = this._topLevel()[index];
         if (node)
             this._fillChildren(node, menu, [this._pathEntry(this._root, node)]);
+        alignItems(menu);
     }
 
     _pathEntry(parent, node) {
@@ -303,9 +320,7 @@ export class DbusMenuModel extends Signals.EventEmitter {
             const {text} = parseMnemonic(props.label ?? '');
             const path = [...parentPath, this._pathEntry(parent, node)];
             if (props['children-display'] === 'submenu' || node.children.length) {
-                const item = new PopupMenu.PopupSubMenuMenuItem(text);
-                item.setSensitive(props.enabled !== false);
-                menu.addMenuItem(item);
+                const item = addSubmenuItem(menu, {text, enabled: props.enabled !== false, icon: iconOf(node)});
                 this._fillChildren(node, item.menu, path);
                 continue;
             }
@@ -316,6 +331,7 @@ export class DbusMenuModel extends Signals.EventEmitter {
                 toggle: toggleType === 'checkmark' ? 'check' : toggleType === 'radio' ? 'radio' : null,
                 checked: props['toggle-state'] === 1,
                 shortcut: formatDbusmenuShortcut(props.shortcut),
+                icon: iconOf(node),
                 onActivate: event => this._activate(path, event),
             });
         }

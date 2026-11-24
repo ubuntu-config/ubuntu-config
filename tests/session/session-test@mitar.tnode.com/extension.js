@@ -90,6 +90,23 @@ function describeItems(menu) {
 }
 
 /**
+ * Describes where the labels of the items of a menu start, and which items have an icon.
+ *
+ * @param {object} menu - the menu
+ * @returns {object[]} each item with a label, as {label, x, icon}
+ */
+function describeLayout(menu) {
+    return menu._getMenuItems()
+        .filter(item => item.label && !item.has_style_class_name('popup-separator-menu-item'))
+        .map(item => ({
+            label: item.label.text,
+            x: Math.round(item.label.get_transformed_position()[0]),
+            icon: item.get_children().some(child => child instanceof St.Icon && child.gicon &&
+                child.has_style_class_name('popup-menu-icon')),
+        }));
+}
+
+/**
  * Finds an item of an open menu by its label, also in its open submenus.
  *
  * @param {object} menu - the menu
@@ -423,6 +440,7 @@ class SessionTest {
             overflowed: buttons.slice(1).filter(button => !button.reactive).map(button => button.label.text),
             open: open?.label.text ?? null,
             items: open ? describeItems(open.menu) : null,
+            layout: open ? describeLayout(open.menu) : null,
             focus: focus?.label?.text ?? null,
         };
     }

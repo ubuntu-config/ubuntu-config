@@ -1364,7 +1364,8 @@ def check_menu_keys(session, checks, name, titles, mnemonic):
 def menu_app(session, checks, out_dir, toolkit):
     """The test application apps/menuapp.py, whose menu bar the global menu shows instead of the window: the keys open
     its menus, its items act when clicked or chosen with the keyboard, also in a submenu, a checked item shows its mark,
-    and the window keeps its keyboard focus throughout."""
+    an item shows its icon, the labels of a menu with a check mark or an icon line up, and the window keeps its keyboard
+    focus throughout."""
     install_global_menu(session)
     log = out_dir / f"menuapp-{toolkit}.log"
     session.login()
@@ -1397,8 +1398,21 @@ def menu_app(session, checks, out_dir, toolkit):
     checks.check(f"{toolkit}: clicking View, Show Toolbar activates it", wait_for(lambda: "Show _Toolbar" in activated(), 5),
                  str(activated()))
     session.call("clickGlobalMenu", "View")
-    state = wait_menu(session, lambda s: s["open"] == "View" and "[x] Show Toolbar" in (s["items"] or []))
+    state = wait_menu(session, lambda s: s["open"] == "View" and "[x] Show Toolbar" in (s["items"] or []) and
+                      all(item["x"] is not None for item in s["layout"] or []))
     checks.check(f"{toolkit}: Show Toolbar shows its check mark", "[x] Show Toolbar" in (state["items"] or []), str(state))
+    starts = {item["x"] for item in state["layout"] or []}
+    checks.check(f"{toolkit}: in View, Zoom has the space of a check mark too, so the labels line up",
+                 len(state["layout"] or []) == 2 and len(starts) == 1, str(state["layout"]))
+    session.press("Escape")
+    wait_menu(session, lambda s: s["open"] is None)
+    session.call("clickGlobalMenu", "File")
+    state = wait_menu(session, lambda s: s["open"] == "File" and s["layout"] and
+                      all(item["x"] is not None for item in s["layout"]))
+    layout = {item["label"]: item for item in state["layout"] or []}
+    checks.check(f"{toolkit}: Open shows its icon, and New has the space of an icon, so the labels line up",
+                 layout.get("Open", {}).get("icon") is True and layout.get("New", {}).get("icon") is False and
+                 len({item["x"] for item in layout.values()}) == 1, str(state["layout"]))
     session.press("Escape")
 
     events = read_events(log)
