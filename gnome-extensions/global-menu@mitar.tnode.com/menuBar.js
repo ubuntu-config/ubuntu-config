@@ -33,7 +33,8 @@ class MenuButton extends PanelMenu.Button {
      *   and calls its argument once the items are there or it gave up waiting for them
      */
     _init(text, styleClass, fill, prepare) {
-        super._init(0.0, text);
+        // The menu is centered under its title, as the menus of the status icons are.
+        super._init(0.5, text);
         // A menu without items does not open, so it is filled before PopupMenu.open() checks that, also when the
         // menu opens through a click, the keyboard, or a move from another menu of the top bar. LibreOffice fills a
         // submenu only when its submenu action says that the submenu opens, so an empty menu opens once the
