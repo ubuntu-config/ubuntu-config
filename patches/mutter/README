@@ -311,11 +311,33 @@ watched-modifiers.patch
       tap it                             should open the menu of the application's name
       Win+Tab                            should switch windows, with the underlines gone
 
+forward-key-event.patch
+    Adds meta_display_forward_key_event(), which delivers a key event, which a stage grab received, to
+    the client with the keyboard focus, as it is delivered without a grab, once the stage is not grabbed
+    anymore. A shortcut of the focused window pressed while a menu of the global menu extension is open
+    reaches the menu's grab, and the extension closes the menu and forwards the key, so the shortcut acts
+    as if the menu were not open. With keep-keyboard-focus.patch, the window kept its keyboard focus
+    during the grab and receives the modifier state when the grab ends, so the key reaches it with the
+    modifiers held, and the release of the key follows without a grab.
+
+    The test /wayland/keep-keyboard-focus/forward-key is added to wayland-keep-keyboard-focus, which
+    runs during the build. It checks that Ctrl+N pressed during a grab is not forwarded while the stage
+    is grabbed, and that the client receives N with Ctrl held once the grab ended, followed by the
+    releases of N and Ctrl.
+
+    Not proposed upstream yet, as it builds on keep-keyboard-focus.patch. After a version bump, check
+    that meta_wayland_compositor_handle_event() still delivers a key event to the client with the
+    keyboard focus.
+
+    Check by hand after a rebuild and a new login, with VS Code focused:
+
+      open a menu in the top bar         then Ctrl+Shift+N should close it and open a new window
+
 global-menu-symbols.patch (debian-series)
-    Lists the functions keep-keyboard-focus.patch, kde-appmenu.patch, shell-shows-menubar.patch and
-    watched-modifiers.patch add in debian/libmutter-18-0.symbols. Ubuntu builds with DPKG_GENSYMBOLS_CHECK_LEVEL=4, which fails the
-    build on any exported symbol the file does not list. It changes the packaging, so it is applied
-    from debian-series rather than series.
+    Lists the functions keep-keyboard-focus.patch, kde-appmenu.patch, shell-shows-menubar.patch,
+    watched-modifiers.patch and forward-key-event.patch add in debian/libmutter-18-0.symbols. Ubuntu
+    builds with DPKG_GENSYMBOLS_CHECK_LEVEL=4, which fails the build on any exported symbol the file
+    does not list. It changes the packaging, so it is applied from debian-series rather than series.
 
 keep-keyboard-focus.patch, kde-appmenu.patch and shell-shows-menubar.patch apply in this order, since
 each edits lines next to the ones the previous one adds.

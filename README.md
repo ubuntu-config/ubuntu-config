@@ -204,7 +204,8 @@ the left physical Win key) or F10 opens the menu of the application's name, and 
 opens that menu. In an open menu the letters are underlined while Alt is held, and once the keyboard opened the menu or
 was used in it, and pressing the letter of an item acts on that item. Firefox and some Electron applications export
 their menus without underlined letters, so there Alt with a letter stays with the application. The window stays active
-while one of these menus is open, and the keys of the menu go to the menu. Menus which do not fit into the left half of
+while one of these menus is open, and the keys of the menu go to the menu, while a shortcut of the window, a key with
+Ctrl or Super or a function key, closes the menu and acts in the window. Menus which do not fit into the left half of
 the top bar are submenus of a » button after the last menu which fits.
 
 GTK 3 and GTK 4 applications, Qt applications, Chromium, Firefox, LibreOffice and Electron applications such as Signal,
@@ -216,10 +217,10 @@ Requirements:
 - The Global Menu extension (`gnome-extensions/global-menu@mitar.tnode.com`), installed and enabled by
   `configure-gnome-desktop.sh`.
 - Mutter keeping the keyboard focus of the focused window while a menu of the extension is open, without which
-  Chromium and Electron make their window inactive and ignore the item chosen, offering KDE's protocol through which
-  Chromium, Firefox and Qt name their menus on Wayland, telling GTK that the top bar shows its menu bars, and
-  reporting the presses of Alt, which still reach the window, so that the extension sees Alt held and tapped
-  (`patches/mutter/`).
+  Chromium and Electron make their window inactive and ignore the item chosen, handing a shortcut pressed in such a
+  menu to the window, offering KDE's protocol through which Chromium, Firefox and Qt name their menus on Wayland,
+  telling GTK that the top bar shows its menu bars, and reporting the presses of Alt, which still reach the window, so
+  that the extension sees Alt held and tapped (`patches/mutter/`).
 - A registrar of menus which runs before the applications started at login, because Electron exports its menu only
   when a registrar runs at the moment it sets its menu, and GNOME Shell enables extensions only after those
   applications started (`global-menu-registrar.py`, `systemd/user/global-menu-registrar.service`, installed by

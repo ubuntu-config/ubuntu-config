@@ -129,6 +129,33 @@ function menuOfItem(menu, item) {
     return null;
 }
 
+// The keys which are only modifiers, which are pressed on the way to a shortcut.
+const MODIFIER_KEYS = new Set([
+    Clutter.KEY_Shift_L, Clutter.KEY_Shift_R, Clutter.KEY_Control_L, Clutter.KEY_Control_R, Clutter.KEY_Alt_L,
+    Clutter.KEY_Alt_R, Clutter.KEY_Super_L, Clutter.KEY_Super_R, Clutter.KEY_Meta_L, Clutter.KEY_Meta_R,
+    Clutter.KEY_Hyper_L, Clutter.KEY_Hyper_R, Clutter.KEY_ISO_Level3_Shift, Clutter.KEY_ISO_Level5_Shift,
+    Clutter.KEY_Caps_Lock, Clutter.KEY_Num_Lock,
+]);
+
+/**
+ * Returns whether a key pressed in an open menu is a shortcut of the window rather than a key of the menu: a key held
+ * with Ctrl or Super, or a function key other than F10, which opens and closes the menus. Letters, the arrow keys,
+ * Return, Escape and Alt with a letter stay with the menu.
+ *
+ * @param {Clutter.Event} event - the key press
+ * @returns {boolean} whether the key is a shortcut of the window
+ */
+export function isWindowShortcut(event) {
+    const key = event.get_key_symbol();
+    if (MODIFIER_KEYS.has(key))
+        return false;
+    const modifiers = Clutter.ModifierType.CONTROL_MASK | Clutter.ModifierType.SUPER_MASK |
+        Clutter.ModifierType.MOD4_MASK;
+    if (event.get_state() & modifiers)
+        return true;
+    return key >= Clutter.KEY_F1 && key <= Clutter.KEY_F35 && key !== Clutter.KEY_F10;
+}
+
 /**
  * Acts on a key pressed in an open menu as GTK and Qt menus act on the letter of a mnemonic: the only item with that
  * mnemonic is activated, or its submenu is opened with the keyboard focus on its first item, and with several such

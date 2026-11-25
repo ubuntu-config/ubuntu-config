@@ -1,0 +1,250 @@
+Description: Let GNOME Shell hand a key pressed in a menu to the focused window.
+ A stage grab receives all key events, so a shortcut of the focused window pressed while a GNOME Shell menu is open
+ never reaches the window. For a global menu, whose items show the shortcuts of the window, the shortcut should act
+ as if the menu were not open. meta_display_forward_key_event() delivers a key event, which a stage grab received,
+ to the client with the keyboard focus, as it is delivered without a grab, once the stage is not grabbed anymore.
+ GNOME Shell closes the menu, which ends the grab, and then forwards the key press. With
+ meta_display_set_grab_keeps_keyboard_focus() of keep-keyboard-focus.patch, the window kept its keyboard focus
+ during the grab and receives the modifier state when the grab ends, so the key reaches it with the modifiers held,
+ and the release of the key follows without a grab.
+ .
+ The test /wayland/keep-keyboard-focus/forward-key of wayland-keep-keyboard-focus checks that Ctrl+N pressed during
+ a grab is not forwarded while the stage is grabbed, and that the client receives N with Ctrl held once the grab
+ ended, followed by the releases of N and Ctrl.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-25
+
+diff --git a/src/core/display.c b/src/core/display.c
+index bb06ef7..3516e6c 100644
+--- a/src/core/display.c
++++ b/src/core/display.c
+@@ -1316,6 +1316,55 @@ meta_display_grab_keeps_keyboard_focus (MetaDisplay  *display,
+                                 grab_actor);
+ }
+ 
++/**
++ * meta_display_forward_key_event:
++ * @display: a #MetaDisplay
++ * @event: a key event, which a stage grab received
++ *
++ * Delivers a key event, which a stage grab received, to the client with the
++ * keyboard focus, as it is delivered without a grab. This suits a key
++ * combination pressed in a menu opened on behalf of the focused window, like a
++ * global menu, which is a shortcut of the window: the menu closes, its grab
++ * ends, and the window receives the key. The release of the key follows
++ * without a grab, so the client receives it as for any other key.
++ *
++ * The event is delivered only once the stage is not grabbed anymore, which
++ * meta_display_set_grab_keeps_keyboard_focus() arranges to leave the keyboard
++ * focus and the modifier state of the window right.
++ *
++ * Returns: %TRUE when a client received the event, %FALSE when it is no key
++ *   event, the stage is still grabbed, or no client has the keyboard focus
++ */
++gboolean
++meta_display_forward_key_event (MetaDisplay        *display,
++                                const ClutterEvent *event)
++{
++  MetaContext *context;
++  MetaBackend *backend;
++  ClutterStage *stage;
++  MetaWaylandCompositor *compositor;
++  ClutterEventType event_type;
++
++  g_return_val_if_fail (META_IS_DISPLAY (display), FALSE);
++  g_return_val_if_fail (event != NULL, FALSE);
++
++  event_type = clutter_event_type (event);
++  if (event_type != CLUTTER_KEY_PRESS && event_type != CLUTTER_KEY_RELEASE)
++    return FALSE;
++
++  context = meta_display_get_context (display);
++  backend = meta_context_get_backend (context);
++  stage = CLUTTER_STAGE (meta_backend_get_stage (backend));
++  if (clutter_stage_get_grab_actor (stage))
++    return FALSE;
++
++  compositor = meta_context_get_wayland_compositor (context);
++  if (!compositor)
++    return FALSE;
++
++  return meta_wayland_compositor_handle_event (compositor, event);
++}
++
+ /**
+  * meta_display_set_shell_shows_menubar:
+  * @display: a #MetaDisplay
+diff --git a/src/meta/display.h b/src/meta/display.h
+index cb595ca..8a45cf7 100644
+--- a/src/meta/display.h
++++ b/src/meta/display.h
+@@ -140,6 +140,10 @@ void meta_display_set_grab_keeps_keyboard_focus (MetaDisplay  *display,
+                                                  ClutterActor *actor,
+                                                  gboolean      keeps_focus);
+ 
++META_EXPORT
++gboolean meta_display_forward_key_event (MetaDisplay        *display,
++                                         const ClutterEvent *event);
++
+ META_EXPORT
+ void meta_display_set_shell_shows_menubar (MetaDisplay *display,
+                                            gboolean     shows_menubar);
+diff --git a/src/tests/wayland-keep-keyboard-focus-tests.c b/src/tests/wayland-keep-keyboard-focus-tests.c
+index 871c5ad..6d13b61 100644
+--- a/src/tests/wayland-keep-keyboard-focus-tests.c
++++ b/src/tests/wayland-keep-keyboard-focus-tests.c
+@@ -145,6 +145,57 @@ keep_keyboard_focus_keep_focus (void)
+   meta_wayland_test_client_finish (wayland_test_client);
+ }
+ 
++static gboolean
++on_key_press_copy (ClutterActor  *actor,
++                   ClutterEvent  *event,
++                   ClutterEvent **copy)
++{
++  if (clutter_event_get_event_code (event) == KEY_N && !*copy)
++    *copy = clutter_event_copy (event);
++
++  return CLUTTER_EVENT_STOP;
++}
++
++static void
++keep_keyboard_focus_forward_key (void)
++{
++  MetaDisplay *display = meta_context_get_display (test_context);
++  MetaWaylandTestClient *wayland_test_client;
++  TestGrab *test_grab;
++  ClutterEvent *key_press = NULL;
++
++  wayland_test_client =
++    meta_wayland_test_client_new_with_args (test_context,
++                                            "keep-keyboard-focus",
++                                            "forward-key",
++                                            NULL);
++  wait_for_sync_point (0);
++  g_assert_nonnull (meta_find_client_window (test_context, "forward-key"));
++
++  /* Ctrl+N pressed during the grab reaches only the grab. */
++  test_grab = test_grab_new (TRUE);
++  g_signal_connect (test_grab->actor, "key-press-event",
++                    G_CALLBACK (on_key_press_copy), &key_press);
++  notify_key (KEY_LEFTCTRL, CLUTTER_KEY_STATE_PRESSED);
++  notify_key (KEY_N, CLUTTER_KEY_STATE_PRESSED);
++  while (!key_press)
++    g_main_context_iteration (NULL, TRUE);
++
++  /* The key is forwarded only once the grab ended, and then the client
++   * receives it with Ctrl held. */
++  g_assert_false (meta_display_forward_key_event (display, key_press));
++  g_clear_pointer (&test_grab, test_grab_free);
++  g_assert_true (meta_display_forward_key_event (display, key_press));
++  g_clear_pointer (&key_press, clutter_event_free);
++  wait_for_sync_point (1);
++
++  notify_key (KEY_N, CLUTTER_KEY_STATE_RELEASED);
++  notify_key (KEY_LEFTCTRL, CLUTTER_KEY_STATE_RELEASED);
++  wait_for_sync_point (2);
++
++  meta_wayland_test_client_finish (wayland_test_client);
++}
++
+ static void
+ keep_keyboard_focus_unmarked_grab (void)
+ {
+@@ -236,6 +287,8 @@ init_tests (void)
+                    keep_keyboard_focus_unmarked_grab);
+   g_test_add_func ("/wayland/keep-keyboard-focus/grab-switch",
+                    keep_keyboard_focus_grab_switch);
++  g_test_add_func ("/wayland/keep-keyboard-focus/forward-key",
++                   keep_keyboard_focus_forward_key);
+ }
+ 
+ int
+diff --git a/src/tests/wayland-test-clients/keep-keyboard-focus.c b/src/tests/wayland-test-clients/keep-keyboard-focus.c
+index 7bb4e83..b10ca9f 100644
+--- a/src/tests/wayland-test-clients/keep-keyboard-focus.c
++++ b/src/tests/wayland-test-clients/keep-keyboard-focus.c
+@@ -16,7 +16,8 @@
+  */
+ 
+ /*
+- * Test client for meta_display_set_grab_keeps_keyboard_focus(). The first
++ * Test client for meta_display_set_grab_keeps_keyboard_focus() and
++ * meta_display_forward_key_event(). The first
+  * argument names the scenario, which is also the window title. The client
+  * asserts the keyboard events it receives and reports its progress with sync
+  * points, which the compositor side of the test waits for before its next
+@@ -32,6 +33,7 @@
+ #include "wayland-test-client-utils.h"
+ 
+ #define SHIFT_MASK (1 << 0)
++#define CONTROL_MASK (1 << 2)
+ 
+ static gboolean running;
+ static struct wl_seat *wl_seat;
+@@ -41,6 +43,7 @@ static int enter_count;
+ static int leave_count;
+ static int key_count;
+ static gboolean shift_pressed;
++static gboolean control_pressed;
+ static gboolean modifiers_resent;
+ 
+ static void
+@@ -105,6 +108,7 @@ keyboard_handle_leave (void               *data,
+ 
+   /* A grab for an actor which keeps the keyboard focus never sends a leave. */
+   g_assert_false (is_test ("keep-focus"));
++  g_assert_false (is_test ("forward-key"));
+ 
+   leave_count++;
+   g_assert_cmpint (leave_count, ==, 1);
+@@ -171,6 +175,33 @@ keyboard_handle_key (void               *data,
+           g_assert_not_reached ();
+         }
+     }
++  else if (is_test ("forward-key"))
++    {
++      switch (key_count)
++        {
++        case 1:
++          /* The key pressed during the grab, forwarded once the grab ended,
++           * with Ctrl, which was pressed during the grab and is still held,
++           * in the modifier state sent when the grab ended. */
++          g_assert_cmpint (key, ==, KEY_N);
++          g_assert_cmpint (state, ==, WL_KEYBOARD_KEY_STATE_PRESSED);
++          g_assert_true (control_pressed);
++          sync_point (display, 1);
++          break;
++        case 2:
++          g_assert_cmpint (key, ==, KEY_N);
++          g_assert_cmpint (state, ==, WL_KEYBOARD_KEY_STATE_RELEASED);
++          break;
++        case 3:
++          /* Ctrl was pressed during the grab, so the client receives only its
++           * release. */
++          g_assert_cmpint (key, ==, KEY_LEFTCTRL);
++          g_assert_cmpint (state, ==, WL_KEYBOARD_KEY_STATE_RELEASED);
++          break;
++        default:
++          g_assert_not_reached ();
++        }
++    }
+   else if (is_test ("grab-switch"))
+     {
+       /* The key pressed after all grabs ended reaches the client, which kept
+@@ -206,6 +237,14 @@ keyboard_handle_modifiers (void               *data,
+   WaylandDisplay *display = data;
+ 
+   shift_pressed = (mods_pressed & SHIFT_MASK) != 0;
++  control_pressed = (mods_pressed & CONTROL_MASK) != 0;
++
++  if (is_test ("forward-key") && key_count == 3)
++    {
++      g_assert_false (control_pressed);
++      sync_point (display, 2);
++      running = FALSE;
++    }
+ 
+   /* The grab ended, and the modifiers changed during it are sent at once,
+    * not only with the next key. */

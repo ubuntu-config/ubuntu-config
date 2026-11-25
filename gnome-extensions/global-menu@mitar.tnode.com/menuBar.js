@@ -12,7 +12,7 @@ import * as Signals from 'resource:///org/gnome/shell/misc/signals.js';
 
 import {fillAppMenu} from './appMenu.js';
 import {
-    activateMnemonic, addSubmenuItem, setLabelMnemonic, setMenuMnemonicsShown, setMnemonicShown,
+    activateMnemonic, addSubmenuItem, isWindowShortcut, setLabelMnemonic, setMenuMnemonicsShown, setMnemonicShown,
 } from './util.js';
 
 // How long a menu without items waits for the application to fill it before it gives up opening.
@@ -310,7 +310,8 @@ export class MenuBar extends Signals.EventEmitter {
     }
 
     // The keys pressed in an open menu show the letters of the mnemonics: Alt while it is held, any other key until no
-    // menu is open anymore. The letter of a mnemonic acts on its item.
+    // menu is open anymore. The letter of a mnemonic acts on its item, and a shortcut of the window closes the menu and
+    // reaches the window.
     _watchKeys(button) {
         button.menu.actor.connectObject('captured-event', (actor, event) => {
             const type = event.type();
@@ -324,6 +325,13 @@ export class MenuBar extends Signals.EventEmitter {
             }
             if (type !== Clutter.EventType.KEY_PRESS)
                 return Clutter.EVENT_PROPAGATE;
+            // A shortcut of the window acts as if the menu were not open, also one which an item shows. The key is
+            // forwarded once the menu closed, as the window receives no keys while the menu grabs them.
+            if (typeof global.display.forward_key_event === 'function' && isWindowShortcut(event)) {
+                button.menu.close();
+                global.display.forward_key_event(event);
+                return Clutter.EVENT_STOP;
+            }
             this._keyboardUsed = true;
             this._updateMnemonics();
             return activateMnemonic(button.menu, event) ? Clutter.EVENT_STOP : Clutter.EVENT_PROPAGATE;

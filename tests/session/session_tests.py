@@ -1458,7 +1458,13 @@ def menu_app(session, checks, out_dir, toolkit):
     checks.check(f"{toolkit}: Open shows its icon, and New has the space of an icon, so the labels line up",
                  layout.get("Open", {}).get("icon") is True and layout.get("New", {}).get("icon") is False and
                  len({item["x"] for item in layout.values()}) == 1, str(state["layout"]))
-    session.press("Escape")
+    # A shortcut of the window, with patches/mutter/forward-key-event.patch, acts as if the menu were not open.
+    news = activated().count("_New")
+    session.press("n", "Control_L")
+    state = wait_menu(session, lambda s: s["open"] is None)
+    checks.check(f"{toolkit}: Ctrl+N, the shortcut of New, closes the open menu and activates New in the window",
+                 state["open"] is None and wait_for(lambda: activated().count("_New") > news, 5),
+                 str([state, activated()]))
 
     events = read_events(log)
     lost = [e for e in events if e["event"] in ("active", "focus") and e["value"] is False]
@@ -1577,20 +1583,30 @@ def global_menu_signal(session, checks, out_dir):
 def global_menu_vscode(session, checks, out_dir):
     """Visual Studio Code, with the native title bar configure-gnome-desktop.sh sets, registers its menu as Electron
     does. New Window in its File menu opens a window, and so does Ctrl+Shift+N, which the global menu leaves to the
-    window. Full Screen in its View menu acts only when Electron has a focused window. It comes last, as a fullscreen
-    window hides the top bar, with the first window focused again, so that the click reaches the focused one of three
-    windows, which Electron registers each with a menu of its own. Visual Studio Code sets its whole menu again whenever
-    one of its menus opens, which must not replace the items under the pointer."""
+    window, also while the menu of the application's name is open after a tap of Alt. Full Screen in its View menu acts
+    only when Electron has a focused window. It comes last, as a fullscreen window hides the top bar, with the first
+    window focused again, so that the click reaches the focused one of four windows, which Electron registers each with
+    a menu of its own. Visual Studio Code sets its whole menu again whenever one of its menus opens, which must not
+    replace the items under the pointer."""
     settings = pathlib.Path.home() / ".config/Code/User/settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text('{"window.titleBarStyle": "native", "workbench.startupEditor": "none", '
                         '"security.workspace.trust.enabled": false}\n')
+
+    def shortcut_in_open_menu(window):
+        session.press("Alt_L")
+        wait_menu(session, lambda s: s["open"] == "Visual Studio Code")
+        session.press("n", "Control_L", "Shift_L")
+
     return electron_or_browser(session, checks, "VS Code", "code --ozone-platform=wayland --new-window", "Visual Studio Code",
                                ["File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help"], "f",
                                [(["File", "New Window"], "opens a second window, which has the focus",
                                  newest_focused(session, 1)),
                                 (lambda window: session.press("n", "Control_L", "Shift_L"),
                                  "Ctrl+Shift+N opens a third window, which has the focus", newest_focused(session, 2)),
+                                (shortcut_in_open_menu, "Ctrl+Shift+N with the menu of the application's name open, "
+                                 "after a tap of Alt, closes the menu and opens a fourth window, which has the focus",
+                                 lambda window: newest_focused(session, 3)(window) and not menu_state(session)["open"]),
                                 (lambda window: session.call("activateWindow", window["id"]),
                                  "activating the first window focuses it", focused(session)),
                                 (["View", "Appearance", "Full Screen"], "makes the first window fullscreen",
