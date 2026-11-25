@@ -1698,13 +1698,6 @@ def more_windows(session, count=1):
     return lambda window: len(session.windows(window["app"])) > count
 
 
-def newest_focused(session, count):
-    """Returns a check whether the application of the window has more than count windows, the newest of them focused, as
-    a new window receives the focus a moment after it opens."""
-    return lambda window: (lambda windows: len(windows) > count and max(windows, key=lambda w: w["id"])["focused"])(
-        session.windows(window["app"]))
-
-
 @test
 def global_menu_signal(session, checks, out_dir):
     """Signal, an Electron application, registers its menu with global-menu-registrar, and its window is found by its
@@ -1718,35 +1711,71 @@ def global_menu_signal(session, checks, out_dir):
 @test
 def global_menu_vscode(session, checks, out_dir):
     """Visual Studio Code, with the native title bar configure-gnome-desktop.sh sets, registers its menu as Electron
-    does. New Window in its File menu opens a window, and so does Ctrl+Shift+N, which the global menu leaves to the
-    window, also while the menu of the application's name is open after a tap of Alt. Full Screen in its View menu acts
-    only when Electron has a focused window. It comes last, as a fullscreen window hides the top bar, with the first
-    window focused again, so that the click reaches the focused one of four windows, which Electron registers each with
-    a menu of its own. Visual Studio Code sets its whole menu again whenever one of its menus opens, which must not
-    replace the items under the pointer."""
+    does, a menu of its own for each window. New Window in its File menu opens a window, and so does Ctrl+Shift+N, which
+    the global menu leaves to the window, also while the menu of the application's name is open after a tap of Alt. The
+    top bar shows the menu of each new window once it has the focus, and the menu of the first window again once it is
+    activated. Full Screen in its View menu acts only when Electron has a focused window. It comes last, as a fullscreen
+    window hides the top bar, with the first window focused again, so that the click reaches the focused one of four
+    windows, and the other three stay as they are. Visual Studio Code sets its whole menu again whenever one of its
+    menus opens, which must not replace the items under the pointer."""
     settings = pathlib.Path.home() / ".config/Code/User/settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text('{"window.titleBarStyle": "native", "workbench.startupEditor": "none", '
                         '"security.workspace.trust.enabled": false}\n')
+    titles = ["File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help"]
+    # The key of the menu the top bar showed for each window, by the window's ID.
+    menu_keys = {}
+
+    def new_window(action):
+        def run(window):
+            menu_keys.setdefault(window["id"], menu_state(session)["menuKey"])
+            action(window)
+        return run
+
+    def own_menu(count):
+        """Returns a check whether the application has more than count windows, the newest of them focused, and the top
+        bar shows a menu for it with the titles of Visual Studio Code, which no other window showed."""
+        def check(window):
+            windows = session.windows(window["app"])
+            if len(windows) <= count:
+                return False
+            newest = max(windows, key=lambda w: w["id"])
+            state = menu_state(session)
+            others = {key for id_, key in menu_keys.items() if id_ != newest["id"]}
+            if not newest["focused"] or state["titles"][1:] != titles or not state["menuKey"] or state["menuKey"] in others:
+                return False
+            menu_keys[newest["id"]] = state["menuKey"]
+            return True
+        return check
 
     def shortcut_in_open_menu(window):
         session.press("Alt_L")
         wait_menu(session, lambda s: s["open"] == "Visual Studio Code")
         session.press("n", "Control_L", "Shift_L")
 
+    def others_not_fullscreen(window):
+        return not any(w["fullscreen"] for w in session.windows(window["app"]) if w["id"] != window["id"])
+
     return electron_or_browser(session, checks, "VS Code", "code --ozone-platform=wayland --new-window", "Visual Studio Code",
-                               ["File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help"], "f",
-                               [(["File", "New Window"], "opens a second window, which has the focus",
-                                 newest_focused(session, 1)),
-                                (lambda window: session.press("n", "Control_L", "Shift_L"),
-                                 "Ctrl+Shift+N opens a third window, which has the focus", newest_focused(session, 2)),
-                                (shortcut_in_open_menu, "Ctrl+Shift+N with the menu of the application's name open, "
-                                 "after a tap of Alt, closes the menu and opens a fourth window, which has the focus",
-                                 lambda window: newest_focused(session, 3)(window) and not menu_state(session)["open"]),
+                               titles, "f",
+                               [(new_window(lambda window: click_path(session, ["File", "New Window"])),
+                                 "File, New Window opens a second window, which has the focus, and the top bar its menu",
+                                 own_menu(1)),
+                                (new_window(lambda window: session.press("n", "Control_L", "Shift_L")),
+                                 "Ctrl+Shift+N opens a third window, which has the focus, and the top bar its menu",
+                                 own_menu(2)),
+                                (new_window(shortcut_in_open_menu), "Ctrl+Shift+N with the menu of the application's name "
+                                 "open, after a tap of Alt, closes the menu and opens a fourth window, which has the focus, "
+                                 "and the top bar its menu",
+                                 lambda window: own_menu(3)(window) and not menu_state(session)["open"]),
                                 (lambda window: session.call("activateWindow", window["id"]),
-                                 "activating the first window focuses it", focused(session)),
+                                 "activating the first window focuses it, and the top bar shows its menu again",
+                                 lambda window: focused(session)(window) and
+                                 menu_state(session)["menuKey"] == menu_keys.get(window["id"])),
                                 (["View", "Appearance", "Full Screen"], "makes the first window fullscreen",
-                                 fullscreen(session))])
+                                 fullscreen(session)),
+                                (lambda window: time.sleep(1), "the other three windows stay out of fullscreen",
+                                 others_not_fullscreen)])
 
 
 @test

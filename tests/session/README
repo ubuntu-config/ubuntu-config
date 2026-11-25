@@ -132,15 +132,16 @@ and V-Shell has closed the dialog it opens meanwhile:
                   Ptyxis, which has no menus, has the menu of its name, which a tap of the left Alt opens, with New
                   Window, the items of the window and Quit, and Minimize there minimizes the window.
   global-menu-signal, global-menu-vscode, global-menu-chromium, global-menu-firefox, global-menu-libreoffice
-                  The application's menus and their keys, as for the test window, and an item which acts on the
-                  window: Toggle Full Screen in Signal and Full Screen in Visual Studio Code, which act only when
-                  Electron has a focused window, and New Window in the others. In Visual Studio Code, New Window in
-                  its File menu and Ctrl+Shift+N open further windows first, also Ctrl+Shift+N with the menu of the
-                  application's name open after a tap of the left Alt, which closes the menu. Then Full Screen, in a
-                  submenu of View, acts on the first window, focused again, among the four windows with a menu each,
-                  while Visual Studio Code sets its whole menu again, as it does when one of its menus opens. Firefox
-                  exports its menus without mnemonics, so there Alt+F stays with Firefox, and the keys are checked from
-                  the menu of the application's name.
+                  The application's menus and their keys, as for the test window, and an item which acts on the window:
+                  Toggle Full Screen in Signal and Full Screen in Visual Studio Code, which act only when Electron has a
+                  focused window, and New Window in the others. In Visual Studio Code, New Window in its File menu and
+                  Ctrl+Shift+N open further windows first, also Ctrl+Shift+N with the menu of the application's name
+                  open after a tap of the left Alt, which closes the menu, and the top bar shows the menu of each new
+                  window, which Electron registers for each window, once the window has the focus, and the menu of the
+                  first window again once it is activated. Then Full Screen, in a submenu of View, acts on the first
+                  window, while the other three stay out of fullscreen, and while Visual Studio Code sets its whole menu
+                  again, as it does when one of its menus opens. Firefox exports its menus without mnemonics, so there
+                  Alt+F stays with Firefox, and the keys are checked from the menu of the application's name.
   global-menu-overflow
                   The test window with 18 further menus, more than fit into the top bar: the menus have the width of the
                   top bar up to the status area, which keeps its natural width, as Just Perfection shows the clock in

@@ -484,13 +484,14 @@ class SessionTest {
      * @returns {object} the global menu in the top bar: whether the extension shows it, the titles of its buttons, the
      *     first being the application's name, the titles of the menus which do not fit and are in the overflow button,
      *     the title of the open menu, which is the label of the overflow button for it, and its items, see
-     *     describeItems(), and the label of the item which has the keyboard focus
+     *     describeItems(), the label of the item which has the keyboard focus, and the key which names the menu shown,
+     *     different for each menu an application exports
      */
     globalMenu() {
         this._ensurePointer();
         const buttons = globalMenuButtons();
         if (!buttons)
-            return {shown: false, titles: [], overflowed: [], open: null, items: null, focus: null};
+            return {shown: false, titles: [], overflowed: [], open: null, items: null, focus: null, menuKey: null};
         const overflow = globalMenuOverflow();
         const open = [...buttons, overflow].find(button => button?.menu.isOpen);
         const focus = global.stage.get_key_focus();
@@ -504,6 +505,7 @@ class SessionTest {
             underlinedTitles: buttons.filter(button => button.label.clutter_text.use_markup)
                 .map(button => button.label.text),
             focus: focus?.label?.text ?? null,
+            menuKey: Main.extensionManager.lookup('global-menu@mitar.tnode.com')?.stateObj?._menuBar?._modelKey ?? null,
         };
     }
 
