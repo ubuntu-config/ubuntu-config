@@ -1507,6 +1507,57 @@ def global_menu_qt(session, checks, out_dir):
     return menu_app(session, checks, out_dir, "qt")
 
 
+def cjk_count(text):
+    """Returns how many CJK ideographs text has, the characters an input method for Chinese composes."""
+    return sum(1 for char in text if "\u4e00" <= char <= "\u9fff")
+
+
+@test
+def global_menu_input_method(session, checks, out_dir):
+    """With an input method which composes text, IBus with its Pinyin engine, the keys pressed in an open menu of the
+    global menu reach the menu. Mutter gives every key to the input method first, so the input method would otherwise
+    compose them into the text field of the window, which keeps its keyboard focus while the menu is open:
+    patches/mutter/keep-keyboard-focus.patch moves the focus of the input method away from the window meanwhile. The
+    GTK 4 window of apps/menuapp.py uses the input method through mutter, as GTK does on Wayland."""
+    session.gsettings("org.gnome.desktop.input-sources", "sources", "[('ibus', 'libpinyin')]")
+    install_global_menu(session)
+    log = out_dir / "menuapp-gtk4.log"
+    session.login()
+    session.call("spawnCommandLine", f"env GTK_IM_MODULE=wayland python3 {APPS_DIR}/menuapp.py gtk4 {log}")
+    window = shown_window(session, None, lambda w: w["title"] == "menu-test-gtk4", 30)
+    checks.check("the window opened", bool(window), str(window_summary(window)))
+    if not window:
+        return {}
+    check_menu_titles(session, checks, "gtk4", ["File", "Edit", "View"])
+
+    def text():
+        return next((e["value"] for e in reversed(read_events(log)) if e["event"] == "text"), "")
+
+    # The input method takes some time to start with the session.
+    composed = wait_for(lambda: (session.type_text("ni "), wait_for(lambda: cjk_count(text()) > 0, 3))[1] and text(), 30)
+    checks.check("the input method composes text in the window: n, i and Space commit a Chinese character",
+                 bool(composed) and cjk_count(composed) > 0, repr(text()))
+    if not composed:
+        session.logout()
+        return {"events": read_events(log)}
+
+    session.call("clickGlobalMenu", "Edit")
+    before = wait_menu(session, lambda s: s["open"] == "Edit" and s["items"])["focus"]
+    session.press("p")
+    state = wait_menu(session, lambda s: s["focus"] in ("Paste", "Preferences"))
+    checks.check("P in the open menu Edit reaches the menu, which moves the keyboard focus to Paste",
+                 state["focus"] in ("Paste", "Preferences"), str([before, state]))
+    # The input method would also receive Escape, on which it drops what it composed.
+    session.press("Escape")
+    closed = wait_menu(session, lambda s: s["open"] is None)
+    session.press("space")
+    wait_for(lambda: text() != composed, 5)
+    checks.check("Escape closes the menu, and Space after it reaches the text field as a space, nothing composed of P",
+                 closed["open"] is None and text() == composed + " ", repr([closed["open"], composed, text()]))
+    session.logout()
+    return {"events": read_events(log)}
+
+
 @test
 def global_menu_app_name(session, checks, out_dir):
     """An application without menus, Ptyxis, has the menu of its name: the items of its desktop file, the items of the
@@ -1648,7 +1699,7 @@ def global_menu_firefox(session, checks, out_dir):
 def global_menu_libreoffice(session, checks, out_dir):
     """LibreOffice Writer exports its menu bar through gtk_shell1 with a GMenuModel, and New Window in its Window menu
     opens a window."""
-    # The dialogs of a first start would take the focus from the document's window, as a new profile has them.
+    # The dialogs of a first start would move the focus away from the document's window, as a new profile has them.
     version = re.search(r"LibreOffice (\d+\.\d+)", subprocess.run(["soffice", "--version"], capture_output=True,
                                                                   text=True).stdout)
     profile = pathlib.Path.home() / ".config/libreoffice/4/user"

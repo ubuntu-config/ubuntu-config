@@ -12,11 +12,11 @@ H and so on. GTK exports the menu bar through gtk_shell1 and hides it when GNOME
 bars, and Qt exports it over com.canonical.dbusmenu while com.canonical.AppMenu.Registrar has an owner.
 
 Each line of LOG is a JSON object with the event "activate" and the item's label for an activated menu item, "active"
-with the window's active state when it changes, "focus" with the text field's focus when it changes, with Qt "key" with
-"Shift+Insert" when the text field receives it, as Qt gives it to the text field and not to Paste, and "menubar-hidden"
-with whether the window's own menu bar is hidden, two seconds after the window opened and, with GTK, also when it opened
-and whenever it changes. With GTK, "close" is logged when the window is asked to close, and "signal" with "SIGTERM" when
-the process receives SIGTERM, after which it quits.
+with the window's active state when it changes, "focus" with the text field's focus when it changes, with GTK "text"
+with the text field's text when it changes, with Qt "key" with "Shift+Insert" when the text field receives it, as Qt
+gives it to the text field and not to Paste, and "menubar-hidden" with whether the window's own menu bar is hidden, two
+seconds after the window opened and, with GTK, also when it opened and whenever it changes. With GTK, "close" is logged
+when the window is asked to close, and "signal" with "SIGTERM" when the process receives SIGTERM, after which it quits.
 """
 
 import json
@@ -118,6 +118,7 @@ def run_gtk(version):
             window.connect("close-request", lambda _window: log("close", True))
             window.present()
         window.connect("notify::is-active", lambda w, _pspec: log("active", w.is_active()))
+        entry.connect("changed", lambda e: log("text", e.get_text()))
         entry.grab_focus()
         settings = Gtk.Settings.get_default()
         log("menubar-hidden", settings.props.gtk_shell_shows_menubar)
@@ -180,7 +181,7 @@ def run_qt():
                 log("focus", True)
             elif event.type() == QtCore.QEvent.Type.FocusOut:
                 log("focus", False)
-            # The text field takes Shift+Insert as its own paste, before the shortcut of Paste.
+            # The text field handles Shift+Insert as its own paste, before the shortcut of Paste.
             elif (event.type() == QtCore.QEvent.Type.KeyPress and event.key() == QtCore.Qt.Key.Key_Insert and
                   event.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier):
                 log("key", "Shift+Insert")

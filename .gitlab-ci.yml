@@ -338,6 +338,8 @@ test_global_menu:
         SESSION_TEST_APPS: gtk
       - TEST: global-menu-qt
         SESSION_TEST_APPS: qt
+      - TEST: global-menu-input-method
+        SESSION_TEST_APPS: gtk ibus
       - TEST: global-menu-vscode
         SESSION_TEST_APPS: vscode
       - TEST: global-menu-libreoffice

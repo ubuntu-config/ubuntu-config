@@ -19,6 +19,7 @@
 #   libreoffice   LibreOffice Writer, with its GTK 3 interface
 #   qt            PyQt6, with Qt's Wayland platform
 #   gtk           GTK 3 and GTK 4 for Python
+#   ibus          IBus with its Pinyin engine, an input method which composes Chinese text from the letters typed
 
 set -euo pipefail
 
@@ -57,6 +58,7 @@ for app in ${SESSION_TEST_APPS:-}; do
     libreoffice) apps+=(libreoffice-writer libreoffice-gtk3) ;;
     qt) apps+=(python3-pyqt6 qt6-wayland) ;;
     gtk) apps+=(gir1.2-gtk-3.0 gir1.2-gtk-4.0) ;;
+    ibus) apps+=(ibus ibus-libpinyin) ;;
     *) echo "unknown application $app in SESSION_TEST_APPS" >&2; exit 2 ;;
   esac
 done
