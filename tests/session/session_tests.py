@@ -1714,6 +1714,42 @@ def global_menu_signal(session, checks, out_dir):
 
 
 @test
+def global_menu_reenable(session, checks, out_dir):
+    """Disabling the extension and enabling it again brings Signal's menu back to the top bar: global-menu-registrar
+    gives up com.canonical.AppMenu.Registrar while the extension is disabled and owns it again once it is enabled, and
+    Electron registers its windows again whenever the name has a new owner. Toggle Full Screen in its View menu then acts
+    on the window, as before. While the extension is disabled, Electron keeps the menu bar of its window hidden, so the
+    window has no menu, which is Electron's and not checked here."""
+    install_global_menu(session)
+    session.login()
+    session.call("spawnCommandLine", f"{SIGNAL} --ozone-platform=wayland")
+    window = shown_window(session, None, lambda w: "Signal" in (w["title"] or ""), 60)
+    checks.check("the window opened, focused", bool(window and window["focused"]), str(window_summary(window)))
+    if not window:
+        return {}
+    titles = ["File", "Edit", "View", "Window", "Help"]
+    check_menu_titles(session, checks, "Signal", titles, 60)
+
+    session.gsettings("org.gnome.shell", "enabled-extensions",
+                      json.dumps([TEST_EXTENSION, *TOP_BAR_EXTENSIONS]).replace('"', "'"))
+    gone = wait_for(lambda: registrar_owner(session) is None, 10)
+    state = wait_menu(session, lambda s: not s["shown"])
+    checks.check("disabling the extension makes global-menu-registrar give up its name and removes the menu from the top bar",
+                 bool(gone) and not state["shown"], str([registrar_owner(session), state]))
+
+    session.enable_extensions(GLOBAL_MENU)
+    owner = wait_for(lambda: registrar_owner(session), 10)
+    state = wait_menu(session, lambda s: s["shown"] and s["titles"][1:] == titles, 30)
+    checks.check("enabling it again shows Signal's menu in the top bar again",
+                 bool(owner) and state["shown"] and state["titles"][1:] == titles, str([owner, state, menu_registrations(session)]))
+    click_path(session, ["View", "Toggle Full Screen"])
+    checks.check("Toggle Full Screen in its View menu makes the window fullscreen again",
+                 wait_for(lambda: fullscreen(session)(window), 30), str(session.windows()))
+    session.logout()
+    return {}
+
+
+@test
 def global_menu_vscode(session, checks, out_dir):
     """Visual Studio Code, with the native title bar configure-gnome-desktop.sh sets, registers its menu as Electron
     does, a menu of its own for each window. New Window in its File menu opens a window, and so does Ctrl+Shift+N, which

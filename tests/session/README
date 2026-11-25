@@ -142,6 +142,12 @@ and V-Shell has closed the dialog it opens meanwhile:
                   window, while the other three stay out of fullscreen, and while Visual Studio Code sets its whole menu
                   again, as it does when one of its menus opens. Firefox exports its menus without mnemonics, so there
                   Alt+F stays with Firefox, and the keys are checked from the menu of the application's name.
+  global-menu-reenable
+                  Disabling the extension makes global-menu-registrar give up its name and removes Signal's menu from
+                  the top bar, and enabling it again brings the menu back, as Electron registers its windows again with
+                  the registrar's new owner, and Toggle Full Screen in its View menu acts on the window again. Electron
+                  keeps the menu bar of its window hidden while the extension is disabled, which the test does not
+                  check.
   global-menu-overflow
                   The test window with 18 further menus, more than fit into the top bar: the menus have the width of the
                   top bar up to the status area, which keeps its natural width, as Just Perfection shows the clock in
@@ -182,14 +188,14 @@ serve their pages from a web server on localhost, and set Firefox as the default
 
 prepare-container.sh installs the session and the patched packages, so it needs the .deb files built here, and Chromium
 from the xtradeb repository in sources.list.d/. The tests of the global menu need further applications, which it
-installs when SESSION_TEST_APPS names them: signal for global-menu-login and global-menu-signal, gtk for
-looking-glass-focus, the tests of GTK, global-menu-date-menu, global-menu-overflow and global-menu-quit-window-backed,
-gtk and ibus for global-menu-input-method, qt, vscode and libreoffice. run-session-tests.sh then runs the tests. Both
-run as root in a privileged container, and refuse to run anywhere else. The processes of a container of rootless Docker
-count against the inotify instances of the user who runs Docker, and a few sessions side by side with the desktop need
-more than the kernel's default of 128, to which configure-gnome-desktop.sh raises the limit
-(sysctl.d/60-inotify-instances.conf). With rootless Docker, from the root of the repository, and the packages of the
-local repository:
+installs when SESSION_TEST_APPS names them: signal for global-menu-login, global-menu-signal and global-menu-reenable,
+gtk for looking-glass-focus, the tests of GTK, global-menu-date-menu, global-menu-overflow and
+global-menu-quit-window-backed, gtk and ibus for global-menu-input-method, qt, vscode and libreoffice.
+run-session-tests.sh then runs the tests. Both run as root in a privileged container, and refuse to run anywhere else.
+The processes of a container of rootless Docker count against the inotify instances of the user who runs Docker, and a
+few sessions side by side with the desktop need more than the kernel's default of 128, to which
+configure-gnome-desktop.sh raises the limit (sysctl.d/60-inotify-instances.conf). With rootless Docker, from the root of
+the repository, and the packages of the local repository:
 
   docker run --rm --privileged -v "$PWD:/repo:ro" -v /usr/local/lib/debs:/debs:ro -v /tmp/session-test:/out \
     registry.gitlab.com/tozd/docker/base:ubuntu-resolute bash -c '

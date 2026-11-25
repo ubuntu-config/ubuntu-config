@@ -332,6 +332,7 @@ test_global_menu:
       - TEST:
           - global-menu-login
           - global-menu-signal
+          - global-menu-reenable
         SESSION_TEST_APPS: signal
       - TEST:
           - global-menu-gtk3

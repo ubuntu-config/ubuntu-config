@@ -218,7 +218,8 @@ which fits.
 
 GTK 3 and GTK 4 applications, Qt applications, Chromium, Firefox, LibreOffice and Electron applications such as Signal,
 Slack, Claude Desktop and Visual Studio Code show their menus there. GTK applications show their menu bars in their
-windows again as soon as the extension is disabled.
+windows again as soon as the extension is disabled. Electron applications keep theirs hidden, so they have no menu until
+they start again, or until the extension is enabled again, which brings their menus back to the top bar.
 
 Requirements:
 
