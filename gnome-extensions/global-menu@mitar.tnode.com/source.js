@@ -4,8 +4,7 @@ import {DbusMenuModel} from './dbusMenu.js';
 import {GtkMenuModel} from './gtkMenu.js';
 
 /**
- * Finds the menu of a window and keeps one model for each menu, shared by the windows which have the same menu, as the
- * windows of an Electron application have.
+ * Finds the menu of a window and keeps one model for each menu, which the windows with the same menu share.
  *
  * Signals: "changed" when the menu a window has can have changed without the window telling.
  */
