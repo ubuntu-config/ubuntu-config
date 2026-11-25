@@ -68,21 +68,34 @@ export class RegistrarClient extends Signals.EventEmitter {
 
     /**
      * Returns the menu registered for a window. A window under XWayland is found by its X11 window ID. Electron on
-     * Wayland registers every window with the same made-up window ID, so a Wayland window is found by the process which
-     * registered the menu, the process which owns the window. Its most recent registration is used.
+     * Wayland registers its windows with numbers of its own instead, so a Wayland window is found among the
+     * registrations of the process which owns it.
      *
      * @param {Meta.Window} window - the window
      * @returns {{sender: string, path: string}|null} the D-Bus name and object path of the menu, or null without one
      */
     lookup(window) {
-        let matches;
         if (window.get_client_type() === Meta.WindowClientType.X11) {
             const xid = window.get_xwindow?.() ?? parseInt(window.get_description(), 16);
-            matches = this._registrations.filter(r => r.windowId === xid);
-        } else {
-            const pid = window.get_pid();
-            matches = pid > 0 ? this._registrations.filter(r => r.pid === pid) : [];
+            return this._registrations.findLast(r => r.windowId === xid) ?? null;
         }
+        const pid = window.get_pid();
+        const matches = pid > 0 ? this._registrations.filter(r => r.pid === pid) : [];
+        // Electron numbers its windows in the order it creates them, counting from 1, and mutter's window IDs grow in
+        // the order mutter creates the windows, so with as many normal windows of the process as registrations, the
+        // windows match the registrations in these orders. Otherwise, as when Electron registered a window which it did
+        // not show, the most recent registration is used.
+        // TODO: Drop this matching once the applications ship an Electron which announces menus on Wayland.
+        //       Electron pull request 54629 announces the menu of each window with org_kde_kwin_appmenu on Wayland, as
+        //       Chromium does, and source.js finds such a menu by the window's KDE appmenu properties before it asks
+        //       the registrar.
+        const windows = global.display.list_all_windows()
+            .filter(w => w.get_pid() === pid && w.get_window_type() === Meta.WindowType.NORMAL &&
+                w.get_client_type() === Meta.WindowClientType.WAYLAND)
+            .sort((a, b) => Number(a.get_id() - b.get_id()));
+        const index = windows.indexOf(window);
+        if (matches.length > 1 && windows.length === matches.length && index >= 0)
+            return [...matches].sort((a, b) => a.windowId - b.windowId)[index];
         return matches[matches.length - 1] ?? null;
     }
 }

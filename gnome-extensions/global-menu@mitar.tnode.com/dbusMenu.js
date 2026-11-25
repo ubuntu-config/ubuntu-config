@@ -3,20 +3,24 @@ import GLib from 'gi://GLib';
 
 import * as Signals from 'resource:///org/gnome/shell/misc/signals.js';
 
-import {
-    addItem, addSeparator, addSubmenuItem, alignItems, formatDbusmenuShortcut, parseMnemonic, trimSeparator,
-} from './util.js';
+import {MenuSpec, formatDbusmenuShortcut, parseMnemonic, syncMenu} from './util.js';
 
 Gio._promisify(Gio.DBusConnection.prototype, 'call');
 
 const INTERFACE = 'com.canonical.dbusmenu';
 
-// How long to wait after a LayoutUpdated signal before reading the layout again. Electron rebuilds its whole menu at
-// once and announces it with several signals in a row.
-const LAYOUT_DELAY_MS = 50;
+// How long to wait after a LayoutUpdated signal for another one before reading the layout again, and how long at most
+// after the first of them. Electron sets its whole menu again with dozens of signals in a row, which Visual Studio Code
+// does whenever one of its menus opens, and a layout read between them can lack items.
+const LAYOUT_QUIET_MS = 50;
+const LAYOUT_MAX_DELAY_MS = 500;
 
 // How deep submenus which come without items are filled, see _fillEmptySubmenus().
 const SUBMENU_DEPTH = 3;
+
+// How often an item is looked up and activated, and how long to wait between the attempts, see _activateByPath().
+const ACTIVATE_ATTEMPTS = 3;
+const ACTIVATE_RETRY_MS = 100;
 
 /**
  * Turns a layout of com.canonical.dbusmenu, as recursiveUnpack() returns it, into a tree of nodes.
@@ -78,6 +82,12 @@ export class DbusMenuModel extends Signals.EventEmitter {
         // submenu empty and announce a new layout each time it is asked.
         this._asked = new Set();
         this._layoutTimeoutId = 0;
+        // The time of the first LayoutUpdated signal since the layout was last read, in microseconds of the monotonic
+        // clock.
+        this._layoutChangedAt = 0;
+        // Each read of the whole layout is numbered, and only the last one started is used, as they can finish out of
+        // order.
+        this._fetchSerial = 0;
         this._subscriptionId = this._bus.signal_subscribe(busName, INTERFACE, null, path, null,
             Gio.DBusSignalFlags.NONE,
             (_bus, _sender, _path, _interface, signal, parameters) => this._onSignal(signal, parameters));
@@ -119,9 +129,12 @@ export class DbusMenuModel extends Signals.EventEmitter {
     }
 
     async _fetch() {
+        const serial = ++this._fetchSerial;
         try {
             const root = await this._getLayout(0);
             await this._fillEmptySubmenus(root, SUBMENU_DEPTH);
+            if (serial !== this._fetchSerial)
+                return;
             this._root = root;
         } catch (error) {
             if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
@@ -163,9 +176,14 @@ export class DbusMenuModel extends Signals.EventEmitter {
 
     _onSignal(signal, parameters) {
         if (signal === 'LayoutUpdated') {
+            const now = GLib.get_monotonic_time();
             if (this._layoutTimeoutId)
-                return;
-            this._layoutTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, LAYOUT_DELAY_MS, () => {
+                GLib.source_remove(this._layoutTimeoutId);
+            else
+                this._layoutChangedAt = now;
+            const left = LAYOUT_MAX_DELAY_MS - (now - this._layoutChangedAt) / 1000;
+            const delay = Math.max(0, Math.min(LAYOUT_QUIET_MS, left));
+            this._layoutTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
                 this._layoutTimeoutId = 0;
                 this._fetch();
                 return GLib.SOURCE_REMOVE;
@@ -290,17 +308,17 @@ export class DbusMenuModel extends Signals.EventEmitter {
     }
 
     /**
-     * Fills a menu with the items of a top-level menu.
+     * Shows the items of a top-level menu in a menu, with syncMenu(), which keeps the items the menu shows already.
      *
      * @param {number} index - the index of the top-level menu
-     * @param {PopupMenu.PopupMenuBase} menu - the menu, which is emptied first
+     * @param {PopupMenu.PopupMenuBase} menu - the menu, empty or last filled by fill()
      */
     fill(index, menu) {
-        menu.removeAll();
+        const spec = new MenuSpec();
         const node = this._topLevel()[index];
         if (node)
-            this._fillChildren(node, menu, [this._pathEntry(this._root, node)]);
-        alignItems(menu);
+            this._fillChildren(node, spec, [this._pathEntry(this._root, node)]);
+        syncMenu(menu, spec);
     }
 
     _pathEntry(parent, node) {
@@ -308,26 +326,26 @@ export class DbusMenuModel extends Signals.EventEmitter {
         return {label, nth: parent.children.filter(child => child.props.label === label).indexOf(node)};
     }
 
-    _fillChildren(parent, menu, parentPath) {
+    _fillChildren(parent, spec, parentPath) {
         for (const node of parent.children) {
             const props = node.props;
             if (!isVisible(node))
                 continue;
             if (props.type === 'separator') {
-                addSeparator(menu);
+                spec.addSeparator();
                 continue;
             }
             const {text, index} = parseMnemonic(props.label ?? '');
             const path = [...parentPath, this._pathEntry(parent, node)];
             if (props['children-display'] === 'submenu' || node.children.length) {
-                const item = addSubmenuItem(menu, {
+                const submenu = spec.addSubmenu({
                     text, mnemonicIndex: index, enabled: props.enabled !== false, icon: iconOf(node),
                 });
-                this._fillChildren(node, item.menu, path);
+                this._fillChildren(node, submenu, path);
                 continue;
             }
             const toggleType = props['toggle-type'];
-            addItem(menu, {
+            spec.addItem({
                 text,
                 mnemonicIndex: index,
                 enabled: props.enabled !== false,
@@ -338,21 +356,35 @@ export class DbusMenuModel extends Signals.EventEmitter {
                 onActivate: event => this._activate(path, event),
             });
         }
-        trimSeparator(menu);
+        spec.trimSeparator();
     }
 
     async _activate(path, event) {
-        const timestamp = event?.get_time() ?? global.get_current_time();
-        // Electron renumbers all items whenever it sets its menu again, which Visual Studio Code does whenever its
-        // window gains the focus, so the item is looked up in the current layout, by its path, right before it is
-        // activated, and never by an ID read before.
+        // Electron renumbers all items whenever it sets its menu again, which Visual Studio Code does whenever one of
+        // its windows gains the focus or one of its menus opens, so the item is looked up in the current layout, by its
+        // path, right before it is activated, and never by an ID read before.
+        await this._activateByPath(path, event?.get_time() ?? global.get_current_time(), ACTIVATE_ATTEMPTS);
+    }
+
+    // Electron answers with an error when it set its menu again between the lookup and the activation, and the item is
+    // then looked up and activated once more, until attempts are used up.
+    async _activateByPath(path, timestamp, attempts) {
         try {
             const node = await this._findByPath(await this._getLayout(0), path);
             if (node)
                 await this._event(node.id, 'clicked', timestamp);
+            return;
         } catch (error) {
-            if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
-                console.debug(`global-menu: activating an item of ${this._busName} failed: ${error.message}`);
+            if (error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                return;
+            console.debug(`global-menu: activating an item of ${this._busName} failed: ${error.message}`);
         }
+        if (attempts <= 1)
+            return;
+        await new Promise(resolve => GLib.timeout_add(GLib.PRIORITY_DEFAULT, ACTIVATE_RETRY_MS, () => {
+            resolve();
+            return GLib.SOURCE_REMOVE;
+        }));
+        await this._activateByPath(path, timestamp, attempts - 1);
     }
 }

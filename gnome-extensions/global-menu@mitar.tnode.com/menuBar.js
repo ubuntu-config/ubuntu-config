@@ -462,12 +462,9 @@ export class MenuBar extends Signals.EventEmitter {
         const key = this._model.contentKey(index);
         if (!item || !this._model.hasItems(index) || key === this._filledKeys.get(index))
             return;
-        const shown = item.menu.isOpen;
         this._model.fill(index, item.menu);
         setMenuMnemonicsShown(item.menu, this._mnemonicsShown);
         this._filledKeys.set(index, key);
-        if (shown)
-            item.setSubmenuShown(true);
     }
 
     _setWindow(window) {
@@ -530,25 +527,46 @@ export class MenuBar extends Signals.EventEmitter {
             this._rebuild();
     }
 
+    // Shows a button for each title of the model. A button whose title has the same text and mnemonic as before is
+    // kept, so that a title stays shown, also under the pointer, while an application adds or removes another menu, and
+    // the other buttons are added or removed. The buttons find their index when they are used, as it can change.
     _rebuild() {
         this._rebuildPending = false;
-        this._destroyButtons();
         const titles = this._model?.titles ?? [];
-        this._titles = titles;
-        titles.forEach(({text, index: mnemonicIndex}, index) => {
-            const button = new MenuButton(text, 'global-menu-title', menu => this._fill(index, menu),
-                done => this._prepareEmpty(index, done));
-            setLabelMnemonic(button.label, text, mnemonicIndex);
-            setMnemonicShown(button.label, this._mnemonicsShown);
-            button.menu.connectObject('open-state-changed', (menu, open) => this._onOpenStateChanged(index, open),
-                this);
-            this._watchKeys(button);
-            this._box.insert_child_below(button.container, this._overflowButton.container);
-            this._buttons.push(button);
+        const keyOf = title => JSON.stringify([title.text, title.index]);
+        const shown = new Map();
+        this._buttons.forEach((button, index) => {
+            const key = keyOf(this._titles[index]);
+            if (!shown.has(key))
+                shown.set(key, []);
+            shown.get(key).push(button);
         });
+        const buttons = titles.map(title => shown.get(keyOf(title))?.shift() ?? this._createButton(title));
+        for (const rest of shown.values()) {
+            for (const button of rest)
+                button.destroy();
+        }
+        this._buttons = buttons;
+        this._titles = titles;
+        this._filledKeys.clear();
+        for (const button of buttons)
+            this._box.set_child_below_sibling(button.container, this._overflowButton.container);
         this._box.reset(titles.length);
         this._syncOverflow();
         this.emit('changed');
+    }
+
+    _createButton({text, index: mnemonicIndex}) {
+        const button = new MenuButton(text, 'global-menu-title',
+            menu => this._fill(this._buttons.indexOf(button), menu),
+            done => this._prepareEmpty(this._buttons.indexOf(button), done));
+        setLabelMnemonic(button.label, text, mnemonicIndex);
+        setMnemonicShown(button.label, this._mnemonicsShown);
+        button.menu.connectObject('open-state-changed',
+            (menu, open) => this._onOpenStateChanged(this._buttons.indexOf(button), open), this);
+        this._watchKeys(button);
+        this._box.insert_child_below(button.container, this._overflowButton.container);
+        return button;
     }
 
     _onOpenStateChanged(index, open) {
@@ -619,9 +637,9 @@ export class MenuBar extends Signals.EventEmitter {
         }
     }
 
-    // Fills an open menu again, opens the submenus again which were open, and puts the keyboard focus back on the item
-    // at the same position. A menu whose items did not change is left as it is, since replacing the items loses a click
-    // whose press and release fall on the old and on the new item.
+    // Shows the changed items of an open menu. The items which the menu still has stay, see syncMenu(), with their open
+    // submenus and the keyboard focus. When the item with the keyboard focus is gone, the item at its position receives
+    // the focus.
     _refill(index) {
         // An application which sets its menu again, as Electron does, can report a menu without its items for a
         // moment, which leaves the open menu as it is.
@@ -631,14 +649,8 @@ export class MenuBar extends Signals.EventEmitter {
         const menu = this._buttons[index].menu;
         const focus = global.stage.get_key_focus();
         const position = menu._getMenuItems().findIndex(item => item === focus || item.contains(focus));
-        const openSubmenus = new Set(menu._getMenuItems().filter(item => item.menu?.isOpen)
-            .map(item => item.label.text));
         this._fill(index, menu);
-        for (const item of menu._getMenuItems()) {
-            if (item.menu && openSubmenus.has(item.label.text))
-                item.setSubmenuShown(true);
-        }
-        if (position >= 0) {
+        if (position >= 0 && !menu.box.contains(global.stage.get_key_focus())) {
             const items = menu._getMenuItems();
             items[Math.min(position, items.length - 1)]?.grab_key_focus();
         }

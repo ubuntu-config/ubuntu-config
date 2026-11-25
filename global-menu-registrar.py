@@ -12,8 +12,9 @@ menu bar in its window. GNOME Shell enables extensions only after the applicatio
 running, so the extension cannot own the name itself.
 
 Every application registers the menu of a window with RegisterWindow(window ID, object path). The window ID is an X11
-window ID for an application under XWayland, while Electron on Wayland registers every window of every application
-with the ID 1, so registrations are kept per sender and window ID. A registration ends when its sender leaves the bus.
+window ID for an application under XWayland, while Electron on Wayland registers its windows with numbers of its own,
+counting from 1 in every application, so registrations are kept per sender and window ID. A registration ends when its
+sender leaves the bus.
 
 The extension reads the registrations, with the process ID of each sender, from the interface local.GlobalMenuRegistrar
 under the name local.GlobalMenuRegistrar, which this program owns all the time. With Deactivate() there, the extension

@@ -1258,7 +1258,9 @@ def menu_open(state, title):
 def click_path(session, path):
     """Clicks the titles and items of the global menu along path, such as ("View", "Zoom", "Zoom In"), waiting after each
     click until the menu or submenu it opens is open. A title or submenu which did not open is clicked once more: an
-    application can change its menu while it is open, as Visual Studio Code does, which the test cannot wait for."""
+    application can change its menu while it is open, as Visual Studio Code does, which the test cannot wait for. The
+    title is clicked once the top bar shows it, as the menu of a new window comes a moment after the window."""
+    wait_menu(session, lambda state: path[0] in state["titles"], 30)
     for attempt in range(2):
         session.call("clickGlobalMenu", path[0])
         if menu_open(wait_menu(session, lambda state: menu_open(state, path[0]), 5), path[0]):
@@ -1515,10 +1517,11 @@ def global_menu_app_name(session, checks, out_dir):
     return {"labels": labels}
 
 
-def electron_or_browser(session, checks, name, command, title, titles, mnemonic, effect, timeout=60):
+def electron_or_browser(session, checks, name, command, title, titles, mnemonic, effects, timeout=60):
     """Starts an application with a menu, whose window has title in its title, checks the titles and keys of the global
-    menu, then clicks the path of effect, (path, description, check), and checks the effect with check(window), which
-    returns a truthy value when it happened."""
+    menu, then performs each of effects, (action, description, check) with action a path of the global menu to click or
+    a function to call with the window, and checks the effect with check(window), which returns a truthy value when it
+    happened."""
     install_global_menu(session)
     session.login()
     session.call("spawnCommandLine", command)
@@ -1529,10 +1532,13 @@ def electron_or_browser(session, checks, name, command, title, titles, mnemonic,
     titles = check_menu_titles(session, checks, name, titles, timeout)
     if len(titles) >= 2:
         check_menu_keys(session, checks, name, titles, mnemonic)
-    path, description, check = effect
-    click_path(session, path)
-    checks.check(f"{name}: clicking {', '.join(path)} {description}", wait_for(lambda: check(window), 10),
-                 str(session.windows()))
+    for action, description, check in effects:
+        if callable(action):
+            action(window)
+        else:
+            click_path(session, action)
+            description = f"clicking {', '.join(action)} {description}"
+        checks.check(f"{name}: {description}", wait_for(lambda: check(window), 30), str(session.windows()))
     result = {"menu": menu_state(session), "windows": session.windows()}
     session.logout()
     return result
@@ -1542,8 +1548,19 @@ def fullscreen(session):
     return lambda window: next((w["fullscreen"] for w in session.windows() if w["id"] == window["id"]), False)
 
 
-def more_windows(session):
-    return lambda window: len(session.windows(window["app"])) > 1
+def focused(session):
+    return lambda window: next((w["focused"] for w in session.windows() if w["id"] == window["id"]), False)
+
+
+def more_windows(session, count=1):
+    return lambda window: len(session.windows(window["app"])) > count
+
+
+def newest_focused(session, count):
+    """Returns a check whether the application of the window has more than count windows, the newest of them focused, as
+    a new window receives the focus a moment after it opens."""
+    return lambda window: (lambda windows: len(windows) > count and max(windows, key=lambda w: w["id"])["focused"])(
+        session.windows(window["app"]))
 
 
 @test
@@ -1553,29 +1570,38 @@ def global_menu_signal(session, checks, out_dir):
     window keeps while the menu is open only with patches/mutter/keep-keyboard-focus.patch."""
     return electron_or_browser(session, checks, "Signal", f"{SIGNAL} --ozone-platform=wayland", "Signal",
                                ["File", "Edit", "View", "Window", "Help"], "f",
-                               (["View", "Toggle Full Screen"], "makes the window fullscreen", fullscreen(session)))
+                               [(["View", "Toggle Full Screen"], "makes the window fullscreen", fullscreen(session))])
 
 
 @test
 def global_menu_vscode(session, checks, out_dir):
     """Visual Studio Code, with the native title bar configure-gnome-desktop.sh sets, registers its menu as Electron
-    does. Full Screen in its View menu acts only when Electron has a focused window. New Window would be the obvious
-    item, but in the container Visual Studio Code sometimes exits when it opens a second window, also with
-    Ctrl+Shift+N and without the global menu."""
+    does. New Window in its File menu opens a window, and so does Ctrl+Shift+N, which the global menu leaves to the
+    window. Full Screen in its View menu acts only when Electron has a focused window. It comes last, as a fullscreen
+    window hides the top bar, with the first window focused again, so that the click reaches the focused one of three
+    windows, which Electron registers each with a menu of its own. Visual Studio Code sets its whole menu again whenever
+    one of its menus opens, which must not replace the items under the pointer."""
     settings = pathlib.Path.home() / ".config/Code/User/settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text('{"window.titleBarStyle": "native", "workbench.startupEditor": "none", '
                         '"security.workspace.trust.enabled": false}\n')
     return electron_or_browser(session, checks, "VS Code", "code --ozone-platform=wayland --new-window", "Visual Studio Code",
                                ["File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Help"], "f",
-                               (["View", "Appearance", "Full Screen"], "makes the window fullscreen", fullscreen(session)))
+                               [(["File", "New Window"], "opens a second window, which has the focus",
+                                 newest_focused(session, 1)),
+                                (lambda window: session.press("n", "Control_L", "Shift_L"),
+                                 "Ctrl+Shift+N opens a third window, which has the focus", newest_focused(session, 2)),
+                                (lambda window: session.call("activateWindow", window["id"]),
+                                 "activating the first window focuses it", focused(session)),
+                                (["View", "Appearance", "Full Screen"], "makes the first window fullscreen",
+                                 fullscreen(session))])
 
 
 @test
 def global_menu_chromium(session, checks, out_dir):
     """Chromium names its menu with org_kde_kwin_appmenu, and New Window in its File menu opens a window."""
     return electron_or_browser(session, checks, "Chromium", "chromium --ozone-platform=wayland about:blank", "Chromium",
-                               None, "f", (["File", "New window"], "opens a second window", more_windows(session)))
+                               None, "f", [(["File", "New window"], "opens a second window", more_windows(session))])
 
 
 @test
@@ -1584,7 +1610,7 @@ def global_menu_firefox(session, checks, out_dir):
     its File menu opens a window. Firefox exports its menus without mnemonics, so Alt with a letter stays with
     Firefox."""
     return electron_or_browser(session, checks, "Firefox", "firefox about:blank", "Firefox", None, None,
-                               (["File", "New Window"], "opens a second window", more_windows(session)))
+                               [(["File", "New Window"], "opens a second window", more_windows(session))])
 
 
 @test
@@ -1609,8 +1635,8 @@ def global_menu_libreoffice(session, checks, out_dir):
         '</oor:items>\n')
     # The splash screen, which comes first, has the title "LibreOffice" with the version.
     return electron_or_browser(session, checks, "LibreOffice", "env SAL_USE_VCLPLUGIN=gtk3 soffice --writer --norestore",
-                               "LibreOffice Writer", None, "f", (["Window", "New Window"], "opens a second window",
-                                                                 more_windows(session)))
+                               "LibreOffice Writer", None, "f", [(["Window", "New Window"], "opens a second window",
+                                                                  more_windows(session))])
 
 
 def quit_from_global_menu(session, checks, app, name, process, saved, count=7):

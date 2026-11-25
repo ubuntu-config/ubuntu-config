@@ -35,6 +35,11 @@ install -d -m 1777 -o root -g root /tmp/.X11-unix /tmp/.ICE-unix
 for dir in /dev/dri /dev/accel; do
   [ -d "$dir" ] && mount -t tmpfs -o mode=755 none "$dir"
 done
+# Docker gives a container 64 MB of shared memory in /dev/shm, while a machine has half of its memory there. Chromium
+# and Electron allocate the buffers between their processes and their GPU process there, and with two windows of Visual
+# Studio Code the session used up to 120 MB. With 64 MB, the GPU process of Visual Studio Code failed to allocate them
+# and crashed, and Visual Studio Code ended.
+mount -o remount,size=50% /dev/shm
 
 # journald keeps the session's logs, which the tests check and the output directory receives. It opens its sockets
 # itself when it is not started by systemd.

@@ -8,6 +8,16 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 // reads.
 const itemMarks = new WeakMap();
 
+// The icon and the shortcut label of each item added by addItem(), and the function called when it is activated, which
+// an update of the item replaces.
+const itemParts = new WeakMap();
+
+// The space of an icon which alignItems() added to an item without an icon.
+const iconSpaces = new WeakMap();
+
+// The kind and the label of each item which syncMenu() shows, by which it finds the item again.
+const itemKeys = new WeakMap();
+
 // The text of each label with a mnemonic, and the position of the mnemonic's letter in it.
 const labelMnemonics = new WeakMap();
 
@@ -238,6 +248,81 @@ export function formatGtkAccel(accel) {
         return null;
     return [...modifiers, keyText(key)].join('+');
 }
+/**
+ * Shows a new label on an item, keeping whether the letter of its mnemonic is underlined.
+ *
+ * @param {St.Label} label - the label of the item
+ * @param {string} text - the label, without a mnemonic
+ * @param {number} mnemonicIndex - the position of the letter of its mnemonic in text, -1 without one
+ */
+function updateLabel(label, text, mnemonicIndex) {
+    const current = labelMnemonics.get(label);
+    const index = mnemonicIndex < text.length ? mnemonicIndex : -1;
+    if ((current?.text ?? label.text) === text && (current?.index ?? -1) === index)
+        return;
+    const shown = label.clutter_text.use_markup;
+    label.clutter_text.use_markup = false;
+    label.text = text;
+    setLabelMnemonic(label, text, mnemonicIndex);
+    if (shown)
+        setMnemonicShown(label, true);
+}
+
+/**
+ * Shows the state of an item created by addItem(): its label, icon, shortcut, mark and sensitivity, and sets the
+ * function called when it is activated. See addItem() for the parameters.
+ *
+ * @param {PopupMenu.PopupMenuItem} item - the item
+ * @param {object} params - the item
+ */
+function updateItem(item, {
+    text, mnemonicIndex = -1, enabled = true, toggle = null, checked = false, shortcut = null, icon = null, onActivate,
+}) {
+    let parts = itemParts.get(item);
+    if (!parts) {
+        parts = {icon: null, shortcut: null, onActivate: null};
+        itemParts.set(item, parts);
+        item.connect('activate', (_item, event) => parts.onActivate(event));
+    }
+    updateLabel(item.label, text, mnemonicIndex);
+    if (icon) {
+        if (!parts.icon) {
+            parts.icon = new St.Icon({style_class: 'popup-menu-icon'});
+            item.insert_child_below(parts.icon, item.label);
+        }
+        if (!parts.icon.gicon?.equal(icon))
+            parts.icon.gicon = icon;
+    } else {
+        parts.icon?.destroy();
+        parts.icon = null;
+    }
+    if (shortcut) {
+        if (!parts.shortcut) {
+            parts.shortcut = new St.Label({
+                x_expand: true,
+                x_align: Clutter.ActorAlign.END,
+                y_align: Clutter.ActorAlign.CENTER,
+                style_class: 'global-menu-shortcut',
+                // Dimmed, so that the shortcut does not compete with the label, in the light style as in the dark one.
+                opacity: 160,
+            });
+            item.add_child(parts.shortcut);
+        }
+        parts.shortcut.text = shortcut;
+    } else {
+        parts.shortcut?.destroy();
+        parts.shortcut = null;
+    }
+    if (toggle === 'check')
+        item.setOrnament(checked ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+    else if (toggle === 'radio')
+        item.setOrnament(checked ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NO_DOT);
+    else
+        item.setOrnament(PopupMenu.Ornament.HIDDEN);
+    item.setSensitive(enabled);
+    parts.onActivate = onActivate;
+    itemMarks.set(item, {toggle, icon: !!icon});
+}
 
 /**
  * Adds an item to a menu. An item with a shortcut shows it at its right end, a check or radio item shows its state
@@ -255,33 +340,26 @@ export function formatGtkAccel(accel) {
  * @param {function(Clutter.Event): void} params.onActivate - called when the item is activated
  * @returns {PopupMenu.PopupMenuItem} the item
  */
-export function addItem(menu, {
-    text, mnemonicIndex = -1, enabled = true, toggle = null, checked = false, shortcut = null, icon = null, onActivate,
-}) {
-    const item = new PopupMenu.PopupMenuItem(text);
-    setLabelMnemonic(item.label, text, mnemonicIndex);
-    if (icon)
-        item.insert_child_below(new St.Icon({gicon: icon, style_class: 'popup-menu-icon'}), item.label);
-    if (shortcut) {
-        item.add_child(new St.Label({
-            text: shortcut,
-            x_expand: true,
-            x_align: Clutter.ActorAlign.END,
-            y_align: Clutter.ActorAlign.CENTER,
-            style_class: 'global-menu-shortcut',
-            // Dimmed, so that the shortcut does not compete with the label, in the light style as in the dark one.
-            opacity: 160,
-        }));
-    }
-    if (toggle === 'check')
-        item.setOrnament(checked ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
-    else if (toggle === 'radio')
-        item.setOrnament(checked ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NO_DOT);
-    item.setSensitive(enabled);
-    item.connect('activate', (_item, event) => onActivate(event));
+export function addItem(menu, params) {
+    const item = new PopupMenu.PopupMenuItem(params.text);
+    updateItem(item, params);
     menu.addMenuItem(item);
-    itemMarks.set(item, {toggle, icon: !!icon});
     return item;
+}
+
+/**
+ * Shows the state of an item created by addSubmenuItem(): its label, icon and sensitivity. See addSubmenuItem() for the
+ * parameters.
+ *
+ * @param {PopupMenu.PopupSubMenuMenuItem} item - the item
+ * @param {object} params - the item
+ */
+function updateSubmenuItem(item, {text, mnemonicIndex = -1, enabled = true, icon = null}) {
+    updateLabel(item.label, text, mnemonicIndex);
+    if (icon && !item.icon.gicon?.equal(icon))
+        item.icon.gicon = icon;
+    item.setSensitive(enabled);
+    itemMarks.set(item, {toggle: null, icon: !!icon});
 }
 
 /**
@@ -295,21 +373,143 @@ export function addItem(menu, {
  * @param {Gio.Icon|null} [params.icon] - its icon
  * @returns {PopupMenu.PopupSubMenuMenuItem} the item, whose menu receives the items of the submenu
  */
-export function addSubmenuItem(menu, {text, mnemonicIndex = -1, enabled = true, icon = null}) {
-    const item = new PopupMenu.PopupSubMenuMenuItem(text, !!icon);
-    setLabelMnemonic(item.label, text, mnemonicIndex);
-    if (icon)
-        item.icon.gicon = icon;
-    item.setSensitive(enabled);
+export function addSubmenuItem(menu, params) {
+    const item = new PopupMenu.PopupSubMenuMenuItem(params.text, !!params.icon);
+    updateSubmenuItem(item, params);
     menu.addMenuItem(item);
-    itemMarks.set(item, {toggle: null, icon: !!icon});
     return item;
+}
+
+/**
+ * The items of a menu, described before they are shown, which syncMenu() shows in a menu. The parameters of its items
+ * are those of addItem() and addSubmenuItem().
+ */
+export class MenuSpec {
+    constructor() {
+        this.entries = [];
+    }
+
+    /**
+     * Adds an item, see addItem().
+     *
+     * @param {object} params - the item
+     */
+    addItem(params) {
+        this.entries.push({kind: 'item', params});
+    }
+
+    /**
+     * Adds an item with a submenu, see addSubmenuItem().
+     *
+     * @param {object} params - the item
+     * @returns {MenuSpec} the submenu, which receives its items
+     */
+    addSubmenu(params) {
+        const menu = new MenuSpec();
+        this.entries.push({kind: 'submenu', params, menu});
+        return menu;
+    }
+
+    /**
+     * Adds a separator. A separator without a label is left out at the start and after another separator.
+     *
+     * @param {string|null} [label] - the label of the separator
+     */
+    addSeparator(label = null) {
+        const last = this.entries[this.entries.length - 1];
+        if (label === null && (!last || last.kind === 'separator'))
+            return;
+        this.entries.push({kind: 'separator', label});
+    }
+
+    /**
+     * Removes a separator at the end.
+     */
+    trimSeparator() {
+        if (this.entries[this.entries.length - 1]?.kind === 'separator')
+            this.entries.pop();
+    }
+}
+
+/**
+ * Shows the items of a MenuSpec in a menu, and in the submenus of its items. An item which the menu shows already, with
+ * the same kind and label, is kept and updated, so that an item under the pointer or with the keyboard focus stays
+ * there and an open submenu stays open, while an application changes its menu. The other items are added or removed.
+ * The labels are aligned with alignItems().
+ *
+ * @param {PopupMenu.PopupMenuBase} menu - the menu, empty or last filled by syncMenu()
+ * @param {MenuSpec} spec - its items
+ */
+export function syncMenu(menu, spec) {
+    syncItems(menu, spec);
+    alignItems(menu);
+}
+
+function syncItems(menu, spec) {
+    const keyOf = entry => JSON.stringify([entry.kind, entry.kind === 'separator' ? entry.label : entry.params.text]);
+    // The items shown now, by their keys, in their order, so that of several items with the same key each keeps its
+    // place among them.
+    const shown = new Map();
+    for (const item of menu._getMenuItems()) {
+        const key = itemKeys.get(item);
+        if (key === undefined) {
+            item.destroy();
+            continue;
+        }
+        if (!shown.has(key))
+            shown.set(key, []);
+        shown.get(key).push(item);
+    }
+    const items = spec.entries.map(entry => {
+        const key = keyOf(entry);
+        let item = shown.get(key)?.shift() ?? null;
+        // A submenu item has an icon only when it was created with one.
+        if (item && entry.kind === 'submenu' && !!item.icon !== !!entry.params.icon) {
+            item.destroy();
+            item = null;
+        }
+        if (!item) {
+            if (entry.kind === 'item')
+                item = addItem(menu, entry.params);
+            else if (entry.kind === 'submenu')
+                item = addSubmenuItem(menu, entry.params);
+            else
+                menu.addMenuItem(item = new PopupMenu.PopupSeparatorMenuItem(entry.label ?? ''));
+            itemKeys.set(item, key);
+        } else if (entry.kind === 'item') {
+            updateItem(item, entry.params);
+        } else if (entry.kind === 'submenu') {
+            updateSubmenuItem(item, entry.params);
+        }
+        if (entry.kind === 'submenu')
+            syncItems(item.menu, entry.menu);
+        return item;
+    });
+    for (const rest of shown.values()) {
+        for (const item of rest)
+            item.destroy();
+    }
+
+    // The items are put in the order of the spec, each submenu right after its item, moving only what is out of place.
+    const order = items.flatMap(item => item instanceof PopupMenu.PopupSubMenuMenuItem ? [item.actor, item.menu.actor]
+        : [item.actor]);
+    const current = menu.box.get_children().filter(actor => order.includes(actor));
+    if (current.some((actor, i) => actor !== order[i])) {
+        let previous = null;
+        for (const actor of order) {
+            if (previous)
+                menu.box.set_child_above_sibling(actor, previous);
+            else
+                menu.box.set_child_below_sibling(actor, null);
+            previous = actor;
+        }
+    }
 }
 
 /**
  * Aligns the labels of the items of a menu, and of the items of its submenus, as GTK and macOS do: when an item of a
  * menu has a check or radio mark, every item of the menu has the space of one, and when an item has an icon, every
- * item has the space of one.
+ * item has the space of one. It can be called again after items changed.
  *
  * @param {PopupMenu.PopupMenuBase} menu - the menu, after all its items were added
  */
@@ -319,14 +519,24 @@ export function alignItems(menu) {
     const icons = items.some(item => itemMarks.get(item)?.icon);
     for (const item of items) {
         const kind = itemMarks.get(item);
-        if (marks) {
-            if (!kind?.toggle)
-                item.setOrnament(PopupMenu.Ornament.NONE);
-            // GNOME Shell pads the space of a check mark, but not the one of a radio mark.
+        if (!kind?.toggle)
+            item.setOrnament(marks ? PopupMenu.Ornament.NONE : PopupMenu.Ornament.HIDDEN);
+        // GNOME Shell pads the space of a check mark, but not the one of a radio mark.
+        if (marks)
             item.add_style_class_name('popup-ornamented-menu-item');
+        else
+            item.remove_style_class_name('popup-ornamented-menu-item');
+        const space = iconSpaces.get(item);
+        if (icons && !kind?.icon && item.label) {
+            if (!space) {
+                const widget = new St.Widget({style_class: 'global-menu-icon-space'});
+                item.insert_child_below(widget, item.label);
+                iconSpaces.set(item, widget);
+            }
+        } else if (space) {
+            space.destroy();
+            iconSpaces.delete(item);
         }
-        if (icons && !kind?.icon && item.label)
-            item.insert_child_below(new St.Widget({style_class: 'global-menu-icon-space'}), item.label);
         if (item.menu)
             alignItems(item.menu);
     }

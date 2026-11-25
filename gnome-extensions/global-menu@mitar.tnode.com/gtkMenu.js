@@ -1,12 +1,9 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Signals from 'resource:///org/gnome/shell/misc/signals.js';
 
-import {
-    addItem, addSeparator, addSubmenuItem, alignItems, formatGtkAccel, parseMnemonic, trimSeparator,
-} from './util.js';
+import {MenuSpec, formatGtkAccel, parseMnemonic, syncMenu} from './util.js';
 
 /**
  * Returns an attribute of a menu item as a JavaScript value.
@@ -245,21 +242,21 @@ export class GtkMenuModel extends Signals.EventEmitter {
     }
 
     /**
-     * Fills a menu with the items of a top-level menu.
+     * Shows the items of a top-level menu in a menu, with syncMenu(), which keeps the items the menu shows already.
      *
      * @param {number} index - the index of the top-level menu
-     * @param {PopupMenu.PopupMenuBase} menu - the menu, which is emptied first
+     * @param {PopupMenu.PopupMenuBase} menu - the menu, empty or last filled by fill()
      */
     fill(index, menu) {
-        menu.removeAll();
+        const spec = new MenuSpec();
         const title = this._topLevel()[index];
         if (title)
-            this._fillModel(title.model, menu);
-        trimSeparator(menu);
-        alignItems(menu);
+            this._fillModel(title.model, spec);
+        spec.trimSeparator();
+        syncMenu(menu, spec);
     }
 
-    _fillModel(model, menu) {
+    _fillModel(model, spec) {
         for (let i = 0; i < model.get_n_items(); i++) {
             if (this._hidden(model, i))
                 continue;
@@ -268,21 +265,21 @@ export class GtkMenuModel extends Signals.EventEmitter {
                 // A section with a label starts with a separator showing the label.
                 const label = attribute(model, i, 'label', 's');
                 if (label) {
-                    trimSeparator(menu);
-                    menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem(parseMnemonic(label).text));
+                    spec.trimSeparator();
+                    spec.addSeparator(parseMnemonic(label).text);
                 } else {
-                    addSeparator(menu);
+                    spec.addSeparator();
                 }
-                this._fillModel(section, menu);
-                addSeparator(menu);
+                this._fillModel(section, spec);
+                spec.addSeparator();
                 continue;
             }
             const {text, index} = parseMnemonic(attribute(model, i, 'label', 's') ?? '');
             const submenu = model.get_item_link(i, Gio.MENU_LINK_SUBMENU);
             if (submenu) {
-                const item = addSubmenuItem(menu, {text, mnemonicIndex: index, icon: iconOf(model, i)});
-                this._fillModel(submenu, item.menu);
-                trimSeparator(item.menu);
+                const submenuSpec = spec.addSubmenu({text, mnemonicIndex: index, icon: iconOf(model, i)});
+                this._fillModel(submenu, submenuSpec);
+                submenuSpec.trimSeparator();
                 continue;
             }
             const [group, name, prefix] = this._action(attribute(model, i, 'action', 's'));
@@ -298,7 +295,7 @@ export class GtkMenuModel extends Signals.EventEmitter {
                 toggle = 'check';
                 checked = state.get_boolean();
             }
-            addItem(menu, {
+            spec.addItem({
                 text,
                 mnemonicIndex: index,
                 // Until its group has listed its actions, an action is treated as existing and enabled.

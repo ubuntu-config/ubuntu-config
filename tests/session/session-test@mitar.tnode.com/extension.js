@@ -502,6 +502,10 @@ class SessionTest {
             // eslint-disable-next-line no-await-in-loop
             await sleep(100);
         }
+        // An item which the menu replaced or closed meanwhile is not shown anywhere, and a click at its old place would
+        // fall on something else.
+        if (!actor.mapped)
+            throw new Error(`${actor.label?.text ?? 'The item'} is not shown anymore`);
         const [x, y] = actor.get_transformed_position();
         const [width, height] = actor.get_transformed_size();
         this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), x + width / 2, y + height / 2);
