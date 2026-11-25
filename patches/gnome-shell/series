@@ -5,3 +5,4 @@ disable-shader-cache-in-close-test.patch
 run-time-limits-shutdown-first.patch
 run-time-limits-shutdown-first-tests.patch
 quit-with-sigterm.patch
+looking-glass-focus-while-hidden.patch

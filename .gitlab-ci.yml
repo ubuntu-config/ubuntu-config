@@ -299,6 +299,8 @@ test_session:
           - overview-thumbnails
           - restore-monitors
           - restart-bus
+      - TEST: looking-glass-focus
+        SESSION_TEST_APPS: gtk
 
   before_script:
     - !reference [.cores, before_script]

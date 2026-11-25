@@ -83,6 +83,11 @@ The tests:
                   while GNOME Shell shuts down, which needs
                   patches/gnome-session/restart-dbus-replace-queued-jobs.patch. Otherwise the next login uses the old
                   bus.
+  looking-glass-focus
+                  Creating Looking Glass, as Just Perfection does a second after it is enabled at every login, leaves
+                  the keyboard with the focused GTK 4 window of apps/menuapp.py, which needs
+                  patches/gnome-shell/looking-glass-focus-while-hidden.patch. Opened, Looking Glass has the key focus in
+                  its entry, and once it is closed the window has the keyboard again.
 
 The tests of the global menu, gnome-extensions/global-menu@mitar.tnode.com with patches/mutter/, each install the
 extension for the test user and enable it at login, after the extensions which change the top bar on the configured
@@ -176,13 +181,14 @@ serve their pages from a web server on localhost, and set Firefox as the default
 
 prepare-container.sh installs the session and the patched packages, so it needs the .deb files built here, and Chromium
 from the xtradeb repository in sources.list.d/. The tests of the global menu need further applications, which it
-installs when SESSION_TEST_APPS names them: signal for global-menu-login and global-menu-signal, gtk for the tests of
-GTK, global-menu-date-menu, global-menu-overflow and global-menu-quit-window-backed, gtk and ibus for
-global-menu-input-method, qt, vscode and libreoffice. run-session-tests.sh then runs the tests. Both run as root in a
-privileged container, and refuse to run anywhere else. The processes of a container of rootless Docker count against the
-inotify instances of the user who runs Docker, and a few sessions side by side with the desktop need more than the
-kernel's default of 128, to which configure-gnome-desktop.sh raises the limit (sysctl.d/60-inotify-instances.conf). With
-rootless Docker, from the root of the repository, and the packages of the local repository:
+installs when SESSION_TEST_APPS names them: signal for global-menu-login and global-menu-signal, gtk for
+looking-glass-focus, the tests of GTK, global-menu-date-menu, global-menu-overflow and global-menu-quit-window-backed,
+gtk and ibus for global-menu-input-method, qt, vscode and libreoffice. run-session-tests.sh then runs the tests. Both
+run as root in a privileged container, and refuse to run anywhere else. The processes of a container of rootless Docker
+count against the inotify instances of the user who runs Docker, and a few sessions side by side with the desktop need
+more than the kernel's default of 128, to which configure-gnome-desktop.sh raises the limit
+(sysctl.d/60-inotify-instances.conf). With rootless Docker, from the root of the repository, and the packages of the
+local repository:
 
   docker run --rm --privileged -v "$PWD:/repo:ro" -v /usr/local/lib/debs:/debs:ro -v /tmp/session-test:/out \
     registry.gitlab.com/tozd/docker/base:ubuntu-resolute bash -c '

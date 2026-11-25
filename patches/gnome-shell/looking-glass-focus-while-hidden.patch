@@ -1,0 +1,31 @@
+Description: Leave the key focus where it is when Looking Glass is created.
+ Looking Glass is created hidden, and adding the first page to its notebook selects it, which moves the key focus to
+ that page or, when nothing in it can take the focus, to the notebook itself. The stage then has the key focus on an
+ actor of the hidden Looking Glass, and the keys typed afterwards reach no window, until another window receives the
+ focus. Main.createLookingGlass() creates Looking Glass the first time it is called, which extensions call too, Just
+ Perfection a second after it is enabled, so the keys typed into the window focused right after the login were lost.
+ .
+ The notebook moves the key focus to a selected page only while it is shown. Looking Glass moves the key focus to its
+ entry when it opens, as before.
+Author: Mitar
+Bug: https://gitlab.gnome.org/GNOME/gnome-shell/-/work_items/9554
+Forwarded: https://gitlab.gnome.org/GNOME/gnome-shell/-/work_items/9554
+Last-Update: 2026-11-25
+--- a/js/ui/lookingGlass.js
++++ b/js/ui/lookingGlass.js
+@@ -202,9 +202,13 @@
+             return;
+         }
+ 
+-        // Focus the new tab before unmapping the old one
++        // Focus the new tab before unmapping the old one. A notebook which is
++        // not shown leaves the key focus where it is: Looking Glass adds its
++        // pages while it is created hidden, and the key focus would move from
++        // the focused window to the hidden notebook.
+         const tabData = this._tabs[index];
+-        if (!tabData.scrollView.navigate_focus(null, St.DirectionType.TAB_FORWARD, false))
++        if (this.mapped &&
++            !tabData.scrollView.navigate_focus(null, St.DirectionType.TAB_FORWARD, false))
+             this.grab_key_focus();
+ 
+         this._unselect();

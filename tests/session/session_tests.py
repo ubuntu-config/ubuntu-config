@@ -2026,6 +2026,53 @@ def global_menu_overflow(session, checks, out_dir):
     return {"overflowed": overflowed, "narrower": narrower["overflowed"], "with_indicator": with_indicator["overflowed"]}
 
 
+@test
+def looking_glass_focus(session, checks, out_dir):
+    """Creating Looking Glass leaves the keyboard with the focused window. Just Perfection creates it a second after it
+    is enabled, at every login, and Looking Glass, created hidden, selects its first page then, which moved the key focus
+    to its hidden notebook without patches/gnome-shell/looking-glass-focus-while-hidden.patch, so the keys typed afterwards
+    reached no window. Opened, Looking Glass has the key focus in its entry, and once it is closed the window has the
+    keyboard again. The window is the GTK 4 window of apps/menuapp.py, which logs the text of its text field."""
+    log = out_dir / "menuapp-gtk4.log"
+    session.login()
+    session.call("spawnCommandLine", f"python3 {APPS_DIR}/menuapp.py gtk4 {log}")
+    window = shown_window(session, None, lambda w: w["title"] == "menu-test-gtk4", 30)
+    checks.check("the window opened, focused", bool(window and window["focused"]), str(window_summary(window)))
+    if not window:
+        return {}
+
+    def text():
+        return next((e["value"] for e in reversed(read_events(log)) if e["event"] == "text"), "")
+
+    def key_focus():
+        return session.eval("(() => { const focus = global.stage.get_key_focus(); "
+                            "const entry = Main.lookingGlass?._entry; "
+                            "return focus && entry && [entry, entry.clutter_text].includes(focus) ? 'entry' : "
+                            "focus?.constructor.name ?? null; })()")
+
+    session.type_text("a")
+    checks.check("a typed into the window reaches its text field", wait_for(lambda: text() == "a", 5), repr(text()))
+    session.eval("(() => { Main.createLookingGlass(); return true; })()")
+    created = key_focus()
+    session.type_text("b")
+    checks.check("creating Looking Glass leaves the key focus with the window, where b reaches the text field",
+                 created is None and wait_for(lambda: text() == "ab", 5), repr([created, text()]))
+
+    session.eval("(() => { Main.lookingGlass.open(); return true; })()")
+    opened = wait_for(lambda: key_focus() == "entry", 5)
+    checks.check("opened, Looking Glass has the key focus in its entry", bool(opened), repr(key_focus()))
+    session.eval("(() => { Main.lookingGlass.close(); return true; })()")
+    time.sleep(1)
+    closed = key_focus()
+    expected = text() + "c"
+    session.type_text("c")
+    checks.check("once Looking Glass is closed, c reaches the text field of the window",
+                 closed is None and wait_for(lambda: text() == expected, 5), repr([closed, text()]))
+    session.logout()
+    return {"events": read_events(log)}
+
+
+
 def main():
     name, out_dir = sys.argv[1], pathlib.Path(sys.argv[2])
     if name not in TESTS:

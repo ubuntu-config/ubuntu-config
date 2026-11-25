@@ -113,3 +113,28 @@ quit-with-sigterm.patch
     workspaces:
 
       Quit 3 Windows in the dock   should end Chromium, and its next start restores all 3 windows
+
+looking-glass-focus-while-hidden.patch
+    Looking Glass is created hidden, the first time Main.createLookingGlass() is called, and adding the
+    first page to its notebook selected it with Notebook.selectIndex() in js/ui/lookingGlass.js, which
+    moved the key focus to the page or, as nothing in it can take the focus, to the notebook. The stage
+    then had the key focus on the hidden notebook, and the keys typed afterwards reached no window,
+    until another window received the focus. Just Perfection calls Main.createLookingGlass() a second
+    after it is enabled, to resize Looking Glass whenever it opens, so at every login the keys typed
+    into the window focused by then were lost. The notebook now moves the key focus only while it is
+    shown, and Looking Glass moves the key focus to its entry when it opens, as before.
+
+    The session test looking-glass-focus creates Looking Glass while a GTK 4 window has the focus and
+    checks that the keys typed afterwards reach the window, which fails without the patch, and that
+    Looking Glass, opened, has the key focus in its entry. After a version bump, check that
+    Notebook.selectIndex() still moves the key focus.
+
+    Reported upstream with the change in https://gitlab.gnome.org/GNOME/gnome-shell/-/work_items/9554.
+    Drop the patch once Ubuntu ships a GNOME Shell which fixes it.
+    https://gitlab.gnome.org/jrahmatzadeh/just-perfection/-/work_items/319 asks Just Perfection to
+    resize Looking Glass without creating it, which avoids the bug also with an unpatched GNOME Shell.
+
+    Check by hand after a rebuild and a new login, with Alt+F2 and lg:
+
+      Looking Glass      should have the key focus in its entry, and Ctrl+Page Down should move to its next page
+      Escape             should close it, and the keys typed then should reach the focused window
