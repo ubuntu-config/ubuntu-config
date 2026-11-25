@@ -15,7 +15,8 @@ Description: Quit cleanly when the desktop session ends, as the Inhibit portal r
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2090663
 Forwarded: https://phabricator.services.mozilla.com/D340640
-Last-Update: 2026-11-23
+Applied-Upstream: 163, https://github.com/mozilla-firefox/firefox/commit/e9fac59bfeef5ac80adf68c4b4e697f6a23b0730
+Last-Update: 2026-11-25
 diff --git a/toolkit/xre/nsNativeAppSupportUnix.cpp b/toolkit/xre/nsNativeAppSupportUnix.cpp
 index e629f582d43f..a56e2cad860c 100644
 --- a/toolkit/xre/nsNativeAppSupportUnix.cpp
