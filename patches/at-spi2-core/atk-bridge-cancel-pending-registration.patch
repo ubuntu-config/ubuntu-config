@@ -1,0 +1,48 @@
+Description: Cancel the pending registration reply when the accessibility bus goes away.
+ Get_registered_event_listeners can be called when spi_global_app_data->bus == NULL, which it doesn't expect.
+ .
+ Possibly, with a short-lived application, the pending call created for the Embed call is being activated after
+ deactivate_bus is called. This change has spi_global_app_data track the pending call, and it is now canceled in
+ deactivate_bus().
+Author: Mike Gorse <mgorse@suse.com>
+Origin: upstream, https://gitlab.gnome.org/GNOME/at-spi2-core/-/commit/f977678883818ccb6ed9064f67a99b66e625569a
+Bug: https://gitlab.gnome.org/GNOME/at-spi2-core/-/issues/234
+Applied-Upstream: 2.60.6
+Last-Update: 2026-11-25
+diff --git a/atk-adaptor/bridge.c b/atk-adaptor/bridge.c
+index 90e3f1b4..7e1ba694 100644
+--- a/atk-adaptor/bridge.c
++++ b/atk-adaptor/bridge.c
+@@ -412,6 +412,7 @@ register_application (gpointer data)
+       return FALSE;
+     }
+ 
++  app->register_pending = pending;
+   dbus_pending_call_set_notify (pending, register_reply, app, NULL);
+ 
+   if (message)
+@@ -1124,6 +1125,12 @@ deactivate_bus ()
+       dbus_error_free (&error);
+     }
+ 
++  if (spi_global_app_data->register_pending)
++    {
++      dbus_pending_call_cancel (spi_global_app_data->register_pending);
++      spi_global_app_data->register_pending = NULL;
++    }
++
+   dbus_connection_close (spi_global_app_data->bus);
+   dbus_connection_unref (spi_global_app_data->bus);
+   spi_global_app_data->bus = NULL;
+diff --git a/atk-adaptor/bridge.h b/atk-adaptor/bridge.h
+index eb58a65d..217c8392 100644
+--- a/atk-adaptor/bridge.h
++++ b/atk-adaptor/bridge.h
+@@ -79,6 +79,7 @@ struct _SpiBridge
+ 
+   GDBusConnection *session_bus;
+   guint name_owner_changed_subscription_id;
++  DBusPendingCall *register_pending;
+ };
+ 
+ extern SpiBridge *spi_global_app_data;

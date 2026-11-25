@@ -138,6 +138,7 @@ build:
   parallel:
     matrix:
       - PACKAGE:
+          - at-spi2-core
           - fastflowlm
           - glib2.0
           - gnome-session
@@ -262,6 +263,7 @@ test_session:
       parallel:
         matrix:
           - PACKAGE:
+              - at-spi2-core
               - glib2.0
               - gnome-session
               - gnome-settings-daemon

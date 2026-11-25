@@ -1,0 +1,22 @@
+Source package: at-spi2-core
+
+atk-bridge-cancel-pending-registration.patch
+atk-bridge-forget-processed-registration.patch
+    Backport of the fix of https://gitlab.gnome.org/GNOME/at-spi2-core/-/issues/234, commits f9776788
+    and ce75b1ff of the gnome-50 branch, which at-spi2-core 2.60.6 includes, while Ubuntu 26.04 ships
+    2.60.4. atk-bridge, the accessibility bridge of GTK 3 programs, registers a program with the
+    accessibility registry with the Embed call, whose reply could be processed after deactivate_bus()
+    closed the connection to the accessibility bus, as it does when the bus goes away at the end of the
+    session. register_reply() then called get_registered_event_listeners(), which passed the connection,
+    NULL by then, to dbus_connection_send_with_reply(), on which libdbus aborts the process. The process
+    of Desktop Icons NG, started at the login, aborted this way when the session ended while it was
+    still starting, in 2 of about 1970 logins of the session tests, both of them of global-menu-login,
+    which logs out a few seconds after the login. The first patch keeps the pending call and cancels it
+    in deactivate_bus(). The second, for https://gitlab.gnome.org/GNOME/at-spi2-core/-/issues/240,
+    forgets the pending call once its reply was processed, without which deactivate_bus() cancelled a
+    pending call which was freed already. Drop both once Ubuntu ships at-spi2-core 2.60.6 or newer.
+
+    The patches add no test, and upstream added none either. The abort needs the reply to be processed
+    after deactivate_bus() and before the connection is gone. Stopping the registry with SIGSTOP while a
+    GTK 3 window registered, and then the accessibility bus, did not arrange that: the registry ended
+    with the bus, and no reply was processed. The build runs at-spi2-core's own tests.

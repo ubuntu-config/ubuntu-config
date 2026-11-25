@@ -97,6 +97,9 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     llvmpipe's threads finish with a fence before it is freed, so GNOME Shell without a GPU does not crash at random.
   - [Keys reach the window focused right after the login](#keys-reach-the-window-focused-right-after-the-login):
     Looking Glass, which Just Perfection creates hidden at every login, leaves the keyboard with the focused window.
+  - [Programs which start right before a logout do not abort](#programs-which-start-right-before-a-logout-do-not-abort):
+    the accessibility bridge of GTK 3 programs does not send on its closed connection when the session ends while they
+    start.
   - [Only the working internal microphone is offered](#only-the-working-internal-microphone-is-offered): the audio
     coprocessor's microphone input, which has no microphones wired to it, is left out.
   - [snapd's desktop helper starts with the desktop](#snapds-desktop-helper-starts-with-the-desktop): it starts and
@@ -1007,6 +1010,15 @@ creating it. GNOME Shell is patched to leave the key focus where it is while Loo
 (`patches/gnome-shell/`). The fix is proposed upstream in [GNOME Shell issue
 9554](https://gitlab.gnome.org/GNOME/gnome-shell/-/work_items/9554), and the patch can be dropped once Ubuntu ships a
 GNOME Shell which includes it.
+
+### Programs which start right before a logout do not abort
+
+GTK 3 programs aborted when the session ended while they registered with the accessibility registry: their accessibility
+bridge, at-spi2-core's atk-bridge, sent on its connection to the accessibility bus after it had closed it, on which
+libdbus aborts the program. The process of Desktop Icons NG, which starts at every login, aborted this way at a logout
+right after the login. at-spi2-core is patched with the fix of at-spi2-core 2.60.6 (`patches/at-spi2-core/`), for
+[at-spi2-core issue 234](https://gitlab.gnome.org/GNOME/at-spi2-core/-/issues/234), and the patch can be dropped once
+Ubuntu ships at-spi2-core 2.60.6 or newer.
 
 ### Only the working internal microphone is offered
 
