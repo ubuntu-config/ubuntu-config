@@ -136,5 +136,5 @@ looking-glass-focus-while-hidden.patch
 
     Check by hand after a rebuild and a new login, with Alt+F2 and lg:
 
-      Looking Glass      should have the key focus in its entry, and Ctrl+Page Down should move to its next page
+      Looking Glass      should focus its entry, and Ctrl+Page Down should move to its next page
       Escape             should close it, and the keys typed then should reach the focused window
