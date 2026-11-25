@@ -1719,7 +1719,7 @@ def global_menu_reenable(session, checks, out_dir):
     gives up com.canonical.AppMenu.Registrar while the extension is disabled and owns it again once it is enabled, and
     Electron registers its windows again whenever the name has a new owner. Toggle Full Screen in its View menu then acts
     on the window, as before. While the extension is disabled, Electron keeps the menu bar of its window hidden, so the
-    window has no menu, which is Electron's and not checked here."""
+    window has no menu, which is Electron's (https://github.com/electron/electron/issues/56066) and not checked here."""
     install_global_menu(session)
     session.login()
     session.call("spawnCommandLine", f"{SIGNAL} --ozone-platform=wayland")
