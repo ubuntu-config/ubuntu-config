@@ -93,6 +93,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     localsearch's extractor handles a file deleted before it could read it.
   - [A command's crash is not reported as a crash of timeout](#a-commands-crash-is-not-reported-as-a-crash-of-timeout):
     timeout turns off its own core dumps before it passes on the signal which killed the command.
+  - [Software rendering does not write into freed memory](#software-rendering-does-not-write-into-freed-memory):
+    llvmpipe's threads finish with a fence before it is freed, so GNOME Shell without a GPU does not crash at random.
   - [Only the working internal microphone is offered](#only-the-working-internal-microphone-is-offered): the audio
     coprocessor's microphone input, which has no microphones wired to it, is left out.
   - [snapd's desktop helper starts with the desktop](#snapds-desktop-helper-starts-with-the-desktop): it starts and
@@ -972,6 +974,16 @@ SIGABRT, and apport reported a crash of timeout besides the crash of the command
 dumps first. The Rust coreutils are patched with the upstream fix (`patches/rust-coreutils/`), from
 [uutils pull request 15157](https://github.com/uutils/coreutils/pull/15157), which is not in a release yet, and the
 patch can be dropped once Ubuntu ships a release which includes it.
+
+### Software rendering does not write into freed memory
+
+GNOME Shell renders with llvmpipe, Mesa's software renderer, on a machine without a GPU, like a virtual machine or the
+containers of the session tests. A rasterizer thread of llvmpipe could unlock the mutex of a fence after another thread
+had already freed the fence, which corrupted the object allocated in its place, and GNOME Shell crashed about once in
+70 logins of the session tests. Mesa is patched to check whether a fence is signalled with its mutex held
+(`patches/mesa/`). The fix is proposed upstream in [Mesa merge request
+46712](https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/46712), and the patch can be dropped once Ubuntu ships
+a Mesa which includes it.
 
 ### Only the working internal microphone is offered
 

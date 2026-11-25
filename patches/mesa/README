@@ -1,0 +1,24 @@
+Source package: mesa
+
+llvmpipe-fence-signalled-lock.patch
+    llvmpipe, Mesa's software renderer, signals a fence from each of its rasterizer threads with lp_fence_signal(),
+    which increments the fence's count with the fence's mutex held, and then broadcasts its condition variable and
+    unlocks the mutex. lp_fence_signalled() read the count without the mutex, so it could report the fence signalled
+    while the last rasterizer thread was still between the increment and the unlock. Its callers drop their reference
+    to a signalled fence, for example lp_setup_get_empty_scene() when it reuses a scene, and the last reference frees
+    the fence, 120 bytes with the mutex at offset 16. The late pthread_mutex_unlock() then writes zero over the 4 bytes
+    at offset 24 of an object allocated there in the meantime, and decrements the 4 bytes at offset 28. The patch reads
+    the count with the mutex held, which orders the check after the unlock of the last signalling thread.
+
+    GNOME Shell runs with llvmpipe on a machine without a GPU, as in the session tests (tests/session/), where it
+    crashed about once in 70 logins, about a second after starting. St renders a box shadow through llvmpipe in
+    _st_create_shadow_pipeline() and then allocates a CoglPipelineLayer, which reused the freed fence's memory, and the
+    unlock overwrote the layer's parent pointer. With an LD_PRELOAD allocator which put every allocation of 105 to 120
+    bytes on a page of its own and made the page inaccessible on free(), a rasterizer thread faulted in
+    rasterize_scene(), unlocking the freed fence, in 2 of 135 logins of the global-menu session tests, 3 sessions in
+    parallel. With the patch, none of 270 logins faulted or crashed.
+
+    The patch has no test of its own, as the race needs a rasterizer thread to stop between two statements, which a
+    test cannot arrange without changes to llvmpipe. The fix is proposed upstream in
+    https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/46712. Drop the patch once Ubuntu ships a Mesa which
+    includes it.

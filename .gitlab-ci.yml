@@ -117,7 +117,7 @@ default:
 
   # The packages are for the tests of the same pipeline, and their debug symbols, in the .ddeb files, for the backtraces
   # of core files there. Firefox's debug symbols are left out, which are 825 MB of the 952 MB of packages a build of
-  # Firefox produces.
+  # Firefox produces, and those of Mesa's Vulkan and OpenCL drivers, which no test uses, 164 MB of Mesa's 269 MB.
   artifacts:
     when: always
     paths:
@@ -128,6 +128,8 @@ default:
     exclude:
       - build/*/*-dbg_*.deb
       - build/*/*-mozsymbols_*.deb
+      - build/*/mesa-vulkan-drivers-dbgsym_*.ddeb
+      - build/*/mesa-opencl-icd-dbgsym_*.ddeb
     expire_in: 1 week
 
 build:
@@ -165,6 +167,7 @@ build_large:
           - firefox
           - gtk+3.0
           - gtk4
+          - mesa
           - mutter
 
 # Every test runs mutter from the build, extracted into /tmp/mutter-root, with the dependencies of Ubuntu's mutter
@@ -277,6 +280,7 @@ test_session:
               - firefox
               - gtk+3.0
               - gtk4
+              - mesa
               - mutter
 
   parallel:

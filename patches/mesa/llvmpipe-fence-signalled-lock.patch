@@ -1,0 +1,38 @@
+Description: Check whether a fence is signalled with its mutex held in llvmpipe.
+ lp_fence_signal() increments the fence's count with the fence's mutex held, and then broadcasts its condition
+ variable and unlocks the mutex. lp_fence_signalled() read the count without the mutex, so it could report the fence
+ signalled while the last rasterizer thread was still between the increment and mtx_unlock(). Callers drop their
+ reference once the fence is signalled, for example lp_setup_get_empty_scene() through lp_scene_end_rasterization(),
+ and when that reference is the last one, lp_fence_destroy() frees the fence. The rasterizer thread then broadcasts the
+ condition variable and unlocks the mutex in freed memory, and glibc's pthread_mutex_unlock() writes zero over the
+ mutex's owner and decrements its user count, which corrupts an object the allocator has meanwhile placed in that
+ memory. lp_fence_signalled() now reads the count with the mutex held, which orders the check after the unlock of the
+ last signalling thread.
+Author: Mitar <mitar.git@tnode.com>
+Forwarded: https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/46712
+Last-Update: 2026-11-25
+diff --git a/src/gallium/drivers/llvmpipe/lp_fence.c b/src/gallium/drivers/llvmpipe/lp_fence.c
+index 4377750..6bbbada 100644
+--- a/src/gallium/drivers/llvmpipe/lp_fence.c
++++ b/src/gallium/drivers/llvmpipe/lp_fence.c
+@@ -176,8 +176,18 @@ lp_fence_signal(struct lp_fence *fence)
+ bool
+ lp_fence_signalled(struct lp_fence *f)
+ {
+-   if (f->type == LP_FENCE_TYPE_SW)
+-      return f->count == f->rank;
++   if (f->type == LP_FENCE_TYPE_SW) {
++      /* The last rasterizer thread increments count with the mutex held, and
++       * still uses the mutex and the condition variable until it unlocks the
++       * mutex. Reading count with the mutex held orders this check after that
++       * unlock, so that a caller which releases the fence once it is signalled
++       * does not free it while that thread is still in lp_fence_signal().
++       */
++      mtx_lock(&f->mutex);
++      const bool signalled = f->count == f->rank;
++      mtx_unlock(&f->mutex);
++      return signalled;
++   }
+ #ifdef HAVE_LIBDRM
+    else {
+       return sync_wait(f->sync_fd, 0) == 0;
