@@ -28,12 +28,13 @@ prefix-cache-shared-history.patch
     snapshot, when the prompt before shared everything up to it and went on with another last message. Reading up to
     that point is a prefill pass of its own, which on qwen3.6-moe:35b-a3b costs about 3.5 seconds whatever its length. A
     chat turn only continues the turn before and never reuses that point, and would pay for the pass every turn, so it
-    is saved only when another prompt went on from it. It is saved when it is at least 512 tokens into the prompt and at
-    least --prefix-min-gain tokens (128 by default) past the end of the system prompt and tools and past what the prompt
-    resumed from. The end snapshots saved after it hold only the rows after it. Qwen3.8, which keeps only the shared
-    start of a conversation, keeps this one as well.
+    is saved only when another prompt went on from it. It is saved when it is at least 512 tokens into the prompt, at
+    least --prefix-min-gain tokens (128 by default) past the end of the system prompt and tools and past the snapshot
+    the prompt resumed from, and fits --prefix-cache-mb. The end snapshots saved after it hold only the rows after it,
+    unless it holds pictures. Qwen3.8, which keeps only the shared start of a conversation, keeps this one as well.
 
-    The patch adds two tests to src/test/prefix_slot_cache, and updates the documentation of the prefix cache in docs/.
+    The patch moves the choice of these snapshots into PrefixSlotCache (find_user_turns, plan_heads, end_kv_from), adds
+    tests to src/test/prefix_slot_cache, and updates the documentation of the prefix cache in docs/.
     It is proposed upstream as https://github.com/ROCm/FastFlowLM/pull/1056. Drop it once a release includes it.
 
 keep-prebuilt-libraries.patch (debian-series)
@@ -51,4 +52,4 @@ run-prefix-cache-tests.patch (debian-series)
     debian/rules runs them, unless DEB_BUILD_OPTIONS has nocheck.
 
 After a version bump, check that the tests still exercise _prefix_insert as src/common/AutoModel/automodel.cpp does:
-the prefill() helper of the test mirrors it.
+the prefill() helper of the test makes the same PrefixSlotCache calls in the same order.

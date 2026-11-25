@@ -6,40 +6,25 @@ Description: Save a prefix cache snapshot at the start of the last user turn too
  shared only the system prompt, and only when it was at least 512 tokens long, and every prompt read the shared history
  again.
  .
- The history before the last user turn (a user message, or tool results) is now saved as well, when the prompt before
- shared it and went on with another last message, as prompts with the same few-shot examples do. Saving it needs a
- prefill pass of its own, which on qwen3.6-moe:35b-a3b costs about 3.5 seconds whatever its length, so a chat, whose
- every turn only continues the turn before, does not save it. It is saved when it is at least 512 tokens into the
- prompt, adds at least --prefix-min-gain tokens to the system prompt and tools and to what the prompt resumed from, and
- fits --prefix-cache-mb. The end snapshots saved after it hold only the rows after it, unless it holds pictures. It is
- evicted by recency together with the end snapshots, but never while one of them needs its rows, so a history which
- prompts keep resuming from stays and one which nothing resumes from ages out. Qwen3.8, which keeps only the shared
- start of a conversation, keeps it as well.
+ The history before the last user turn (a user message, or tool results) is now saved as well, as a boundary snapshot,
+ when the prompt before shared it and went on with another last message, as prompts with the same few-shot examples
+ do. Saving it needs a prefill pass of its own, which on qwen3.6-moe:35b-a3b costs about 3.5 seconds whatever its
+ length, so a chat, whose every turn only continues the turn before, does not save it. It is saved when it is at least
+ 512 tokens into the prompt, adds at least --prefix-min-gain tokens to the system prompt and tools and to the snapshot
+ the prompt resumed from, and fits --prefix-cache-mb. The end snapshots saved after it hold only the rows after it,
+ unless it holds pictures. Qwen3.8, which keeps only the shared start of a conversation, keeps it as well.
  .
  With a short system prompt and 3,500 tokens of few-shot examples, on a Ryzen AI 9 HX 370, every prompt from the third
  one on read only its own last message, in about 5 seconds instead of 18 on qwen3.6-moe:35b-a3b and in 4.5 seconds
  instead of 33 on qwen3.8-dflash2:27b. A chat of four turns took as long as without the patch.
  .
- Tests of the prefix cache cover a shared history, a chat, the user-turn scan, fork detection, which heads are saved, a
- history with pictures, and eviction by recency.
+ Tests of the prefix cache cover a shared history, a chat, the user-turn scan, fork detection, which heads are saved,
+ and a history with pictures.
 Author: Mitar
 Forwarded: https://github.com/ROCm/FastFlowLM/pull/1056
 ---
-diff --git a/.github/script/npu_test/suites/prefix_cache.py b/.github/script/npu_test/suites/prefix_cache.py
-index 509f34e9..cda88913 100644
---- a/.github/script/npu_test/suites/prefix_cache.py
-+++ b/.github/script/npu_test/suites/prefix_cache.py
-@@ -116,7 +116,7 @@ class _Session:
-         if probe and not isinstance(report, dict):
-             skip("no usage.flm_prefix_cache: this model's engine has no prefix-slot cache")
-         expect(isinstance(report, dict), f"{label}: usage has no flm_prefix_cache")
--        if any(s.get("slot_type") == "boundary" for s in report.get("saved") or []):
-+        if any(s.get("slot_type") in ("boundary", "history") for s in report.get("saved") or []):
-             self.boundary_seen = True
-         self.trace.append({
-             "request": label, "lookup": report.get("lookup"), "slot": report.get("slot"),
 diff --git a/docs/docs/instructions/server/prefix_cache.md b/docs/docs/instructions/server/prefix_cache.md
-index ee80cb59..c9976351 100644
+index ee80cb590..e1421ca4e 100644
 --- a/docs/docs/instructions/server/prefix_cache.md
 +++ b/docs/docs/instructions/server/prefix_cache.md
 @@ -37,7 +37,7 @@ The other supported models gain the same way. Measured on shorter prompts (about
@@ -56,7 +41,7 @@ index ee80cb59..c9976351 100644
    ```
  
 -When a limit is reached, FLM drops the least useful saved prompt first: older replies of a conversation that has a newer one, then the least recently used reply, and only then a shared system-prompt copy that nothing depends on.
-+When a limit is reached, FLM drops the least useful saved prompt first: older replies of a conversation that has a newer one, then the least recently used reply or shared history (see How it works below), and only then a shared system-prompt copy that nothing depends on. A shared history stays saved while prompts keep resuming from it.
++When a limit is reached, FLM drops the least useful saved prompt first: older replies of a conversation that has a newer one, then the least recently used reply, and only then a shared start that nothing depends on (a system-prompt copy, or a history shared by prompts which differ in their last message, see How it works below). A history is kept over every reply, so a workload with many different histories (edited messages, agents which branch) leaves fewer slots for replies; raise `--prefix-slots` (and `--prefix-cache-mb`) for it.
  
  ---
  
@@ -79,7 +64,7 @@ index ee80cb59..c9976351 100644
  - **Models with a sliding window or a convolution state** (Gemma 3 and 4, gpt-oss, the LFM2 family) save a state that cannot be rewound, so a saved prompt is resumed only when the new prompt starts with all of it, and a prompt that shares just the first part of a saved one resumes at the saved system-prompt start instead.
  - **Pictures and audio.** The Qwen-VL models, Qwen3.5 and MiniCPM-V reuse prompts that contain pictures. The Gemma 4 models (and the `nemotron3.5-bolt` model built on them) reuse text prompts through the prefix cache; a prompt with a picture or audio keeps the older single-checkpoint reuse. `qwen3.8-mtp:27b` and `qwen3.8-dflash2:27b` are text only.
 diff --git a/docs/docs/models/qwen.md b/docs/docs/models/qwen.md
-index 22fd0825..16129a85 100644
+index 22fd08256..16129a858 100644
 --- a/docs/docs/models/qwen.md
 +++ b/docs/docs/models/qwen.md
 @@ -605,7 +605,7 @@ The `-r` option determines the image's height:
@@ -92,7 +77,7 @@ index 22fd0825..16129a85 100644
  - **Base Model:** [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B)
  - **Quantization:** Q4_K
 diff --git a/src/common/AutoModel/automodel.cpp b/src/common/AutoModel/automodel.cpp
-index 158198ab..8d3cce7a 100644
+index 158198ab3..f8cbab15e 100644
 --- a/src/common/AutoModel/automodel.cpp
 +++ b/src/common/AutoModel/automodel.cpp
 @@ -504,34 +504,35 @@ bool AutoModel::_prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_in
@@ -122,7 +107,7 @@ index 158198ab..8d3cce7a 100644
 +    // A prompt with pictures still to read is not split.
 +    const PrefixSlotCache::heads_t heads = cache.plan_heads(
 +        full_tokens, PrefixSlotCache::find_user_turns(full_tokens, this->tokenizer->encode(boundary_marker)), match_len, payload == nullptr);
-+    auto save_head = [&](size_t length, prefix_slot_kind kind) {
++    auto save_head = [&](size_t length) {
 +        std::vector<int> head(full_tokens.begin(), full_tokens.begin() + length);
          chat_meta_info_t head_meta;
          head_meta.max_prefill_len = meta_info.max_prefill_len;
@@ -142,14 +127,14 @@ index 158198ab..8d3cce7a 100644
 +        head_prefill_ns += head_meta.prefill_duration;
 +        const std::vector<int> head_tokens(full_tokens.begin(), full_tokens.begin() + length);
 +        cache.set_live(head_tokens);
-+        cache.save(head_tokens, image_hashes, kind, 0); // keeps the hashes of the pictures inside the head
++        cache.save(head_tokens, image_hashes, true, 0); // keeps the hashes of the pictures inside the head
 +        return true;
 +    };
 +    if (heads.save_boundary) {
-+        success = save_head(heads.boundary, prefix_slot_kind::boundary);
++        success = save_head(heads.boundary);
 +    }
 +    if (success && heads.save_history) {
-+        success = save_head(heads.history, prefix_slot_kind::history);
++        success = save_head(heads.history);
      }
      if (success) {
          success = payload != nullptr
@@ -162,31 +147,15 @@ index 158198ab..8d3cce7a 100644
 +    // the end of this prompt keeps only what follows the longest shared head a slot holds
      if (!cache.boundary_only) {
 -        cache.save(full_tokens, image_hashes, false, cache.end_kv_from(full_tokens, boundary));
-+        cache.save(full_tokens, image_hashes, prefix_slot_kind::end, cache.end_kv_from(full_tokens, heads));
++        cache.save(full_tokens, image_hashes, false, cache.end_kv_from(full_tokens, heads));
      }
      meta_info.prefix_cache = cache.report();
      return true;
 diff --git a/src/common/prefix_slot_cache.cpp b/src/common/prefix_slot_cache.cpp
-index b6a85dd9..d88506e7 100644
+index b6a85dd91..837741743 100644
 --- a/src/common/prefix_slot_cache.cpp
 +++ b/src/common/prefix_slot_cache.cpp
-@@ -23,6 +23,15 @@ bool has_prefix(const std::vector<int>& longer, const std::vector<int>& shorter)
- }
- } // namespace
- 
-+const char* prefix_slot_kind_name(prefix_slot_kind kind) {
-+    switch (kind) {
-+    case prefix_slot_kind::history: return "history";
-+    case prefix_slot_kind::boundary: return "boundary";
-+    case prefix_slot_kind::end: break;
-+    }
-+    return "end";
-+}
-+
- uint64_t prefix_hash_bytes(const void* data, size_t bytes, uint64_t h) {
-     const uint8_t* p = static_cast<const uint8_t*>(data);
-     size_t i = 0;
-@@ -92,13 +101,71 @@ void PrefixSlotCache::attach(void* engine, const flm_state_api* api) {
+@@ -92,13 +92,71 @@ void PrefixSlotCache::attach(void* engine, const flm_state_api* api) {
  void PrefixSlotCache::forget_all() {
      slots_table_.clear(); // the states are ours: their memory goes with them
      live_tokens_.clear();
@@ -223,8 +192,8 @@ index b6a85dd9..d88506e7 100644
 +    heads.save_boundary = split && heads.boundary > match_len && heads.boundary < full_tokens.size() && fits(heads.boundary);
 +    // The history is saved only when the prompt before this one shared it and went on with another last message, as
 +    // prompts with the same few-shot examples do. A chat turn only continues the turn before, and would pay for the
-+    // pass every turn. It also has to add enough over the boundary slot and over what this prompt resumed from to be
-+    // worth a slot.
++    // pass every turn. It also has to add enough over the boundary slot and over the slot this prompt resumed from to
++    // be worth a slot.
 +    heads.save_history = split && heads.history > 0 && heads.history < full_tokens.size() && heads.history >= heads.boundary + min_end_gain &&
 +                         heads.history >= match_len + min_end_gain && forked(full_tokens, heads.history) && fits(heads.history);
 +    return heads;
@@ -263,53 +232,7 @@ index b6a85dd9..d88506e7 100644
          }
      }
      return 0;
-@@ -176,17 +243,17 @@ PrefixSlotCache::resume_t PrefixSlotCache::resume(const std::vector<int>& full_t
-     live_tokens_ = slot.tokens;
-     matched_tokens = slot.tokens;
-     header_print("FLM", "Prefix cache: resuming at " << match_len << " of " << full_tokens.size() << " tokens, from slot " << slot.id
--                 << " (" << (slot.boundary ? "boundary" : "end") << ", " << slots_table_.size() << " saved)");
-+                 << " (" << prefix_slot_kind_name(slot.kind) << ", " << slots_table_.size() << " saved)");
-     report_.hit = true;
-     report_.slot = slot.id;
--    report_.slot_boundary = slot.boundary;
-+    report_.slot_kind = slot.kind;
-     report_.matched_tokens = static_cast<int>(match_len);
-     result.resumed = true;
-     result.match_len = match_len;
-     return result;
- }
- 
--void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uint64_t>& image_hashes, bool boundary, int kv_from) {
-+void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uint64_t>& image_hashes, prefix_slot_kind kind, int kv_from) {
-     if (!engine_ || tokens.empty() || slot_limit() == 0) {
-         return;
-     }
-@@ -197,13 +264,13 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
-         if (std::equal(slot.image_hashes.begin(), slot.image_hashes.end(), image_hashes.begin(), image_hashes.begin() + runs)) {
-             // same prompt, same pictures, same state: nothing to save
-             slot.last_used = ++clock_;
--            slot.boundary = slot.boundary || boundary;
-+            slot.kind = std::max(slot.kind, kind);
-             return;
-         }
-         // the same tokens with other pictures (another image of the same size): the engine now holds this one. A
-         // self-contained slot also supplies the head rows of the end slots saved after it, which would get this
-         // picture's rows under their own: they go too.
--        boundary = boundary || slot.boundary;
-+        kind = std::max(kind, slot.kind);
-         const bool parent = slot.kv_from() == 0;
-         header_print("FLM", "Prefix cache: dropping slot " << slot.id << ", the same tokens with other pictures (" << tokens.size() << " tokens)");
-         report_.dropped++;
-@@ -220,7 +287,7 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
-         }
-         break;
-     }
--    if (!boundary) {
-+    if (kind == prefix_slot_kind::end) {
-         // An end snapshot only a few tokens past a slot that already covers this prompt (a short side call on a
-         // shared system prompt, the first turn of a chat) would save re-processing just those tokens, at the price
-         // of a whole recurrent state, and could push out a snapshot that saves thousands. Resume from that slot.
-@@ -251,13 +318,7 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
+@@ -251,13 +309,7 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
      const size_t limit = slot_limit();
      auto cost = [](const saved_state& s, size_t length, int from) { return s.estimate_bytes(static_cast<int>(length), from); };
      const size_t new_cost = cost(*state, tokens.size(), kv_from);
@@ -324,80 +247,8 @@ index b6a85dd9..d88506e7 100644
          return;
      }
  
-@@ -277,19 +338,21 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
-     // `a` is superseded when a longer prompt of the same conversation was saved after it: that one can serve
-     // every request `a` could except replaying `a`'s own prompt, so `a` is the cheapest thing to lose
-     auto superseded_by = [&](const slot_t& a, const std::vector<int>& longer, int longer_kv_from, const std::vector<uint64_t>& longer_images) {
--        return !a.boundary && longer.size() > a.tokens.size() && longer_kv_from <= a.kv_from() && has_prefix(longer, a.tokens) &&
-+        return a.kind == prefix_slot_kind::end && longer.size() > a.tokens.size() && longer_kv_from <= a.kv_from() && has_prefix(longer, a.tokens) &&
-                a.image_hashes.size() <= longer_images.size() && std::equal(a.image_hashes.begin(), a.image_hashes.end(), longer_images.begin());
-     };
- 
-     // Make room, cheapest loss first:
-     //   1. superseded snapshots (an older end snapshot whose newer, longer one exists), least recently used first;
--    //   2. other end snapshots, least recently used first: they only hold the rows after their boundary snapshot,
--    //      so losing one costs a conversation its latest history, not its whole system prompt;
--    //   3. boundary snapshots, least recently used first. One is only reached once no end snapshot depends on it,
--    //      so an end snapshot is never left without the boundary snapshot that holds its head rows.
--    // The slot that supplies the head of the snapshot being saved is never chosen.
-+    //   2. other end snapshots and history snapshots, least recently used first: losing one costs a conversation, or
-+    //      the prompts which share a history, the rows after the system prompt, not the system prompt itself. A history
-+    //      snapshot stays recent while prompts resume from it, and one which no prompt resumes from ages out;
-+    //   3. boundary snapshots, least recently used first.
-+    // A snapshot which holds the rows before kv_from of another one is only reached once nothing depends on it, so an
-+    // end snapshot is never left without its head rows. The slot that supplies the head of the snapshot being saved is
-+    // never chosen.
-     auto evict_one = [&]() -> bool {
--        auto drop_at = [&](size_t i, const char* why) {
-+        auto drop_at = [&](size_t i, const std::string& why) {
-             header_print("FLM", "Prefix cache: dropping slot " << slots_table_[i].id << ", " << why << " (" << slots_table_[i].tokens.size() << " tokens)");
-             report_.dropped++;
-             slots_table_.erase(slots_table_.begin() + i);
-@@ -301,7 +364,7 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
-                 if (i != j && is_parent(slots_table_[i], slots_table_[j])) has_dependents[i] = true;
-             }
-         }
--        int stale = -1, end_leaf = -1, boundary_leaf = -1;
-+        int stale = -1, recent_leaf = -1, boundary_leaf = -1;
-         auto older = [&](int candidate, int current) { return current < 0 || slots_table_[candidate].last_used < slots_table_[current].last_used; };
-         for (size_t i = 0; i < n; i++) {
-             const auto& a = slots_table_[i];
-@@ -312,13 +375,15 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
-                 old = j != i && superseded_by(a, b.tokens, b.kv_from(), b.image_hashes);
-             }
-             if (old && older(static_cast<int>(i), stale)) stale = static_cast<int>(i);
--            if (!a.boundary && older(static_cast<int>(i), end_leaf)) end_leaf = static_cast<int>(i);
--            if (a.boundary && older(static_cast<int>(i), boundary_leaf)) boundary_leaf = static_cast<int>(i);
-+            const bool boundary = a.kind == prefix_slot_kind::boundary;
-+            if (!boundary && older(static_cast<int>(i), recent_leaf)) recent_leaf = static_cast<int>(i);
-+            if (boundary && older(static_cast<int>(i), boundary_leaf)) boundary_leaf = static_cast<int>(i);
-         }
-         if (stale >= 0) {
-             drop_at(static_cast<size_t>(stale), "a superseded snapshot");
--        } else if (end_leaf >= 0) {
--            drop_at(static_cast<size_t>(end_leaf), "the least recently used end snapshot");
-+        } else if (recent_leaf >= 0) {
-+            drop_at(static_cast<size_t>(recent_leaf),
-+                    std::string("the least recently used ") + prefix_slot_kind_name(slots_table_[recent_leaf].kind) + " snapshot");
-         } else if (boundary_leaf >= 0) {
-             drop_at(static_cast<size_t>(boundary_leaf), "the least recently used boundary snapshot");
-         } else {
-@@ -348,10 +413,10 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
-     slot.tokens = tokens;
-     slot.image_hashes.assign(image_hashes.begin(), image_hashes.begin() + runs);
-     slot.last_used = ++clock_;
--    slot.boundary = boundary;
-+    slot.kind = kind;
-     slot.id = next_id_++;
--    header_print("FLM", "Prefix cache: saved slot " << slot.id << " (" << (boundary ? "boundary" : "end") << ", " << tokens.size() << " tokens, from row "
-+    header_print("FLM", "Prefix cache: saved slot " << slot.id << " (" << prefix_slot_kind_name(kind) << ", " << tokens.size() << " tokens, from row "
-                  << kv_from << ", " << (new_cost >> 20) << " MiB)");
--    report_.saved.push_back({slot.id, boundary, static_cast<int>(tokens.size()), kv_from, new_cost});
-+    report_.saved.push_back({slot.id, kind, static_cast<int>(tokens.size()), kv_from, new_cost});
-     slots_table_.push_back(std::move(slot));
- }
 diff --git a/src/include/AutoModel/automodel.hpp b/src/include/AutoModel/automodel.hpp
-index 6a01f8a3..ec7586d7 100644
+index 6a01f8a3d..ec7586d7f 100644
 --- a/src/include/AutoModel/automodel.hpp
 +++ b/src/include/AutoModel/automodel.hpp
 @@ -352,9 +352,10 @@ protected:
@@ -424,40 +275,19 @@ index 6a01f8a3..ec7586d7 100644
  	                         std::function<bool()> is_cancelled, std::optional<int> requested_max_new_tokens = std::nullopt);
  
 diff --git a/src/include/prefix_slot_cache.hpp b/src/include/prefix_slot_cache.hpp
-index c1fc2dbd..3bb33845 100644
+index c1fc2dbda..8a746d3ac 100644
 --- a/src/include/prefix_slot_cache.hpp
 +++ b/src/include/prefix_slot_cache.hpp
-@@ -56,18 +56,27 @@ std::vector<uint64_t> prefix_image_hashes(const Payload& payload, size_t patch,
-     return hashes;
- }
- 
-+/// \brief what a slot holds, which decides how long it is kept (PrefixSlotCache::save)
-+enum class prefix_slot_kind {
-+    end,       ///< the end of a prompt
-+    history,   ///< the history before the last user turn, shared by prompts which differ only in their last message
-+    boundary,  ///< the end of system + tools, shared by every conversation which starts with them
-+};
-+/// \brief "end", "history" or "boundary": the name of a kind in logs and in usage.flm_prefix_cache
-+const char* prefix_slot_kind_name(prefix_slot_kind kind);
-+
- /// \brief what the prefix cache did for one request: logged, and reported to the client in `usage.flm_prefix_cache`
- struct prefix_cache_report_t {
-     bool valid = false;           ///< the model has a slot cache and this request went through it
+@@ -62,7 +62,7 @@ struct prefix_cache_report_t {
      bool hit = false;             ///< the request resumed from a slot
      std::string miss_reason;      ///< why not, when it did not
      int slot = -1;                ///< id of the slot resumed from (ids are never reused)
 -    bool slot_boundary = false;   ///< that slot is a boundary slot (system + tools head) rather than an end slot
-+    prefix_slot_kind slot_kind = prefix_slot_kind::end;  ///< kind of that slot
++    bool slot_boundary = false;   ///< that slot is a boundary slot (a shared head) rather than an end slot
      int matched_tokens = 0;       ///< tokens of the prompt it covered
      int prompt_tokens = 0;        ///< tokens the cache considered (the prompt without its generation prompt)
      struct saved_t {
-         int slot = 0;
--        bool boundary = false;
-+        prefix_slot_kind kind = prefix_slot_kind::end;
-         int tokens = 0;           ///< prompt length the slot was saved after
-         int kv_from = 0;          ///< first position whose K/V rows it holds
-         size_t bytes = 0;
-@@ -95,9 +104,10 @@ public:
+@@ -95,9 +95,10 @@ public:
      ///       28% / 44% fewer snapshots. 0 saves every end snapshot.
      static constexpr size_t kDefaultMinEndGain = 128;
      size_t min_end_gain = kDefaultMinEndGain;
@@ -470,7 +300,7 @@ index c1fc2dbd..3bb33845 100644
      ///       when another conversation ran in between.
      bool boundary_only = false;
      /// \brief limits while --prefix-cache-mb / --prefix-slots stay at their defaults (0 = the global defaults)
-@@ -129,17 +139,53 @@ public:
+@@ -129,17 +130,55 @@ public:
      /// \note On a restore failure every slot is forgotten and resumed is false.
      resume_t resume(const std::vector<int>& full_tokens, const std::vector<uint64_t>& image_hashes, std::vector<int>& matched_tokens);
  
@@ -487,11 +317,11 @@ index c1fc2dbd..3bb33845 100644
 +        size_t boundary = 0;          ///< end of system + tools (the first user turn), 0 when it is before min_boundary
 +        size_t history = 0;           ///< start of the last user turn, 0 when it is the first one or before min_boundary
 +        bool save_boundary = false;   ///< prefill up to boundary first and save a boundary slot there
-+        bool save_history = false;    ///< prefill up to history next and save a history slot there
++        bool save_history = false;    ///< prefill up to history next and save a boundary slot there too
 +    };
 +    /// \brief find the heads of a prompt and decide which of them to save while prefilling it
 +    /// \param turns where its user turns start (find_user_turns)
-+    /// \param match_len what the prompt resumed from
++    /// \param match_len length of the slot the prompt resumed from (0 = none)
 +    /// \param split whether the prompt may be prefilled in parts (false while it has pictures still to read)
 +    /// \note A head is saved only when the prompt still has to read it and fits() says its slot is kept. The history is
 +    ///       saved only when the prompt before forked there (forked()) and it is at least min_end_gain tokens past the
@@ -505,11 +335,10 @@ index c1fc2dbd..3bb33845 100644
 +
      /// \brief read the engine's current context into a new slot; `tokens` is what the engine holds
 -    /// \param boundary true for the end of system + tools (kv_from 0, evicted last)
-+    /// \param kind end and history slots are evicted by recency, boundary slots after them; a slot which holds the rows
-+    ///        before kv_from of another one is kept while that one is
++    /// \param boundary true for a shared head: the end of system + tools, or the history before the last user turn (kv_from 0,
++    ///        evicted last)
      /// \param kv_from first position whose K/V rows the slot saves (0 = self-contained)
--    void save(const std::vector<int>& tokens, const std::vector<uint64_t>& image_hashes, bool boundary, int kv_from);
-+    void save(const std::vector<int>& tokens, const std::vector<uint64_t>& image_hashes, prefix_slot_kind kind, int kv_from);
+     void save(const std::vector<int>& tokens, const std::vector<uint64_t>& image_hashes, bool boundary, int kv_from);
  
 -    /// \brief the kv_from an end-of-prompt slot should use: `boundary` when a self-contained slot holds the first
 -    ///        `boundary` tokens of `tokens`, else 0
@@ -522,23 +351,25 @@ index c1fc2dbd..3bb33845 100644
      void set_live(const std::vector<int>& tokens) { live_tokens_ = tokens; }
 +    /// \brief remember the whole prompt of a request, for forked()
 +    void set_last_prompt(const std::vector<int>& tokens) { last_prompt_ = tokens; }
-+    /// \brief whether the prompt before this one shared the first `length` tokens of `tokens` and then went on differently
-+    /// \note A prompt which `tokens` only continues, like the previous turn of a chat, is no fork.
++    /// \brief whether the prompt before this one holds the first length tokens of tokens and more, and tokens is not that
++    ///        prompt again nor a continuation of it
++    /// \note The next turn of a chat continues the prompt before, so it is no fork. An earlier turn sent again ends inside
++    ///       the prompt before, so it is one: the conversation branches there.
 +    /// \note It only decides whether a head is worth a prefill pass of its own, never which rows a prompt reuses.
 +    bool forked(const std::vector<int>& tokens, size_t length) const;
      /// \param announce log that the engine's context was dropped while the slots were kept (a clear or a cancel, not a cold start)
      void clear_live(bool announce = false);
  
-@@ -159,7 +205,7 @@ private:
+@@ -159,7 +198,7 @@ private:
          std::vector<uint64_t> image_hashes;  // content of the images inside `tokens`
          uint64_t last_used = 0;
          int id = 0;                          // told apart in logs and usage; never reused
 -        bool boundary = false;               // end of system + tools; evicted last
-+        prefix_slot_kind kind = prefix_slot_kind::end;
++        bool boundary = false;               // a shared head; evicted last
          /// first position whose K/V rows the slot holds
          int kv_from() const { return state->kv_from(); }
      };
-@@ -168,11 +214,14 @@ private:
+@@ -168,11 +207,14 @@ private:
      size_t budget_bytes() const;
      size_t slot_limit() const;
      size_t count_image_runs(const std::vector<int>& tokens, size_t len) const;
@@ -553,29 +384,8 @@ index c1fc2dbd..3bb33845 100644
      uint64_t clock_ = 0;
      int cache_mb_ = -1;
      int slots_ = -1;
-diff --git a/src/server/prefix_cache_usage.hpp b/src/server/prefix_cache_usage.hpp
-index 3fb00377..cab46a23 100644
---- a/src/server/prefix_cache_usage.hpp
-+++ b/src/server/prefix_cache_usage.hpp
-@@ -13,14 +13,14 @@ inline nlohmann::ordered_json prefix_cache_usage_json(const prefix_cache_report_
-     };
-     if (r.hit) {
-         out["slot"] = r.slot;
--        out["slot_type"] = r.slot_boundary ? "boundary" : "end";
-+        out["slot_type"] = prefix_slot_kind_name(r.slot_kind);
-         out["matched_tokens"] = r.matched_tokens;
-     } else {
-         out["miss_reason"] = r.miss_reason;
-     }
-     json saved = json::array();
-     for (const auto& s : r.saved) {
--        saved.push_back({{"slot", s.slot}, {"slot_type", s.boundary ? "boundary" : "end"}, {"tokens", s.tokens}, {"kv_from", s.kv_from}, {"bytes", s.bytes}});
-+        saved.push_back({{"slot", s.slot}, {"slot_type", prefix_slot_kind_name(s.kind)}, {"tokens", s.tokens}, {"kv_from", s.kv_from}, {"bytes", s.bytes}});
-     }
-     out["saved"] = saved;
-     out["dropped"] = r.dropped;
 diff --git a/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp b/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
-index c219fa3a..2ffeb0e7 100644
+index c219fa3a9..26ad61130 100644
 --- a/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
 +++ b/src/test/prefix_slot_cache/test_prefix_slot_cache.cpp
 @@ -39,6 +39,7 @@ private:
@@ -607,36 +417,36 @@ index c219fa3a..2ffeb0e7 100644
 +///        model: the heads plan_heads() picks are saved after passes of their own, then the end of the prompt
 +/// \param first where the first user turn starts (0 = none)
 +/// \param last where the last user turn starts (0 = none)
-+/// \param match what the prompt resumed from
++/// \param match length of the slot the prompt resumed from (0 = none)
 +/// \param images content hashes of the pictures of the prompt
 +/// \param split false while the prompt has pictures still to read
 +void prefill(PrefixSlotCache& cache, fake_engine& e, const std::vector<int>& prompt, size_t first, size_t last = 0, size_t match = 0,
 +             const std::vector<uint64_t>& images = {}, bool split = true) {
 +    const PrefixSlotCache::heads_t heads = cache.plan_heads(prompt, {first, last}, match, split);
-+    auto save_head = [&](size_t length, prefix_slot_kind kind) {
++    auto save_head = [&](size_t length) {
 +        const std::vector<int> h(prompt.begin(), prompt.begin() + length);
 +        e.length = static_cast<int>(length);
          cache.set_live(h);
 -        cache.save(h, {}, true, 0);
 -    }
-+        cache.save(h, images, kind, 0);
++        cache.save(h, images, true, 0);
 +    };
-+    if (heads.save_boundary) save_head(heads.boundary, prefix_slot_kind::boundary);
-+    if (heads.save_history) save_head(heads.history, prefix_slot_kind::history);
++    if (heads.save_boundary) save_head(heads.boundary);
++    if (heads.save_history) save_head(heads.history);
      e.length = static_cast<int>(prompt.size());
      cache.set_live(prompt);
 -    cache.save(prompt, {}, false, cache.end_kv_from(prompt, head));
 +    cache.set_last_prompt(prompt);
-+    if (!cache.boundary_only) cache.save(prompt, images, prefix_slot_kind::end, cache.end_kv_from(prompt, heads));
++    if (!cache.boundary_only) cache.save(prompt, images, false, cache.end_kv_from(prompt, heads));
  }
  
  size_t resume(PrefixSlotCache& cache, const std::vector<int>& prompt, const std::vector<uint64_t>& images = {}) {
-@@ -212,6 +225,194 @@ void test_boundary_kept_for_dependents() {
+@@ -212,6 +225,169 @@ void test_boundary_kept_for_dependents() {
      CHECK(resume(cache, cat(sys, seq(8000, 5))) == sys.size());
  }
  
 +void test_shared_history() {
-+    std::printf("prompts sharing everything before their last user turn resume there from the second one on, and that slot stays while they do\n");
++    std::printf("prompts sharing everything before their last user turn resume there from the second one on, and that slot outlives the end slots\n");
 +    fake_engine e;
 +    PrefixSlotCache cache = make(e, 100000, 4);
 +    // a system prompt too short for a boundary slot, followed by few-shot examples
@@ -694,7 +504,7 @@ index c219fa3a..2ffeb0e7 100644
 +}
 +
 +void test_forked() {
-+    std::printf("a prompt forks from the prompt before when that one shared the history and went on differently\n");
++    std::printf("a prompt forks from the prompt before when that one holds the history and more, and the prompt does not continue it\n");
 +    fake_engine e;
 +    PrefixSlotCache cache = make(e);
 +    const auto history = seq(1, 1000);
@@ -703,6 +513,7 @@ index c219fa3a..2ffeb0e7 100644
 +    cache.set_last_prompt(p1);
 +    CHECK(cache.forked(cat(history, seq(6000, 100)), 1000));          // another last message
 +    CHECK(cache.forked(cat(history, seq(6000, 10)), 1000));           // a shorter one
++    CHECK(cache.forked(cat(history, seq(5000, 50)), 1000));           // it ends inside the prompt before (an earlier turn again)
 +    CHECK(!cache.forked(p1, 1000));                                   // the same prompt again (a retry)
 +    CHECK(!cache.forked(cat(p1, seq(7000, 50)), 1000));               // it continues the prompt before (a chat turn)
 +    CHECK(!cache.forked(cat(seq(1, 999), seq(6000, 101)), 1000));     // it differs before the history ends
@@ -781,7 +592,7 @@ index c219fa3a..2ffeb0e7 100644
 +    cache.begin_report();
 +    prefill(cache, e, c3, 600, history.size(), c1.size(), {111});           // a fork of c2: H with picture A
 +    auto rep = cache.report();
-+    CHECK(rep.saved.size() == 2 && rep.saved[0].kind == prefix_slot_kind::history && rep.saved[0].tokens == static_cast<int>(history.size()));
++    CHECK(rep.saved.size() == 2 && rep.saved[0].boundary && rep.saved[0].tokens == static_cast<int>(history.size()));
 +    CHECK(rep.saved[1].kv_from == static_cast<int>(sys.size()));            // the end slot keeps the picture's rows
 +    // the same tokens with picture B: H does not serve it, and its end slot keeps the rows from the boundary on
 +    const auto p4 = cat(history, seq(8000, 100));
@@ -797,103 +608,24 @@ index c219fa3a..2ffeb0e7 100644
 +    CHECK(e.kv_written == std::vector<int>{600});
 +}
 +
-+void test_history_evicted_by_recency() {
-+    std::printf("history slots are evicted by recency with the end slots: forks nothing resumes from age out, a history in use stays\n");
-+    fake_engine e;
-+    PrefixSlotCache cache = make(e, 100000, 4);
-+    const auto sys = seq(1, 600);
-+    // three edited chat messages on three histories, which no later prompt resumes from
-+    for (int i = 1; i <= 3; i++) {
-+        const auto history = cat(sys, seq(10000 * i, 800));
-+        prefill(cache, e, cat(history, seq(10000 * i + 5000, 100)), 600, history.size());
-+        prefill(cache, e, cat(history, seq(10000 * i + 6000, 100)), 600, history.size());
-+    }
-+    // two conversations alternate, and each keeps its end slot for its next turn
-+    const auto a1 = cat(sys, seq(50000, 300));
-+    const auto b1 = cat(sys, seq(60000, 300));
-+    prefill(cache, e, a1, 600);
-+    prefill(cache, e, b1, 600);
-+    CHECK(resume(cache, cat(a1, seq(51000, 100))) == a1.size());
-+    CHECK(resume(cache, cat(b1, seq(61000, 100))) == b1.size());
-+    // the last history slot is resumed from, so it is more recent than the end slot of a, which goes first
-+    const auto history3 = cat(sys, seq(30000, 800));
-+    CHECK(resume(cache, cat(history3, seq(38000, 100))) == history3.size());
-+    prefill(cache, e, seq(90000, 700), 0);
-+    CHECK(resume(cache, cat(history3, seq(39000, 100))) == history3.size());
-+    CHECK(resume(cache, cat(a1, seq(52000, 100))) == sys.size());
-+}
-+
  void test_small_tail_not_saved() {
      std::printf("a side call a few tokens past the shared head is not saved, so it cannot push out the main conversation\n");
      fake_engine e;
-@@ -303,14 +504,14 @@ void test_images() {
-     prompt = cat(prompt, seq(200, 20));
-     e.length = static_cast<int>(prompt.size());
-     cache.set_live(prompt);
--    cache.save(prompt, {111}, false, 0);
-+    cache.save(prompt, {111}, prefix_slot_kind::end, 0);
-     const auto next = cat(prompt, seq(500, 10));
-     CHECK(resume(cache, next, {222}) == 0);
-     CHECK(resume(cache, next, {111}) == prompt.size());
- 
-     // the same tokens with another picture of the same size replace the slot: the engine holds that one now
-     cache.set_live(prompt);
--    cache.save(prompt, {222}, false, 0);
-+    cache.save(prompt, {222}, prefix_slot_kind::end, 0);
-     CHECK(cache.slot_count() == 1);
-     CHECK(resume(cache, next, {111}) == 0);
-     CHECK(resume(cache, next, {222}) == prompt.size());
-@@ -321,7 +522,7 @@ void test_images() {
-     unhashed.image_token_id = 99;
-     e2.length = static_cast<int>(prompt.size());
-     unhashed.set_live(prompt);
--    unhashed.save(prompt, {}, true, 0);
-+    unhashed.save(prompt, {}, prefix_slot_kind::boundary, 0);
-     CHECK(unhashed.slot_count() == 1);
-     CHECK(resume(unhashed, next, {111}) == 0);
- 
-@@ -349,9 +550,11 @@ void test_picture_replaced_keeps_others() {
+@@ -349,9 +525,11 @@ void test_picture_replaced_keeps_others() {
      CHECK(resume(cache, y, {111}) == sys.size());
      e.length = static_cast<int>(y.size());
      cache.set_live(y);
 -    cache.save(y, {111}, false, cache.end_kv_from(y, 600));                    // EY
 +    PrefixSlotCache::heads_t at_sys;
 +    at_sys.boundary = 600;
-+    cache.save(y, {111}, prefix_slot_kind::end, cache.end_kv_from(y, at_sys));    // EY
++    cache.save(y, {111}, false, cache.end_kv_from(y, at_sys));                 // EY
      CHECK(cache.slot_count() == 3);
 -    cache.save(y, {222}, false, cache.end_kv_from(y, 600));                    // the same question about another picture
-+    cache.save(y, {222}, prefix_slot_kind::end, cache.end_kv_from(y, at_sys));    // the same question about another picture
++    cache.save(y, {222}, false, cache.end_kv_from(y, at_sys));                 // the same question about another picture
      CHECK(cache.slot_count() == 3);
      CHECK(resume(cache, cat(y, seq(7000, 5)), {222}) == y.size());
      CHECK(resume(cache, cat(y, seq(7000, 5)), {111}) == sys.size());
-@@ -390,7 +593,7 @@ void test_report() {
-     prefill(cache, e, t1, 600);
-     auto rep = cache.report();
-     CHECK(rep.valid && !rep.hit && rep.miss_reason == "no snapshots saved yet");
--    CHECK(rep.saved.size() == 2 && rep.saved[0].boundary && !rep.saved[1].boundary);
-+    CHECK(rep.saved.size() == 2 && rep.saved[0].kind == prefix_slot_kind::boundary && rep.saved[1].kind == prefix_slot_kind::end);
-     CHECK(rep.saved[0].slot == 1 && rep.saved[1].slot == 2 && rep.saved[1].kv_from == 600);
-     CHECK(rep.slots_used == 2 && rep.slots_max == 3 && rep.bytes_used > 0 && rep.bytes_used <= rep.bytes_budget);
- 
-@@ -399,7 +602,7 @@ void test_report() {
-     const auto t2 = cat(t1, seq(6000, 30));
-     r = cache.resume(t2, {}, matched);
-     rep = cache.report();
--    CHECK(r.resumed && rep.hit && rep.slot == 2 && !rep.slot_boundary && rep.matched_tokens == static_cast<int>(t1.size()));
-+    CHECK(r.resumed && rep.hit && rep.slot == 2 && rep.slot_kind == prefix_slot_kind::end && rep.matched_tokens == static_cast<int>(t1.size()));
-     CHECK(rep.saved.empty() && rep.dropped == 0);
- 
-     // an unrelated prompt: a miss that says how far it matched
-@@ -409,7 +612,7 @@ void test_report() {
-     // the exact same prompt: the slot is not strictly shorter
-     cache.begin_report();
-     r = cache.resume(t1, {}, matched);
--    CHECK(r.resumed && cache.report().slot_boundary);  // the boundary slot serves it
-+    CHECK(r.resumed && cache.report().slot_kind == prefix_slot_kind::boundary);  // the boundary slot serves it
-     cache.begin_report();
-     r = cache.resume(sys, {}, matched);
-     CHECK(!r.resumed && r.miss_reason == "the prompt is not longer than a saved one");
-@@ -429,6 +632,14 @@ int main() {
+@@ -429,6 +607,13 @@ int main() {
      test_head_restored_after_cold_request();
      test_eviction_order();
      test_boundary_kept_for_dependents();
@@ -904,7 +636,6 @@ index c219fa3a..2ffeb0e7 100644
 +    test_plan_heads();
 +    test_head_not_kept_not_split();
 +    test_history_with_pictures();
-+    test_history_evicted_by_recency();
      test_small_tail_not_saved();
      test_min_end_gain();
      test_budget();
