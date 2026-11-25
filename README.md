@@ -1000,9 +1000,10 @@ a Mesa which includes it.
 GNOME Shell creates Looking Glass, its debugger, hidden the first time `Main.createLookingGlass()` is called, and
 creating it moved the key focus to its hidden notebook, so the keys typed afterwards reached no window until another
 window received the focus. [Just Perfection](https://extensions.gnome.org/extension/3843/just-perfection/) calls it a
-second after it is enabled at every login, so the keys typed into the window focused by then were lost. [Just Perfection
-issue 319](https://gitlab.gnome.org/jrahmatzadeh/just-perfection/-/work_items/319) asks it to resize Looking Glass
-without creating it. GNOME Shell is patched to leave the key focus where it is while Looking Glass is hidden
+second after it is enabled at every login, so the keys typed into the window focused by then were lost, and a menu of
+the top bar opened then lost its keyboard focus. [Just Perfection issue
+319](https://gitlab.gnome.org/jrahmatzadeh/just-perfection/-/work_items/319) asks it to resize Looking Glass without
+creating it. GNOME Shell is patched to leave the key focus where it is while Looking Glass is hidden
 (`patches/gnome-shell/`). The fix is proposed upstream in [GNOME Shell issue
 9554](https://gitlab.gnome.org/GNOME/gnome-shell/-/work_items/9554), and the patch can be dropped once Ubuntu ships a
 GNOME Shell which includes it.

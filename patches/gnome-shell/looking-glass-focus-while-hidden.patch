@@ -4,6 +4,7 @@ Description: Leave the key focus where it is when Looking Glass is created.
  actor of the hidden Looking Glass, and the keys typed afterwards reach no window, until another window receives the
  focus. Main.createLookingGlass() creates Looking Glass the first time it is called, which extensions call too, Just
  Perfection a second after it is enabled, so the keys typed into the window focused right after the login were lost.
+ A menu of the top bar opened then lost its key focus as well, while it stayed open.
  .
  The notebook moves the key focus to a selected page only while it is shown. Looking Glass moves the key focus to its
  entry when it opens, as before.

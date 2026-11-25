@@ -126,8 +126,11 @@ looking-glass-focus-while-hidden.patch
 
     The session test looking-glass-focus creates Looking Glass while a GTK 4 window has the focus and
     checks that the keys typed afterwards reach the window, which fails without the patch, and that
-    Looking Glass, opened, has the key focus in its entry. After a version bump, check that
-    Notebook.selectIndex() still moves the key focus.
+    Looking Glass, opened, has the key focus in its entry. A menu of the top bar open at that moment
+    loses its key focus too: global-menu-chromium, with Just Perfection creating Looking Glass while the
+    test opens the menu of the application's name, failed 2 of 16 times without the patch, and passed 32
+    of 32 times with it. After a version bump, check that Notebook.selectIndex() still moves the key
+    focus.
 
     Reported upstream with the change in https://gitlab.gnome.org/GNOME/gnome-shell/-/work_items/9554.
     Drop the patch once Ubuntu ships a GNOME Shell which fixes it.
