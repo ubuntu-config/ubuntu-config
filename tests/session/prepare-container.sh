@@ -104,10 +104,10 @@ if [ -d /etc/chromium.d ]; then
   # shellcheck disable=SC2016
   echo 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-first-run --no-default-browser-check --password-store=basic"' \
     > /etc/chromium.d/session-test
-  # Chromium reopens the windows of the last session only with "Continue where you left off", which is not its
-  # default, and which the tests of the windows' placement need.
-  mkdir -p /etc/chromium/policies/managed
-  echo '{"RestoreOnStartup": 1}' > /etc/chromium/policies/managed/session-test.json
+  # Chromium reopens the windows of the last session with the policy of this repository, which
+  # configure-gnome-desktop.sh installs too, and which the tests of the windows' placement need.
+  install -D -m 644 "$REPO_DIR/chromium-policies/restore-on-startup.json" \
+    /etc/chromium/policies/recommended/restore-on-startup.json
   install -D -m 755 "$REPO_DIR/chromium-quit.sh" /usr/local/libexec/chromium-quit
   install -D -m 644 "$REPO_DIR/chromium-native-messaging-hosts/local.chromium_quit.json" \
     /etc/chromium/native-messaging-hosts/local.chromium_quit.json
@@ -128,9 +128,8 @@ ExecStart=
 ExecStart=/usr/bin/gnome-shell --headless --virtual-monitor 1920x1080 --mode=%i
 EOF
 
-# Firefox restores the windows of the last session when it starts and opens links from other applications in a new
-# window, as the user's profile has it, and saves its session every second instead of every 15, so that the tests do
-# not wait as long. A new profile starts without the pages and questions of a first start.
+# Firefox saves its session every second instead of every 15, so that the tests do not wait as long, and a new profile
+# starts without the pages and questions of a first start.
 if [ -x /usr/lib/firefox/firefox ]; then
   mkdir -p /etc/firefox/policies
   cat > /etc/firefox/policies/policies.json <<'EOF'
@@ -143,8 +142,6 @@ if [ -x /usr/lib/firefox/firefox ]; then
     "OverridePostUpdatePage": "",
     "UserMessaging": {"WhatsNew": false, "ExtensionRecommendations": false, "FeatureRecommendations": false, "SkipOnboarding": true, "MoreFromMozilla": false},
     "Preferences": {
-      "browser.startup.page": {"Value": 3, "Status": "user"},
-      "browser.link.open_newwindow.override.external": {"Value": 2, "Status": "user"},
       "browser.sessionstore.interval": {"Value": 1000, "Status": "user"},
       "browser.aboutwelcome.enabled": {"Value": false, "Status": "user"}
     }
@@ -152,7 +149,8 @@ if [ -x /usr/lib/firefox/firefox ]; then
 }
 EOF
   # Firefox reads only one policies.json, so the preferences of this repository's firefox/policies.json, which
-  # configure-gnome-desktop.sh installs, join the ones of the tests.
+  # configure-gnome-desktop.sh installs, join the ones of the tests: Firefox restores the windows of the last session
+  # when it starts and opens links from other applications in a new window, as on the desktop.
   python3 - "$REPO_DIR/firefox/policies.json" /etc/firefox/policies/policies.json <<'EOF'
 import json
 import sys

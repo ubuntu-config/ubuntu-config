@@ -34,8 +34,9 @@
 # root, as do the rules added to AppArmor profiles and the option added to AppArmor's parser configuration, the
 # drop-ins for GDM's unit, for the unit of each user's service manager and for application scopes, the user service
 # which stops application scopes and its script, the script which starts applications at login once there is a tray,
-# Chromium's flags, its Ctrl+Q extension with the native messaging host and script it uses, the patched Firefox add-on,
-# and the option added to /etc/crypttab, so those parts call sudo themselves and will ask for a password.
+# Chromium's flags and policy, its Ctrl+Q extension with the native messaging host and script it uses, Firefox's
+# policies, the patched Firefox add-on, and the option added to /etc/crypttab, so those parts call sudo themselves and
+# will ask for a password.
 
 set -euo pipefail
 
@@ -404,6 +405,19 @@ install_chromium_flags() {
   CHANGED=$((CHANGED+1))
   [ "$MODE" = apply ] || return 0
   sudo install -m 644 "$src" "$dst"
+  return 0
+}
+
+# Installs a recommended policy for Chromium from chromium-policies/ in this repository into the root-owned
+# /etc/chromium/policies/recommended through sudo. A recommended policy sets the default of a setting, which the user can
+# still change in Chromium's settings, while a managed one would fix it. Chromium reads it at every start.
+install_chromium_policy() {
+  local name=$1 src=$REPO_DIR/chromium-policies/$1 dst=/etc/chromium/policies/recommended/$1
+  cmp -s "$src" "$dst" && return 0
+  echo "  install $dst"
+  CHANGED=$((CHANGED+1))
+  [ "$MODE" = apply ] || return 0
+  sudo install -D -m 644 "$src" "$dst"
   return 0
 }
 
@@ -934,18 +948,24 @@ install_libexec wait-for-status-notifier-watcher.sh wait-for-status-notifier-wat
 install_autostart claude-desktop.desktop
 install_autostart slack.desktop
 # The global menu in the top bar (gnome-extensions/global-menu@mitar.tnode.com) needs its registrar to run before the
-# applications started at login, see the service. Firefox exports its menu only with two preferences, which the policy
-# sets as defaults, and Visual Studio Code only with its native title bar.
+# applications started at login, see the service, and Visual Studio Code exports its menu only with its native title
+# bar.
 install_libexec global-menu-registrar.py global-menu-registrar
 install_user_unit global-menu-registrar.service
+set_vscode_setting window.titleBarStyle '"native"'
+# Firefox's policies set preferences as defaults, which each profile can still change: Firefox restores the windows
+# of its last session at start, opens links from other applications in a new window, and exports its menu to the
+# global menu.
 if [ -x /usr/lib/firefox/firefox ]; then
   install_firefox_policies
 fi
-set_vscode_setting window.titleBarStyle '"native"'
 # Chromium returns its windows to their places only with this feature, see the file. Chromium is optional, so this is
 # done only when it is installed.
 if [ -d /etc/chromium.d ]; then
   install_chromium_flags wayland-session-management
+  # Chromium restores the windows of its last session at start, "Continue where you left off" in its settings, which
+  # is not its default.
+  install_chromium_policy restore-on-startup.json
   # Chromium binds no key to Exit on Linux, so the extension quits it with Ctrl+Q through the native messaging host,
   # which keeps its whole session, see the host's script.
   install_libexec chromium-quit.sh chromium-quit

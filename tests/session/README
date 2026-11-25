@@ -144,11 +144,12 @@ and no patch here changes that.
 After every test, the script checks that no unit of the user's service manager failed, as at-spi-dbus-bus.service
 does at a logout without systemd/user/at-spi-dbus-bus.service.d/.
 
-For the tests, prepare-container.sh also configures the browsers differently from a fresh profile: Firefox restores
-the last session at startup and opens links from other applications in a new window, as the user's profile does, and
-saves its session every second, through /etc/firefox/policies/policies.json. Chromium starts without the questions of a
-first start, and continues where it left off, which is not its default, through /etc/chromium.d/session-test and a
-policy. The tests serve their pages from a web server on localhost, and set Firefox as the default browser.
+prepare-container.sh installs the browsers' policies of this repository, as configure-gnome-desktop.sh does, so that
+Firefox restores the last session at startup and opens links from other applications in a new window, and Chromium
+continues where it left off. For the tests only, Firefox saves its session every second, and both browsers start
+without the pages and questions of a first start, through /etc/firefox/policies/policies.json, which also has the
+preferences of firefox/policies.json, as Firefox reads only one such file, and /etc/chromium.d/session-test. The tests
+serve their pages from a web server on localhost, and set Firefox as the default browser.
 
 prepare-container.sh installs the session and the patched packages, so it needs the .deb files built here, and
 Chromium from the xtradeb repository in sources.list.d/. The tests of the global menu need further applications, which

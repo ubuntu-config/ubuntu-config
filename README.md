@@ -257,14 +257,15 @@ Firefox, Text Editor and the terminal return the windows of their previous sessi
 application runs: the restored windows stay where they are, without being activated, and the page, the files or the
 shell of the launch appear in a new window on the current workspace, which has the focus.
 
-For Firefox, that is the start page for a launch from the dock, and the link for a link opened from another
-application, like a terminal, when the profile opens external links in new windows
-(`browser.link.open_newwindow.override.external` set to 2 in `about:config`). Firefox itself restores the first window
-of the previous session into the window it opens for the launch, so a link would become a tab of that window, on its
-workspace (`patches/firefox/session-restore-launch-window.patch`). A start after a crash opens the new window as well,
-while a restart by Firefox itself, such as after an update, restores the windows as they were, without a new one. A
-link to a site which Firefox Multi-Account Containers assigns to a container opens in a tab of that container in the
-same new window (see [Container tabs open in the window of their
+For Firefox, that is the start page for a launch from the dock, and the link for a link opened from another application,
+like a terminal. `configure-gnome-desktop.sh` installs Firefox's enterprise policies (`firefox/policies.json`), which
+make restoring the previous session at start (`browser.startup.page` set to 3) and opening links from other applications
+in new windows (`browser.link.open_newwindow.override.external` set to 2) the defaults, which a profile can still
+change. Firefox itself restores the first window of the previous session into the window it opens for the launch, so a
+link would become a tab of that window, on its workspace (`patches/firefox/session-restore-launch-window.patch`). A
+start after a crash opens the new window as well, while a restart by Firefox itself, such as after an update, restores
+the windows as they were, without a new one. A link to a site which Firefox Multi-Account Containers assigns to a
+container opens in a tab of that container in the same new window (see [Container tabs open in the window of their
 page](#container-tabs-open-in-the-window-of-their-page)).
 
 For Text Editor, started from the dock or for a file opened from the terminal or the file manager, the new window
@@ -779,6 +780,8 @@ three things stand in the way on Ubuntu 26.04, each patched until the fix ships:
   (`patches/firefox/wayland-session-restore-uuid-ids.patch`).
 
 When Chromium restores its last session, its windows return to the workspace, monitor, position and size they had.
+`configure-gnome-desktop.sh` makes restoring the last session at start, "Continue where you left off" in Chromium's
+settings, the default with a recommended policy, which its settings can still change (`chromium-policies/`).
 Chromium speaks only the protocol's draft, which mutter 51 and the backport no longer have, so mutter is also patched
 to offer the draft next to the final protocol (`patches/mutter/xx-session-management.patch`). Chromium uses it only
 with its WaylandSessionManagement feature, which `configure-gnome-desktop.sh` enables for every user (`chromium.d/`),
