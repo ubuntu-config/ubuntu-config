@@ -386,6 +386,14 @@ class SessionTest {
     }
 
     /**
+     * @returns {boolean} whether GNOME Shell's input method has the focus of a text field, to which it sends the text it
+     *     composes
+     */
+    inputMethodFocused() {
+        return !!Main.inputMethod?.currentFocus;
+    }
+
+    /**
      * Adds an indicator to the start of the top bar's status area, as an extension adds one, with the given width.
      *
      * @param {number} width - the width of its content, in pixels

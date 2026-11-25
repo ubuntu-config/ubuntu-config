@@ -1547,6 +1547,11 @@ def global_menu_input_method(session, checks, out_dir):
     def text():
         return next((e["value"] for e in reversed(read_events(log)) if e["event"] == "text"), "")
 
+    # The text field of the window receives the focus of the input method a moment after the window opens. A key typed
+    # before reaches the window unchanged, and IBus then received the following keys of the field without composing
+    # anything from them.
+    checks.check("the text field of the window has the focus of the input method",
+                 wait_for(lambda: session.call("inputMethodFocused"), 30))
     # The input method takes some time to start with the session.
     composed = wait_for(lambda: (session.type_text("ni "), wait_for(lambda: cjk_count(text()) > 0, 3))[1] and text(), 30)
     checks.check("the input method composes text in the window: n, i and Space commit a Chinese character",

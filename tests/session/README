@@ -115,12 +115,12 @@ and V-Shell has closed the dialog it opens meanwhile:
                   activates New in the window. Shift+Insert, the shortcut of Paste, also closes the menu and reaches
                   the window, where GTK activates Paste and Qt gives it to the focused text field.
   global-menu-input-method
-                  With IBus and its Pinyin engine, an input method which composes Chinese text from the letters
-                  typed, in the text field of the GTK 4 window of apps/menuapp.py, the letter of an item pressed in an
-                  open menu reaches the menu, and Escape closes it. Mutter gives every key to the input method first,
-                  and patches/mutter/keep-keyboard-focus.patch moves the focus of the input method away from the
-                  window while the menu is open, without which the input method receives both keys. Space after the menu
-                  then reaches the text field as a space.
+                  With IBus and its Pinyin engine, an input method which composes Chinese text from the letters typed,
+                  in the text field of the GTK 4 window of apps/menuapp.py, once the text field has the focus of the
+                  input method, the letter of an item pressed in an open menu reaches the menu, and Escape closes it.
+                  Mutter gives every key to the input method first, and patches/mutter/keep-keyboard-focus.patch moves
+                  the focus of the input method away from the window while the menu is open, without which the input
+                  method receives both keys. Space after the menu then reaches the text field as a space.
   global-menu-date-menu
                   Just Perfection shows the clock at the far right of the top bar. The pointer moved from File, opened
                   over the GTK 4 window of apps/menuapp.py, onto the clock opens the date menu, and moved back opens
