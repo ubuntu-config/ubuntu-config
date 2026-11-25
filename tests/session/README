@@ -102,7 +102,8 @@ extension for the test user and enable it at login:
                   and in the titles, while one opened with a click does not. The letter of an item activates it, the
                   one of Zoom opens its submenu, and P, which Paste and Preferences share, moves the keyboard focus
                   between them. Ctrl+N, the shortcut of New, pressed while a menu is open, closes the menu and
-                  activates New in the window.
+                  activates New in the window. Shift+Insert, the shortcut of Paste, also closes the menu and reaches
+                  the window, where GTK activates Paste and Qt gives it to the focused text field.
   global-menu-app-name
                   Ptyxis, which has no menus, has the menu of its name, which a tap of the left Alt opens, with New
                   Window, the items of the window and Quit, and Minimize there minimizes the window.

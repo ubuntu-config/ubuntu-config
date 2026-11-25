@@ -4,17 +4,19 @@
 Usage: [MENUAPP_EXTRA_MENUS=N] menuapp.py gtk3|gtk4|qt LOG
 
 The window is titled "menu-test-<toolkit>" and has a focused text field under its menu bar, which has the menus File
-(New with Ctrl+N, Open with an icon), Edit (Copy, Paste and Preferences, which shares its mnemonic with Paste) and View (Show Toolbar, which can be checked, and the submenu
-Zoom with Zoom In and Zoom Out). GTK names the icon of Open from the icon theme, and Qt exports it as an image. With MENUAPP_EXTRA_MENUS, up to 14 further menus follow, titled Extra G, Extra H and so on, each with
-the mnemonic of its letter and an item named after it, Item G, Item H and so on. GTK exports the menu bar through
-gtk_shell1 and hides it when GNOME Shell announces that it shows the menu bars, and Qt exports it over
-com.canonical.dbusmenu while com.canonical.AppMenu.Registrar has an owner.
+(New with Ctrl+N, Open with an icon), Edit (Copy, Paste with Shift+Insert and Preferences, which shares its mnemonic
+with Paste) and View (Show Toolbar, which can be checked, and the submenu Zoom with Zoom In and Zoom Out). GTK names the
+icon of Open from the icon theme, and Qt exports it as an image. With MENUAPP_EXTRA_MENUS, up to 14 further menus
+follow, titled Extra G, Extra H and so on, each with the mnemonic of its letter and an item named after it, Item G, Item
+H and so on. GTK exports the menu bar through gtk_shell1 and hides it when GNOME Shell announces that it shows the menu
+bars, and Qt exports it over com.canonical.dbusmenu while com.canonical.AppMenu.Registrar has an owner.
 
 Each line of LOG is a JSON object with the event "activate" and the item's label for an activated menu item, "active"
-with the window's active state when it changes, "focus" with the text field's focus when it changes, and
-"menubar-hidden" with whether the window's own menu bar is hidden, two seconds after the window opened and, with GTK,
-also when it opened and whenever it changes. With GTK, "close" is logged when the window is asked to close, and
-"signal" with "SIGTERM" when the process receives SIGTERM, after which it quits.
+with the window's active state when it changes, "focus" with the text field's focus when it changes, with Qt "key" with
+"Shift+Insert" when the text field receives it, as Qt gives it to the text field and not to Paste, and "menubar-hidden"
+with whether the window's own menu bar is hidden, two seconds after the window opened and, with GTK, also when it opened
+and whenever it changes. With GTK, "close" is logged when the window is asked to close, and "signal" with "SIGTERM" when
+the process receives SIGTERM, after which it quits.
 """
 
 import json
@@ -67,6 +69,7 @@ def run_gtk(version):
                                                                log("activate", LABELS["toolbar"])))
         app.add_action(toolbar)
         app.set_accels_for_action("app.new", ["<Primary>n"])
+        app.set_accels_for_action("app.paste", ["<Shift>Insert"])
 
         menubar = Gio.Menu()
         file_menu = Gio.Menu()
@@ -157,7 +160,7 @@ def run_qt():
     add(file_menu, "open", icon=QtGui.QIcon(pixmap))
     edit_menu = window.menuBar().addMenu(qt_label(LABELS["edit"]))
     add(edit_menu, "copy")
-    add(edit_menu, "paste")
+    add(edit_menu, "paste", "Shift+Ins")
     add(edit_menu, "preferences")
     view_menu = window.menuBar().addMenu(qt_label(LABELS["view"]))
     add(view_menu, "toolbar", checkable=True)
@@ -177,6 +180,10 @@ def run_qt():
                 log("focus", True)
             elif event.type() == QtCore.QEvent.Type.FocusOut:
                 log("focus", False)
+            # The text field takes Shift+Insert as its own paste, before the shortcut of Paste.
+            elif (event.type() == QtCore.QEvent.Type.KeyPress and event.key() == QtCore.Qt.Key.Key_Insert and
+                  event.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier):
+                log("key", "Shift+Insert")
             return False
 
     logger = FocusLogger()

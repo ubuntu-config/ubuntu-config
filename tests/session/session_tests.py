@@ -1465,6 +1465,21 @@ def menu_app(session, checks, out_dir, toolkit):
     checks.check(f"{toolkit}: Ctrl+N, the shortcut of New, closes the open menu and activates New in the window",
                  state["open"] is None and wait_for(lambda: activated().count("_New") > news, 5),
                  str([state, activated()]))
+    session.call("clickGlobalMenu", "Edit")
+    wait_menu(session, lambda s: s["open"] == "Edit")
+    pastes = activated().count("_Paste")
+    session.press("Insert", "Shift_L")
+    state = wait_menu(session, lambda s: s["open"] is None)
+
+    # Qt gives Shift+Insert to the focused text field, as its own paste, and not to the shortcut of Paste.
+    def pasted():
+        if toolkit == "qt":
+            return any(e["event"] == "key" and e["value"] == "Shift+Insert" for e in read_events(log))
+        return activated().count("_Paste") > pastes
+
+    checks.check(f"{toolkit}: Shift+Insert closes the open menu and reaches the window, "
+                 f"{'its text field' if toolkit == 'qt' else 'which activates Paste'}",
+                 state["open"] is None and wait_for(pasted, 5), str([state, read_events(log)[-5:]]))
 
     events = read_events(log)
     lost = [e for e in events if e["event"] in ("active", "focus") and e["value"] is False]

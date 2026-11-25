@@ -205,8 +205,8 @@ opens that menu. In an open menu the letters are underlined while Alt is held, a
 was used in it, and pressing the letter of an item acts on that item. Firefox and some Electron applications export
 their menus without underlined letters, so there Alt with a letter stays with the application. The window stays active
 while one of these menus is open, and the keys of the menu go to the menu, while a shortcut of the window, a key with
-Ctrl or Super or a function key, closes the menu and acts in the window. Menus which do not fit into the left half of
-the top bar are submenus of a » button after the last menu which fits.
+Ctrl or Super, Insert or Delete with Shift, or a function key, closes the menu and acts in the window. Menus which do
+not fit into the left half of the top bar are submenus of a » button after the last menu which fits.
 
 GTK 3 and GTK 4 applications, Qt applications, Chromium, Firefox, LibreOffice and Electron applications such as Signal,
 Slack, Claude Desktop and Visual Studio Code show their menus there. GTK applications show their menu bars in their

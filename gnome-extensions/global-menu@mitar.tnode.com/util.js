@@ -137,10 +137,16 @@ const MODIFIER_KEYS = new Set([
     Clutter.KEY_Caps_Lock, Clutter.KEY_Num_Lock,
 ]);
 
+// The keys which are shortcuts with Shift alone: Shift+Insert pastes and Shift+Delete cuts in many applications, and
+// Shift+Delete deletes files without the trash in file managers.
+const SHIFT_SHORTCUT_KEYS = new Set([
+    Clutter.KEY_Insert, Clutter.KEY_Delete, Clutter.KEY_KP_Insert, Clutter.KEY_KP_Delete,
+]);
+
 /**
  * Returns whether a key pressed in an open menu is a shortcut of the window rather than a key of the menu: a key held
- * with Ctrl or Super, or a function key other than F10, which opens and closes the menus. Letters, the arrow keys,
- * Return, Escape and Alt with a letter stay with the menu.
+ * with Ctrl or Super, Insert or Delete held with Shift, or a function key other than F10, which opens and closes the
+ * menus. Letters, also with Shift, the arrow keys, Return, Escape, Tab and Alt with a letter stay with the menu.
  *
  * @param {Clutter.Event} event - the key press
  * @returns {boolean} whether the key is a shortcut of the window
@@ -151,7 +157,10 @@ export function isWindowShortcut(event) {
         return false;
     const modifiers = Clutter.ModifierType.CONTROL_MASK | Clutter.ModifierType.SUPER_MASK |
         Clutter.ModifierType.MOD4_MASK;
-    if (event.get_state() & modifiers)
+    const state = event.get_state();
+    if (state & modifiers)
+        return true;
+    if (state & Clutter.ModifierType.SHIFT_MASK && SHIFT_SHORTCUT_KEYS.has(key))
         return true;
     return key >= Clutter.KEY_F1 && key <= Clutter.KEY_F35 && key !== Clutter.KEY_F10;
 }
