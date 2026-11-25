@@ -332,6 +332,7 @@ test_global_menu:
       - TEST:
           - global-menu-gtk3
           - global-menu-gtk4
+          - global-menu-date-menu
           - global-menu-lock
           - global-menu-overflow
           - global-menu-quit-window-backed

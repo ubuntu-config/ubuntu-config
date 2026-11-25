@@ -1559,6 +1559,59 @@ def global_menu_input_method(session, checks, out_dir):
 
 
 @test
+def global_menu_date_menu(session, checks, out_dir):
+    """The pointer moved from an open menu of the global menu onto the clock opens the date menu, and moved back opens
+    the menu of the global menu again, as GNOME Shell switches between the menus of the top bar. The window keeps its
+    keyboard focus while the menu of the global menu is open, and loses it while the date menu is open, as with any
+    other menu of GNOME Shell. GNOME Shell holds its grab throughout and only the actor of the grab changes, so
+    patches/mutter/keep-keyboard-focus.patch decides again whether the window keeps its focus whenever that actor
+    changes. The window is the GTK 4 window of apps/menuapp.py, which logs the focus of its text field."""
+    install_global_menu(session)
+    log = out_dir / "menuapp-gtk4.log"
+    session.login()
+    session.call("spawnCommandLine", f"python3 {APPS_DIR}/menuapp.py gtk4 {log}")
+    window = shown_window(session, None, lambda w: w["title"] == "menu-test-gtk4", 30)
+    checks.check("the window opened", bool(window), str(window_summary(window)))
+    if not window:
+        return {}
+    check_menu_titles(session, checks, "gtk4", ["File", "Edit", "View"])
+
+    def focus():
+        return [e["value"] for e in read_events(log) if e["event"] == "focus"]
+
+    session.call("clickGlobalMenu", "File")
+    state = wait_menu(session, lambda s: s["open"] == "File")
+    time.sleep(1)
+    at_open = focus()
+    checks.check("File opened with a click, and the window keeps its keyboard focus",
+                 state["open"] == "File" and at_open[-1:] == [True], str([state["open"], at_open]))
+
+    session.call("hoverTopBar", "dateMenu")
+    date_open = wait_for(lambda: session.call("openTopBarMenus") == ["dateMenu"] and menu_state(session)["open"] is None, 5)
+    checks.check("the pointer moved onto the clock opens the date menu and closes File", bool(date_open),
+                 str([session.call("openTopBarMenus"), menu_state(session)["open"]]))
+    checks.check("the window loses its keyboard focus while the date menu is open",
+                 wait_for(lambda: focus()[len(at_open):][-1:] == [False], 5), str(focus()[len(at_open):]))
+    at_date = focus()
+
+    session.call("hoverTopBar", "File")
+    state = wait_menu(session, lambda s: s["open"] == "File")
+    others = session.call("openTopBarMenus")
+    checks.check("the pointer moved back onto File opens File and closes the date menu",
+                 state["open"] == "File" and others == [], str([state["open"], others]))
+    checks.check("the window has its keyboard focus again while File is open",
+                 wait_for(lambda: focus()[len(at_date):][-1:] == [True], 5), str(focus()[len(at_date):]))
+
+    session.press("Escape")
+    state = wait_menu(session, lambda s: s["open"] is None)
+    time.sleep(1)
+    checks.check("Escape closes File, and the window keeps its keyboard focus",
+                 state["open"] is None and focus()[-1:] == [True], str([state["open"], focus()]))
+    session.logout()
+    return {"events": read_events(log)}
+
+
+@test
 def global_menu_app_name(session, checks, out_dir):
     """An application without menus, Ptyxis, has the menu of its name: the items of its desktop file, the items of the
     window, and Quit, and Minimize there minimizes the window."""

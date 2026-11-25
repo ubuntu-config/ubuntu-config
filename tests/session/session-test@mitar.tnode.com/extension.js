@@ -558,6 +558,32 @@ class SessionTest {
     }
 
     /**
+     * Moves the virtual pointer onto a button of the top bar, without a click. While a menu of the top bar is open,
+     * GNOME Shell opens the menu of the button the pointer enters instead.
+     *
+     * @param {string} target - a title of the global menu, or the role of an item of the top bar's status area, such
+     *     as dateMenu
+     */
+    async hoverTopBar(target) {
+        const button = Object.hasOwn(Main.panel.statusArea, target)
+            ? Main.panel.statusArea[target] : globalMenuButtons()?.find(b => b.label.text === target);
+        if (!button)
+            throw new Error(`No button ${target} in the top bar`);
+        await this._ensurePointer();
+        const [x, y] = button.get_transformed_position();
+        const [width, height] = button.get_transformed_size();
+        this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), x + width / 2, y + height / 2);
+        await sleep(200);
+    }
+
+    /**
+     * @returns {string[]} the roles of the items of the top bar's status area whose menu is open, such as dateMenu
+     */
+    openTopBarMenus() {
+        return Object.entries(Main.panel.statusArea).filter(([, item]) => item?.menu?.isOpen).map(([role]) => role);
+    }
+
+    /**
      * Presses a key and releases it later, so that the key is held meanwhile, as pressKey() does not do.
      *
      * @param {string} key - the name of the key's keysym

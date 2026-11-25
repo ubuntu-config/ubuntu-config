@@ -111,6 +111,13 @@ extension for the test user and enable it at login:
                   and patches/mutter/keep-keyboard-focus.patch moves the focus of the input method away from the
                   window while the menu is open, without which the input method receives both keys. Space after the menu
                   then reaches the text field as a space.
+  global-menu-date-menu
+                  The pointer moved from File, opened over the GTK 4 window of apps/menuapp.py, onto the clock opens
+                  the date menu, and moved back opens File again. The window keeps its keyboard focus while File is
+                  open and loses it while the date menu is open, as with any other menu of GNOME Shell. GNOME Shell
+                  holds its grab throughout and only the actor of the grab changes, and
+                  patches/mutter/keep-keyboard-focus.patch decides again whether the window keeps its focus whenever
+                  that actor changes.
   global-menu-app-name
                   Ptyxis, which has no menus, has the menu of its name, which a tap of the left Alt opens, with New
                   Window, the items of the window and Quit, and Minimize there minimizes the window.
@@ -158,16 +165,15 @@ without the pages and questions of a first start, through /etc/firefox/policies/
 preferences of firefox/policies.json, as Firefox reads only one such file, and /etc/chromium.d/session-test. The tests
 serve their pages from a web server on localhost, and set Firefox as the default browser.
 
-prepare-container.sh installs the session and the patched packages, so it needs the .deb files built here, and
-Chromium from the xtradeb repository in sources.list.d/. The tests of the global menu need further applications, which
-it installs when SESSION_TEST_APPS names them: signal for global-menu-login and global-menu-signal, gtk for the tests
-of GTK, global-menu-overflow and global-menu-quit-window-backed, gtk and ibus for global-menu-input-method, qt, vscode
-and libreoffice. run-session-tests.sh then
-runs the tests. Both run as root in a privileged container, and refuse to run anywhere else. The processes of a
-container of rootless Docker count against the inotify instances of the user who runs Docker, and a few sessions side by
-side with the desktop need more than the kernel's default of 128, to which configure-gnome-desktop.sh raises the limit
-(sysctl.d/60-inotify-instances.conf). With rootless Docker, from the root of the repository, and the packages of the
-local repository:
+prepare-container.sh installs the session and the patched packages, so it needs the .deb files built here, and Chromium
+from the xtradeb repository in sources.list.d/. The tests of the global menu need further applications, which it
+installs when SESSION_TEST_APPS names them: signal for global-menu-login and global-menu-signal, gtk for the tests of
+GTK, global-menu-date-menu, global-menu-overflow and global-menu-quit-window-backed, gtk and ibus for
+global-menu-input-method, qt, vscode and libreoffice. run-session-tests.sh then runs the tests. Both run as root in a
+privileged container, and refuse to run anywhere else. The processes of a container of rootless Docker count against the
+inotify instances of the user who runs Docker, and a few sessions side by side with the desktop need more than the
+kernel's default of 128, to which configure-gnome-desktop.sh raises the limit (sysctl.d/60-inotify-instances.conf). With
+rootless Docker, from the root of the repository, and the packages of the local repository:
 
   docker run --rm --privileged -v "$PWD:/repo:ro" -v /usr/local/lib/debs:/debs:ro -v /tmp/session-test:/out \
     registry.gitlab.com/tozd/docker/base:ubuntu-resolute bash -c '

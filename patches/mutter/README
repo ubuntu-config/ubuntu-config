@@ -244,7 +244,9 @@ keep-keyboard-focus.patch
     Mutter's tests have no input method, so the session test global-menu-input-method (tests/session/)
     covers moving the focus of the input method away: with IBus composing Chinese text in the window, the
     letter of an item and Escape reach an open global menu, and without that part the input method
-    receives both.
+    receives both. The session test global-menu-date-menu checks deciding again in GNOME Shell: the
+    pointer moved from an open global menu onto the clock opens the date menu, and the window loses its
+    keyboard focus only with that part.
 
     Not proposed upstream yet. After a version bump, check meta_wayland_event_handler_invalidate_focus()
     in src/wayland/meta-wayland-input.c, the one place which decides the keyboard focus during a
