@@ -4,6 +4,11 @@ import Meta from 'gi://Meta';
 
 import * as Signals from 'resource:///org/gnome/shell/misc/signals.js';
 
+// How long a registration which ended is still used. Visual Studio Code ends the registration of its window shortly
+// after it starts and makes it again 300 to 400 ms later, and in between the window would have no menu, so that its
+// menus would disappear and come back.
+const ENDED_GRACE_MS = 1000;
+
 const NAME = 'local.GlobalMenuRegistrar';
 const PATH = '/local/GlobalMenuRegistrar';
 const INTERFACE = 'local.GlobalMenuRegistrar';
@@ -33,6 +38,8 @@ export class RegistrarClient extends Signals.EventEmitter {
     constructor() {
         super();
         this._registrations = [];
+        // The timeout which drops each registration which ended, by its sender and window ID.
+        this._ending = new Map();
         this._cancellable = new Gio.Cancellable();
         this._signalId = Gio.DBus.session.signal_subscribe(NAME, INTERFACE, 'RegistrationsChanged', PATH, null,
             Gio.DBusSignalFlags.NONE, () => this._refresh());
@@ -41,6 +48,9 @@ export class RegistrarClient extends Signals.EventEmitter {
     }
 
     destroy() {
+        for (const timeoutId of this._ending.values())
+            GLib.source_remove(timeoutId);
+        this._ending.clear();
         this._cancellable.cancel();
         Gio.DBus.session.signal_unsubscribe(this._signalId);
         Gio.bus_unwatch_name(this._watchId);
@@ -61,9 +71,34 @@ export class RegistrarClient extends Signals.EventEmitter {
             });
     }
 
-    _set(registrations) {
+    // Uses the registrations global-menu-registrar lists, in its order, which has the most recent registration last. A
+    // registration which ended is kept for ENDED_GRACE_MS before it, and dropped then, unless it was made again.
+    _set(listed) {
+        const keyOf = registration => `${registration.sender} ${registration.windowId}`;
+        const listedKeys = new Set(listed.map(keyOf));
+        for (const key of listedKeys) {
+            if (this._ending.has(key)) {
+                GLib.source_remove(this._ending.get(key));
+                this._ending.delete(key);
+            }
+        }
+        const ended = this._registrations.filter(registration => !listedKeys.has(keyOf(registration)));
+        for (const registration of ended) {
+            const key = keyOf(registration);
+            if (this._ending.has(key))
+                continue;
+            this._ending.set(key, GLib.timeout_add(GLib.PRIORITY_DEFAULT, ENDED_GRACE_MS, () => {
+                this._ending.delete(key);
+                this._registrations = this._registrations.filter(other => keyOf(other) !== key);
+                this.emit('changed');
+                return GLib.SOURCE_REMOVE;
+            }));
+        }
+        const registrations = [...ended, ...listed];
+        const changed = JSON.stringify(registrations) !== JSON.stringify(this._registrations);
         this._registrations = registrations;
-        this.emit('changed');
+        if (changed)
+            this.emit('changed');
     }
 
     /**

@@ -256,7 +256,7 @@ export class DbusMenuModel extends Signals.EventEmitter {
         let needUpdate = false;
         try {
             [needUpdate] = (await this._call('AboutToShow', new GLib.Variant('(i)', [node.id]), '(b)')).deepUnpack();
-            this._event(node.id, 'opened');
+            this._notify(node.id, 'opened');
             if (needUpdate)
                 node.children = (await this._getLayout(node.id)).children;
         } catch (error) {
@@ -275,11 +275,22 @@ export class DbusMenuModel extends Signals.EventEmitter {
     closed(index) {
         const node = this._topLevel()[index];
         if (node)
-            this._event(node.id, 'closed');
+            this._notify(node.id, 'closed');
     }
 
     _event(id, eventId, timestamp = 0) {
         return this._call('Event', new GLib.Variant('(isvu)', [id, eventId, new GLib.Variant('i', 0), timestamp]));
+    }
+
+    // Tells the application about a menu which opened or closed, which it can ignore, so an error, as when it set its
+    // menu again in between or dropped it, changes nothing.
+    async _notify(id, eventId) {
+        try {
+            await this._event(id, eventId);
+        } catch (error) {
+            if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                console.debug(`global-menu: telling ${this._busName} that a menu ${eventId} failed: ${error.message}`);
+        }
     }
 
     /**
