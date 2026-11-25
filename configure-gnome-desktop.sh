@@ -30,13 +30,13 @@
 #   ./configure-gnome-desktop.sh --apply   apply the configuration
 #
 # Runs as your own user, because these settings live in your dconf and would land in root's under sudo. Installing
-# packages, the console's boot-time unit, the udev rules, the module options, and the login screen settings need
-# root, as do the rules added to AppArmor profiles and the option added to AppArmor's parser configuration, the
-# drop-ins for GDM's unit, for the unit of each user's service manager and for application scopes, the user service
-# which stops application scopes and its script, the script which starts applications at login once there is a tray,
-# Chromium's flags and policy, its Ctrl+Q extension with the native messaging host and script it uses, Firefox's
-# policies, the patched Firefox add-on, and the option added to /etc/crypttab, so those parts call sudo themselves and
-# will ask for a password.
+# packages, the console's boot-time unit, the udev rules, the module options, and the login screen settings need root,
+# as do the kernel parameters, the rules added to AppArmor profiles and the option added to AppArmor's parser
+# configuration, the drop-ins for GDM's unit, for the unit of each user's service manager and for application scopes,
+# the user service which stops application scopes and its script, the script which starts applications at login once
+# there is a tray, Chromium's flags and policy, its Ctrl+Q extension with the native messaging host and script it uses,
+# Firefox's policies, the patched Firefox add-on, and the option added to /etc/crypttab, so those parts call sudo
+# themselves and will ask for a password.
 
 set -euo pipefail
 
@@ -362,6 +362,19 @@ install_modprobe_conf() {
     sudo modprobe -r "$module"
     sudo modprobe "$module"
   fi
+  return 0
+}
+
+# Installs a kernel parameter file from sysctl.d/ in this repository into the root-owned /etc/sysctl.d through sudo,
+# from where systemd-sysctl applies it at every boot, and applies it at once.
+install_sysctl_conf() {
+  local name=$1 src=$REPO_DIR/sysctl.d/$1 dst=/etc/sysctl.d/$1
+  cmp -s "$src" "$dst" && return 0
+  echo "  install $dst"
+  CHANGED=$((CHANGED+1))
+  [ "$MODE" = apply ] || return 0
+  sudo install -m 644 "$src" "$dst"
+  sudo sysctl --quiet --load="$dst"
   return 0
 }
 
@@ -797,6 +810,10 @@ echo "=== locked memory ==="
 # Programs running models on the NPU need more locked memory than the session allows, see the drop-in. Your service
 # manager receives the new limit when it starts again, at the next login after all your sessions have ended.
 install_dropin user@.service.d/50-memlock.conf
+
+echo "=== inotify instances ==="
+# The session tests running side by side with the desktop need more inotify instances than the default, see the file.
+install_sysctl_conf 60-inotify-instances.conf
 
 echo "=== disk I/O accounting ==="
 # systemd records the bytes every unit reads and writes, for system services and for the units of your session alike,

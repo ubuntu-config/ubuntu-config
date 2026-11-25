@@ -155,8 +155,11 @@ prepare-container.sh installs the session and the patched packages, so it needs 
 Chromium from the xtradeb repository in sources.list.d/. The tests of the global menu need further applications, which
 it installs when SESSION_TEST_APPS names them: signal for global-menu-login and global-menu-signal, gtk for the tests
 of GTK, global-menu-overflow and global-menu-quit-window-backed, qt, vscode and libreoffice. run-session-tests.sh then
-runs the tests. Both run as root in a privileged container, and refuse to run anywhere else. With rootless Docker, from
-the root of the repository, and the packages of the local repository:
+runs the tests. Both run as root in a privileged container, and refuse to run anywhere else. The processes of a
+container of rootless Docker count against the inotify instances of the user who runs Docker, and a few sessions side by
+side with the desktop need more than the kernel's default of 128, to which configure-gnome-desktop.sh raises the limit
+(sysctl.d/60-inotify-instances.conf). With rootless Docker, from the root of the repository, and the packages of the
+local repository:
 
   docker run --rm --privileged -v "$PWD:/repo:ro" -v /usr/local/lib/debs:/debs:ro -v /tmp/session-test:/out \
     registry.gitlab.com/tozd/docker/base:ubuntu-resolute bash -c '

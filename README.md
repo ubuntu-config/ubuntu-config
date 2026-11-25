@@ -361,13 +361,14 @@ Super.
 
 ### Hardware tweaks
 
-The touchscreen is disabled, the power button light is off, and a held key starts repeating only after a second, in
-the console as well as in GNOME (`udev/`, `systemd/`). A program in the session may lock as much memory as it needs,
-as FastFlowLM does to run a model on the NPU (`systemd/user@.service.d/`). systemd records how much every unit reads
-from and writes to the disk, system services and the units of the session alike, so that the writes to the SSD can be
-traced to the units which cause them (`systemd/system.conf.d/`, `systemd/user.conf.d/`, `systemd/user@.service.d/`).
-Its totals count every write three times, once for each layer it passes: the LVM volume, the LUKS device and the NVMe
-drive.
+The touchscreen is disabled, the power button light is off, and a held key starts repeating only after a second, in the
+console as well as in GNOME (`udev/`, `systemd/`). A program in the session may lock as much memory as it needs, as
+FastFlowLM does to run a model on the NPU (`systemd/user@.service.d/`). A user may hold 1024 inotify instances, with
+which programs watch files, instead of 128, which the session tests used up when several of them ran side by side with
+the desktop (`sysctl.d/`). systemd records how much every unit reads from and writes to the disk, system services and
+the units of the session alike, so that the writes to the SSD can be traced to the units which cause them
+(`systemd/system.conf.d/`, `systemd/user.conf.d/`, `systemd/user@.service.d/`). Its totals count every write three
+times, once for each layer it passes: the LVM volume, the LUKS device and the NVMe drive.
 
 ## Additions
 
