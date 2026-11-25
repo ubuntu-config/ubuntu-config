@@ -165,6 +165,10 @@ class Session:
 
         if not wait_for(ready, timeout):
             raise RuntimeError(f"GNOME Shell did not start within {timeout} seconds, last error: {last_error}, see the journal")
+        # GNOME Shell enables extensions one after another, so the test extension can answer before the others are
+        # enabled, and the keys and clicks of a test which starts meanwhile can reach the dialog V-Shell opens while it
+        # enables. A test which an extension still holds up after that fails on its own checks.
+        wait_for(lambda: self.call("extensionsSettled"), 30)
         # The virtual keyboard is set up before a test types, which loses the first keys otherwise.
         self.press("Shift_L")
 

@@ -5,6 +5,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {Keyboard} from './keyboard.js';
 import {MenuBar} from './menuBar.js';
+import {PanelLayout} from './panelLayout.js';
 import {RegistrarClient, deactivateRegistrar} from './registrar.js';
 import {MenuSources} from './source.js';
 
@@ -31,6 +32,8 @@ function mutterHasPatches() {
  *
  * The extension stays enabled while the screen is locked, so that GTK windows do not show their menu bars for the time
  * of the lock and change their layouts twice, and hides the menu bar and gives back its keys meanwhile.
+ *
+ * The menu bar has the width of the top bar which the status area does not need, see PanelLayout.
  */
 export default class GlobalMenuExtension extends Extension {
     enable() {
@@ -41,6 +44,7 @@ export default class GlobalMenuExtension extends Extension {
         }
         this._registrar = new RegistrarClient();
         this._sources = new MenuSources(this._registrar);
+        this._panelLayout = new PanelLayout();
         this._menuBar = new MenuBar(this._sources);
         this._keyboard = new Keyboard(this._menuBar);
         global.display.set_shell_shows_menubar(true);
@@ -57,6 +61,8 @@ export default class GlobalMenuExtension extends Extension {
         this._keyboard = null;
         this._menuBar.destroy();
         this._menuBar = null;
+        this._panelLayout.destroy();
+        this._panelLayout = null;
         this._sources.destroy();
         this._sources = null;
         this._registrar.destroy();

@@ -85,7 +85,12 @@ The tests:
                   bus.
 
 The tests of the global menu, gnome-extensions/global-menu@mitar.tnode.com with patches/mutter/, each install the
-extension for the test user and enable it at login:
+extension for the test user and enable it at login, after the extensions which change the top bar on the configured
+desktop, Just Perfection and V-Shell, with the settings in gnome-extensions/, so that the clock is at the far right of
+the top bar as there. Only V-Shell's hot corner is turned off, which the virtual pointer would set off on its way into
+the top bar. prepare-container.sh installs both from extensions.gnome.org, in the newest version for the installed GNOME
+Shell, as the desktop updates them daily. After a login, the tests wait until GNOME Shell has enabled every extension
+and V-Shell has closed the dialog it opens meanwhile:
 
   global-menu-login
                   Signal started at login registers its menu with global-menu-registrar, which owns
@@ -112,12 +117,12 @@ extension for the test user and enable it at login:
                   window while the menu is open, without which the input method receives both keys. Space after the menu
                   then reaches the text field as a space.
   global-menu-date-menu
-                  The pointer moved from File, opened over the GTK 4 window of apps/menuapp.py, onto the clock opens
-                  the date menu, and moved back opens File again. The window keeps its keyboard focus while File is
-                  open and loses it while the date menu is open, as with any other menu of GNOME Shell. GNOME Shell
-                  holds its grab throughout and only the actor of the grab changes, and
-                  patches/mutter/keep-keyboard-focus.patch decides again whether the window keeps its focus whenever
-                  that actor changes.
+                  Just Perfection shows the clock at the far right of the top bar. The pointer moved from File, opened
+                  over the GTK 4 window of apps/menuapp.py, onto the clock opens the date menu, and moved back opens
+                  File again. The window keeps its keyboard focus while File is open and loses it while the date menu is
+                  open, as with any other menu of GNOME Shell. GNOME Shell holds its grab throughout and only the actor
+                  of the grab changes, and patches/mutter/keep-keyboard-focus.patch decides again whether the window
+                  keeps its focus whenever that actor changes.
   global-menu-app-name
                   Ptyxis, which has no menus, has the menu of its name, which a tap of the left Alt opens, with New
                   Window, the items of the window and Quit, and Minimize there minimizes the window.
@@ -132,13 +137,17 @@ extension for the test user and enable it at login:
                   exports its menus without mnemonics, so there Alt+F stays with Firefox, and the keys are checked from
                   the menu of the application's name.
   global-menu-overflow
-                  The test window with 14 further menus, more than fit into the top bar: the menus which fit keep their
-                  full width, the others are submenus of the overflow button, Alt with the mnemonic of such a menu opens
-                  its submenu there, and its item acts when clicked. With an actor of 300 pixels added to the top bar
-                  before the menus, more of them move into the overflow button, and back once it is gone.
+                  The test window with 18 further menus, more than fit into the top bar: the menus have the width of the
+                  top bar up to the status area, which keeps its natural width, as Just Perfection shows the clock in
+                  the status area, where GNOME Shell would end them at the middle of the work area. The menus which fit
+                  keep their full width, the others are submenus of the overflow button, Alt with the mnemonic of such a
+                  menu opens its submenu there, and its item acts when clicked. With an actor of 300 pixels added to the
+                  top bar before the menus, or an indicator of 300 pixels added to the status area, more of them move
+                  into the overflow button, and back once it is gone.
   global-menu-lock
                   Locking the screen hides the global menu and unlocking shows it again, while the GTK window keeps its
-                  menu bar hidden throughout. Disabling the extension shows the window's menu bar again, and
+                  menu bar hidden throughout. Disabling the extension shows the window's menu bar again, gives the top
+                  bar GNOME Shell's layout, where the left box ends at the middle of the work area, and
                   global-menu-registrar gives up its name.
   global-menu-quit-chromium, global-menu-quit-firefox
                   With 7 windows of the browser, each on its own workspace and with its own page, Quit 7 Windows in the

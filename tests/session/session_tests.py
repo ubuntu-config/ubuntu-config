@@ -1198,15 +1198,29 @@ def global_menu_login(session, checks, out_dir):
 APPS_DIR = REPO_DIR / "tests/session/apps"
 
 
+# The extensions which change the top bar on the configured desktop, which prepare-container.sh installs, by their
+# UUID, with the name of their settings in gnome-extensions/ and under /org/gnome/shell/extensions/, in the order the
+# desktop enables them.
+TOP_BAR_EXTENSIONS = {"just-perfection-desktop@just-perfection": "just-perfection",
+                      "vertical-workspaces@G-dH.github.com": "vertical-workspaces"}
+
+
 def install_global_menu(session):
-    """Installs global-menu@mitar.tnode.com for the test user and enables it at the next login."""
+    """Installs global-menu@mitar.tnode.com for the test user and enables it at the next login, after Just Perfection
+    and V-Shell with this repository's settings, as the configured desktop has them, which shows the clock at the far
+    right of the top bar."""
     extensions = pathlib.Path.home() / ".local/share/gnome-shell/extensions"
     extensions.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(extensions / GLOBAL_MENU, ignore_errors=True)
     shutil.copytree(REPO_DIR / "gnome-extensions" / GLOBAL_MENU, extensions / GLOBAL_MENU)
-    session.enable_extensions(GLOBAL_MENU)
-    # The virtual pointer's first move into the top bar would otherwise open the overview through the hot corner.
+    for name in TOP_BAR_EXTENSIONS.values():
+        with open(REPO_DIR / "gnome-extensions" / f"{name}.dconf") as settings:
+            subprocess.run(["dconf", "load", f"/org/gnome/shell/extensions/{name}/"], stdin=settings, check=True)
+    session.enable_extensions(*TOP_BAR_EXTENSIONS, GLOBAL_MENU)
+    # The virtual pointer's first move into the top bar would otherwise open the overview through the hot corner. V-Shell
+    # sets enable-hot-corners from its own setting whenever it enables, so the hot corner is turned off there too.
     session.gsettings("org.gnome.desktop.interface", "enable-hot-corners", "false")
+    subprocess.run(["dconf", "write", "/org/gnome/shell/extensions/vertical-workspaces/hot-corner-action", "0"], check=True)
 
 
 def menu_state(session):
@@ -1575,6 +1589,9 @@ def global_menu_date_menu(session, checks, out_dir):
     if not window:
         return {}
     check_menu_titles(session, checks, "gtk4", ["File", "Edit", "View"])
+    bar = session.call("topBar")
+    checks.check("Just Perfection shows the clock at the far right of the top bar, as configured",
+                 bar["right"]["items"][-1:] == ["dateMenu"], str(bar))
 
     def focus():
         return [e["value"] for e in read_events(log) if e["event"] == "focus"]
@@ -1892,7 +1909,8 @@ def registrar_owner(session):
 def global_menu_lock(session, checks, out_dir):
     """Locking the screen hides the global menu, and GTK windows keep their menu bars hidden meanwhile, since the
     extension stays enabled on the lock screen, so that the windows do not change their layouts twice. Disabling the
-    extension gives the menu bars back to GTK windows, and global-menu-registrar gives up its name."""
+    extension gives the menu bars back to GTK windows, the top bar GNOME Shell's layout, where the left box ends at the
+    middle of the work area, and global-menu-registrar gives up its name."""
     install_global_menu(session)
     log = out_dir / "menuapp-gtk4.log"
     session.login()
@@ -1914,24 +1932,37 @@ def global_menu_lock(session, checks, out_dir):
     checks.check("the window kept its menu bar hidden through the lock",
                  bool(hidden_events()) and all(hidden_events()), str(hidden_events()))
 
-    session.gsettings("org.gnome.shell", "enabled-extensions", f"['{TEST_EXTENSION}']")
+    session.gsettings("org.gnome.shell", "enabled-extensions",
+                      json.dumps([TEST_EXTENSION, *TOP_BAR_EXTENSIONS]).replace('"', "'"))
     checks.check("disabling the extension shows the window's menu bar again",
                  wait_for(lambda: hidden_events()[-1:] == [False], 10), str(hidden_events()))
+    # An actor wider than the top bar's free width in the left box shows how much of the top bar the left box has.
+    session.eval("(() => { global._spacer = new imports.gi.St.Widget({width: 1500}); "
+                 "Main.panel._leftBox.add_child(global._spacer); return 1; })()")
+    time.sleep(1)
+    bar = session.call("topBar")
+    session.eval("(() => { global._spacer.destroy(); return 1; })()")
+    checks.check("disabling the extension gives the top bar GNOME Shell's layout, where the left box ends at the middle "
+                 "of the work area, short of the status area", 0 < bar["left"]["x"] + bar["left"]["width"] < bar["right"]["x"],
+                 str(bar))
     checks.check("disabling the extension makes global-menu-registrar give up its name",
                  wait_for(lambda: registrar_owner(session) is None, 10), str(registrar_owner(session)))
     session.logout()
     return {"menubar_hidden": hidden_events()}
 
 
-EXTRA_MENUS = [f"Extra {letter}" for letter in "GHIJKLMNOPQRSU"]
+EXTRA_MENUS = [f"Extra {letter}" for letter in "GHIJKLMNOPQRSUWXYZ"]
 
 
 @test
 def global_menu_overflow(session, checks, out_dir):
-    """A window with more menus than fit into the top bar, the test window of apps/menuapp.py with 14 further menus.
-    The menus which fit keep their full width, and the others are submenus of the overflow button. Alt with the mnemonic
-    of such a menu opens its submenu there, and its item acts when clicked. When the top bar has less space, as with an
-    actor of 300 pixels added before the menus, more menus move into the overflow button, and back when it is gone."""
+    """A window with more menus than fit into the top bar, the test window of apps/menuapp.py with 18 further menus.
+    The menus have the width of the top bar up to the status area, which keeps its full width, as the clock is in the
+    status area with Just Perfection, where GNOME Shell would end them at the middle of the work area. The menus which fit keep their full width, and
+    the others are submenus of the overflow button. Alt with the mnemonic of such a menu opens its submenu there, and its
+    item acts when clicked. When the top bar has less space, as with an actor of 300 pixels added before the menus or an
+    indicator of 300 pixels added to the status area, more menus move into the overflow button, and back when it is
+    gone."""
     install_global_menu(session)
     log = out_dir / "menuapp-gtk4.log"
     session.login()
@@ -1946,6 +1977,11 @@ def global_menu_overflow(session, checks, out_dir):
     checks.check("the menus which do not fit are the last ones, in the overflow button",
                  bool(overflowed) and len(overflowed) < len(titles) and overflowed == titles[len(titles) - len(overflowed):],
                  str(state))
+    bar = session.call("topBar")
+    left_end = bar["left"]["x"] + bar["left"]["width"]
+    checks.check("the menus have the width of the top bar up to the status area, and the status area its natural width",
+                 left_end == bar["right"]["x"] and bar["right"]["width"] == bar["right"]["naturalWidth"] and
+                 bar["right"]["x"] + bar["right"]["width"] == bar["width"], str(bar))
     check_menu_keys(session, checks, "overflow", titles, "f")
 
     last = overflowed[-1]
@@ -1973,8 +2009,21 @@ def global_menu_overflow(session, checks, out_dir):
     wider = wait_menu(session, lambda s: s["overflowed"] == overflowed)
     checks.check("with the space back, the same menus fit again", wider["overflowed"] == overflowed,
                  f"{wider['overflowed']}, was {overflowed}")
+
+    session.call("addStatusIndicator", 300)
+    with_indicator = wait_menu(session, lambda s: len(s["overflowed"]) > len(overflowed))
+    bar = session.call("topBar")
+    checks.check("with an indicator added to the status area, more menus move into the overflow button, and the status "
+                 "area keeps its natural width", len(with_indicator["overflowed"]) > len(overflowed) and
+                 bar["right"]["width"] == bar["right"]["naturalWidth"] and
+                 bar["left"]["x"] + bar["left"]["width"] <= bar["right"]["x"],
+                 f"{with_indicator['overflowed']}, was {overflowed}, {bar}")
+    session.call("removeStatusIndicator")
+    without_indicator = wait_menu(session, lambda s: s["overflowed"] == overflowed)
+    checks.check("with the indicator removed, the same menus fit again", without_indicator["overflowed"] == overflowed,
+                 f"{without_indicator['overflowed']}, was {overflowed}")
     session.logout()
-    return {"overflowed": overflowed, "narrower": narrower["overflowed"]}
+    return {"overflowed": overflowed, "narrower": narrower["overflowed"], "with_indicator": with_indicator["overflowed"]}
 
 
 def main():

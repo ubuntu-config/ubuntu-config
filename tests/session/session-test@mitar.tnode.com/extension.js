@@ -6,6 +6,7 @@ import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import {ExtensionState} from 'resource:///org/gnome/shell/misc/extensionUtils.js';
 import * as Util from 'resource:///org/gnome/shell/misc/util.js';
 
@@ -345,6 +346,63 @@ class SessionTest {
             return null;
         const name = Object.keys(ExtensionState).find(key => ExtensionState[key] === extension.state) ?? `${extension.state}`;
         return {state: name, error: `${extension.error ?? ''}`};
+    }
+
+    /**
+     * GNOME Shell enables extensions one after another once it has started up, and V-Shell opens a modal dialog for half
+     * a second while it enables.
+     *
+     * @returns {boolean} whether every extension to enable has been enabled or failed, and no modal dialog is open
+     */
+    extensionsSettled() {
+        const manager = Main.extensionManager;
+        const done = [ExtensionState.ACTIVE, ExtensionState.ERROR, ExtensionState.OUT_OF_DATE];
+        return (manager._enabledExtensions ?? []).every(uuid => {
+            const extension = manager.lookup(uuid);
+            return !extension || done.includes(extension.state);
+        }) && this.dialogs().length === 0;
+    }
+
+    /**
+     * @returns {object} the top bar's width and its left, center and right boxes, each with its position, its width, its
+     *     natural width and its visible items in order: an item of the status area by its role, such as dateMenu, the
+     *     global menu as globalMenu, and anything else by its class
+     */
+    topBar() {
+        const roles = new Map(Object.entries(Main.panel.statusArea).map(([role, item]) => [item.container, role]));
+        const describe = box => ({
+            x: Math.round(box.get_transformed_position()[0]),
+            width: Math.round(box.width),
+            naturalWidth: Math.round(box.get_preferred_width(-1)[1]),
+            items: box.get_children().filter(child => child.visible).map(child => roles.get(child) ??
+                (child.has_style_class_name?.('global-menu-bar') ? 'globalMenu' : child.constructor.name)),
+        });
+        return {
+            width: Math.round(Main.panel.width),
+            left: describe(Main.panel._leftBox),
+            center: describe(Main.panel._centerBox),
+            right: describe(Main.panel._rightBox),
+        };
+    }
+
+    /**
+     * Adds an indicator to the start of the top bar's status area, as an extension adds one, with the given width.
+     *
+     * @param {number} width - the width of its content, in pixels
+     */
+    addStatusIndicator(width) {
+        this.removeStatusIndicator();
+        this._indicator = new PanelMenu.Button(0.5, 'session-test-indicator', true);
+        this._indicator.add_child(new St.Widget({width}));
+        Main.panel.addToStatusArea('session-test-indicator', this._indicator, 0, 'right');
+    }
+
+    /**
+     * Removes the indicator addStatusIndicator() added, if any.
+     */
+    removeStatusIndicator() {
+        this._indicator?.destroy();
+        this._indicator = null;
     }
 
     /**

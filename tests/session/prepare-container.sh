@@ -9,7 +9,8 @@
 # DEBS_DIR over the installed ones of the same name, and Firefox from there, which Ubuntu has only as a snap. A package
 # in a later DEBS_DIR replaces one of the same name in an earlier one, so a build to test can come after the local
 # repository. Chromium is installed when a configured repository has it, as the xtradeb one does. Then installs this
-# repository's session files where configure-gnome-desktop.sh installs them, and the files the tests need besides.
+# repository's session files where configure-gnome-desktop.sh installs them, and the files the tests need besides,
+# with Just Perfection and V-Shell from extensions.gnome.org, which change the top bar on the configured desktop.
 #
 # SESSION_TEST_APPS names further applications to install, for the tests of the global menu, so that each test
 # installs only the ones it runs:
@@ -37,7 +38,7 @@ export DEBIAN_FRONTEND=noninteractive
 # again, with Ubuntu's package of the same version.
 apt-get update -q
 apt-get install -y -q --no-install-recommends --no-upgrade \
-  at-spi2-core dbus dbus-user-session dconf-gsettings-backend fonts-dejavu-core gnome-session gnome-shell \
+  at-spi2-core dbus dbus-user-session dconf-cli dconf-gsettings-backend fonts-dejavu-core gnome-session gnome-shell \
   gnome-shell-extension-appindicator gnome-shell-extension-ubuntu-dock gnome-text-editor gsettings-desktop-schemas \
   libdbusmenu-gtk3-4 procps ptyxis python3 python3-gi systemd ubuntu-session util-linux xdg-desktop-portal \
   xdg-desktop-portal-gnome xdg-utils
@@ -167,3 +168,28 @@ fi
 # The extension through which the tests drive GNOME Shell, for every user of the container.
 rm -rf /usr/share/gnome-shell/extensions/session-test@mitar.tnode.com
 cp -r "$HERE/session-test@mitar.tnode.com" /usr/share/gnome-shell/extensions/
+
+# The extensions which change the top bar on the configured desktop, Just Perfection and V-Shell, which
+# configure-gnome-desktop.sh installs from extensions.gnome.org. Each is installed in the newest version for this
+# GNOME Shell, as the desktop updates them daily, with its schemas compiled, as GNOME Shell does when it installs one.
+# The tests of the global menu enable them with this repository's settings.
+shell_version=$(gnome-shell --version | sed -n 's/^GNOME Shell \([0-9]*\).*/\1/p')
+for uuid in just-perfection-desktop@just-perfection vertical-workspaces@G-dH.github.com; do
+  python3 -I - "$uuid" "$shell_version" /usr/share/gnome-shell/extensions <<'EOF_PYTHON'
+import io, json, pathlib, shutil, sys, urllib.parse, urllib.request, zipfile
+
+uuid, shell_version, root = sys.argv[1:]
+query = urllib.parse.urlencode({"uuid": uuid, "shell_version": shell_version})
+with urllib.request.urlopen(f"https://extensions.gnome.org/extension-info/?{query}", timeout=60) as reply:
+    info = json.load(reply)
+with urllib.request.urlopen(f"https://extensions.gnome.org{info['download_url']}", timeout=300) as reply:
+    data = reply.read()
+target = pathlib.Path(root) / uuid
+shutil.rmtree(target, ignore_errors=True)
+zipfile.ZipFile(io.BytesIO(data)).extractall(target)
+print(f"{uuid}: version {info['version']} from extensions.gnome.org")
+EOF_PYTHON
+  if [ -d "/usr/share/gnome-shell/extensions/$uuid/schemas" ]; then
+    glib-compile-schemas "/usr/share/gnome-shell/extensions/$uuid/schemas"
+  fi
+done

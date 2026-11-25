@@ -6,7 +6,7 @@ Usage: [MENUAPP_EXTRA_MENUS=N] menuapp.py gtk3|gtk4|qt LOG
 The window is titled "menu-test-<toolkit>" and has a focused text field under its menu bar, which has the menus File
 (New with Ctrl+N, Open with an icon), Edit (Copy, Paste with Shift+Insert and Preferences, which shares its mnemonic
 with Paste) and View (Show Toolbar, which can be checked, and the submenu Zoom with Zoom In and Zoom Out). GTK names the
-icon of Open from the icon theme, and Qt exports it as an image. With MENUAPP_EXTRA_MENUS, up to 14 further menus
+icon of Open from the icon theme, and Qt exports it as an image. With MENUAPP_EXTRA_MENUS, up to 18 further menus
 follow, titled Extra G, Extra H and so on, each with the mnemonic of its letter and an item named after it, Item G, Item
 H and so on. GTK exports the menu bar through gtk_shell1 and hides it when GNOME Shell announces that it shows the menu
 bars, and Qt exports it over com.canonical.dbusmenu while com.canonical.AppMenu.Registrar has an owner.
@@ -40,7 +40,7 @@ LABELS = {
 }
 
 # The letters of the further menus, which none of the other menus uses as its mnemonic.
-EXTRA_LETTERS = "GHIJKLMNOPQRSU"
+EXTRA_LETTERS = "GHIJKLMNOPQRSUWXYZ"
 EXTRA_COUNT = int(os.environ.get("MENUAPP_EXTRA_MENUS", "0"))
 EXTRA_MENUS = [(f"Extra _{letter}", f"Item _{letter}") for letter in EXTRA_LETTERS[:EXTRA_COUNT]]
 
