@@ -1,7 +1,9 @@
 import {addItem, addSeparator, trimSeparator} from './util.js';
 
 /**
- * Returns the windows of an application which the dock counts, the ones not skipped by the taskbar.
+ * Returns the windows of an application which Quit quits, the ones not skipped by the taskbar, on every workspace.
+ * Ubuntu Dock counts the same windows, except that its isolate-workspaces limits them to the active workspace, and its
+ * Quit then closes only those.
  *
  * @param {Shell.App} app - the application
  * @returns {Meta.Window[]} the windows

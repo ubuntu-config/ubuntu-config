@@ -116,9 +116,15 @@ and V-Shell has closed the dialog it opens meanwhile:
                   titles, until another key is pressed with it. A menu opened with Alt+F underlines them in its items
                   and in the titles, while one opened with a click does not. The letter of an item activates it, the
                   one of Zoom opens its submenu, and P, which Paste and Preferences share, moves the keyboard focus
-                  between them. Ctrl+N, the shortcut of New, pressed while a menu is open, closes the menu and
+                  between them. A letter which no item of the open menu has opens the menu with that mnemonic: E in the
+                  menu of the application's name, which has no mnemonics, opens Edit, and V in File opens View. A tap
+                  of the left Alt in a menu opened with a click underlines the letters and leaves the menu open, and a
+                  second tap closes it. Space in a menu opened with a click, before an item has the keyboard focus,
+                  closes it, as on its title, and activates no item. Ctrl+N, the shortcut of New, pressed while a menu is open, closes the menu and
                   activates New in the window. Shift+Insert, the shortcut of Paste, also closes the menu and reaches
-                  the window, where GTK activates Paste and Qt gives it to the focused text field.
+                  the window, where GTK activates Paste and Qt gives it to the focused text field. File, with an item
+                  whose label is wider than the monitor, lies within the monitor, as the label ends with an
+                  ellipsis.
   global-menu-input-method
                   With IBus and its Pinyin engine, an input method which composes Chinese text from the letters typed,
                   in the text field of the GTK 4 window of apps/menuapp.py, once the text field has the focus of the
@@ -135,7 +141,10 @@ and V-Shell has closed the dialog it opens meanwhile:
                   keeps its focus whenever that actor changes.
   global-menu-app-name
                   Ptyxis, which has no menus, has the menu of its name, which a tap of the left Alt opens, with New
-                  Window, the items of the window and Quit, and Minimize there minimizes the window.
+                  Window, the items of the window and Quit, and Minimize there minimizes the window. With a second
+                  window on another workspace, Quit says "Quit 2 Windows", as it quits both, although Ubuntu Dock
+                  counts only the window on the active workspace. Once the window is minimized, the desktop of Desktop
+                  Icons NG has the focus, and the top bar shows no menus, and not the name gjs.
   global-menu-signal, global-menu-vscode, global-menu-chromium, global-menu-firefox, global-menu-libreoffice
                   The application's menus and their keys, as for the test window, and an item which acts on the window:
                   Toggle Full Screen in Signal and Full Screen in Visual Studio Code, which act only when Electron has a
@@ -148,7 +157,9 @@ and V-Shell has closed the dialog it opens meanwhile:
                   again, as it does when one of its menus opens. In Firefox, which exports its mnemonics and the icons
                   of its menu items with patches/firefox/, the History menu lists a visited page whose title has
                   underscores with its whole title and with an icon, and the Bookmarks Toolbar submenu lists the page,
-                  bookmarked with Ctrl+D, with its icon the first time it opens.
+                  bookmarked with Ctrl+D, with its icon the first time it opens. Each time the History menu opens,
+                  Firefox lists its entries anew, and the menu never shows them in another order meanwhile, which the
+                  test checks after every frame GNOME Shell paints.
   global-menu-reenable
                   Disabling the extension makes global-menu-registrar give up its name and removes Signal's menu from
                   the top bar, and enabling it again brings the menu back, as Electron registers its windows again with

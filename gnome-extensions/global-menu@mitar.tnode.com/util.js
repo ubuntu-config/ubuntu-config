@@ -169,6 +169,34 @@ export function isWindowShortcut(event) {
 }
 
 /**
+ * Returns whether a modifier is held with a key, other than Caps Lock and Num Lock, as GNOME Shell's menus check before
+ * they act on Space and Return.
+ *
+ * @param {Clutter.Event} event - the key press
+ * @returns {boolean} whether a modifier is held
+ */
+export function hasModifiers(event) {
+    const ignored = Clutter.ModifierType.LOCK_MASK | Clutter.ModifierType.MOD2_MASK;
+    return (event.get_state() & ~ignored & Clutter.ModifierType.MODIFIER_MASK) !== 0;
+}
+
+/**
+ * Returns the letter of a key pressed without Ctrl, Alt or Super, which can be the letter of a mnemonic in an open
+ * menu.
+ *
+ * @param {Clutter.Event} event - the key press
+ * @returns {string|null} the lower-case letter, or null for another key or with one of these modifiers held
+ */
+export function typedLetter(event) {
+    const modifiers = Clutter.ModifierType.CONTROL_MASK | Clutter.ModifierType.MOD1_MASK |
+        Clutter.ModifierType.SUPER_MASK | Clutter.ModifierType.MOD4_MASK;
+    const unicode = event.get_key_unicode();
+    if (!unicode || unicode.trim() === '' || event.get_state() & modifiers)
+        return null;
+    return unicode.toLowerCase();
+}
+
+/**
  * Acts on a key pressed in an open menu as GTK and Qt menus act on the letter of a mnemonic: the only item with that
  * mnemonic is activated, or its submenu is opened with the keyboard focus on its first item, and with several such
  * items the keyboard focus moves to the next of them. The items are those of the submenu which has the item with the
@@ -179,12 +207,9 @@ export function isWindowShortcut(event) {
  * @returns {boolean} whether the key was the letter of a mnemonic there
  */
 export function activateMnemonic(menu, event) {
-    const modifiers = Clutter.ModifierType.CONTROL_MASK | Clutter.ModifierType.MOD1_MASK |
-        Clutter.ModifierType.SUPER_MASK | Clutter.ModifierType.MOD4_MASK;
-    const unicode = event.get_key_unicode();
-    if (!unicode || unicode.trim() === '' || event.get_state() & modifiers)
+    const letter = typedLetter(event);
+    if (!letter)
         return false;
-    const letter = unicode.toLowerCase();
     const focus = global.stage.get_key_focus();
     const scope = menuOfItem(menu, focus) ?? menu;
     const items = scope._getMenuItems().filter(item => item.visible && item.sensitive &&
@@ -381,6 +406,7 @@ function updateItem(item, {
  */
 export function addItem(menu, params) {
     const item = new PopupMenu.PopupMenuItem(params.text);
+    item.label.add_style_class_name('global-menu-item-label');
     updateItem(item, params);
     menu.addMenuItem(item);
     return item;
@@ -417,6 +443,7 @@ function updateSubmenuItem(item, {text, mnemonicIndex = -1, enabled = true, icon
  */
 export function addSubmenuItem(menu, params) {
     const item = new PopupMenu.PopupSubMenuMenuItem(params.text, !!params.icon);
+    item.label.add_style_class_name('global-menu-item-label');
     item.menu.connect('open-state-changed', (_menu, open) => submenuCallbacks.get(item)?.(open));
     updateSubmenuItem(item, params);
     menu.addMenuItem(item);

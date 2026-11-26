@@ -1416,6 +1416,38 @@ def menu_app(session, checks, out_dir, toolkit):
                  str([combined, after]))
     check_menu_keys(session, checks, toolkit, titles, "f")
 
+    # A letter which no item of the open menu has opens the menu with that mnemonic. The menu of the application's
+    # name, which a tap of Alt opens, has no mnemonics, and File has no item with V.
+    app = menu_state(session)["titles"][0]
+    session.press("Alt_L")
+    wait_menu(session, lambda s: s["open"] == app)
+    session.press("e")
+    state = wait_menu(session, lambda s: s["open"] == "Edit" and s["focus"] == "Copy")
+    checks.check(f"{toolkit}: after a tap of Alt, E opens Edit with the keyboard focus on its first item",
+                 state["open"] == "Edit" and state["focus"] == "Copy", str(state))
+    session.press("Escape")
+    wait_menu(session, lambda s: s["open"] is None)
+    session.press("f", "Alt_L")
+    wait_menu(session, lambda s: s["open"] == "File")
+    session.press("v")
+    state = wait_menu(session, lambda s: s["open"] == "View")
+    checks.check(f"{toolkit}: in File, V opens View", state["open"] == "View", str(state))
+    session.press("Escape")
+    wait_menu(session, lambda s: s["open"] is None)
+    # A tap of Alt in a menu which the mouse opened underlines the letters of the mnemonics and leaves the menu open,
+    # and a second tap closes it.
+    session.call("clickGlobalMenu", "Edit")
+    wait_menu(session, lambda s: s["open"] == "Edit" and s["layout"])
+    session.press("Alt_L")
+    time.sleep(1)
+    state = menu_state(session)
+    checks.check(f"{toolkit}: a tap of Alt in Edit, which a click opened, leaves it open and underlines the letters of "
+                 "the mnemonics", state["open"] == "Edit" and state["underlinedTitles"] == titles and
+                 all(item["underlined"] for item in state["layout"] or []), str(state))
+    session.press("Alt_L")
+    state = wait_menu(session, lambda s: s["open"] is None)
+    checks.check(f"{toolkit}: a second tap of Alt closes Edit", state["open"] is None, str(state))
+
     def activated():
         return [e["value"] for e in read_events(log) if e["event"] == "activate"]
 
@@ -1430,8 +1462,14 @@ def menu_app(session, checks, out_dir, toolkit):
     state = wait_menu(session, lambda s: s["open"] == "Edit" and s["layout"])
     checks.check(f"{toolkit}: a menu opened with a click underlines no letters",
                  not any(i["underlined"] for i in state["layout"] or []) and not state["underlinedTitles"], str(state))
-    session.press("Escape")
-    wait_menu(session, lambda s: s["open"] is None)
+    # No item has the keyboard focus, as the pointer rests on the title, so Space acts on the title.
+    count = len(activated())
+    session.press("space")
+    after = wait_menu(session, lambda s: s["open"] is None)
+    time.sleep(0.5)
+    checks.check(f"{toolkit}: Space in a menu opened with a click, with no item focused, closes it and activates no item",
+                 state["focus"] is None and after["open"] is None and len(activated()) == count,
+                 str([state, after, activated()]))
     click_path(session, ["Edit", "Paste"])
     checks.check(f"{toolkit}: clicking Edit, Paste activates Paste", wait_for(lambda: "_Paste" in activated(), 5),
                  str(activated()))
@@ -1481,6 +1519,12 @@ def menu_app(session, checks, out_dir, toolkit):
     checks.check(f"{toolkit}: Open shows its icon, and New has the space of an icon, so the labels line up",
                  layout.get("Open", {}).get("icon") is True and layout.get("New", {}).get("icon") is False and
                  len({item["x"] for item in layout.values()}) == 1, str(state["layout"]))
+    # GNOME Shell places a menu wider than the monitor partly left of it, so the label of Long ends with an ellipsis.
+    monitor = session.eval("(() => { const m = Main.layoutManager.primaryMonitor; return {x: m.x, width: m.width}; })()")
+    bounds = state["bounds"] or {}
+    checks.check(f"{toolkit}: File, with the label of Long wider than the monitor, lies within the monitor",
+                 bool(bounds) and bounds["x"] >= monitor["x"] and
+                 bounds["x"] + bounds["width"] <= monitor["x"] + monitor["width"], str([bounds, monitor]))
     # A shortcut of the window, with patches/mutter/forward-key-event.patch, acts as if the menu were not open.
     news = activated().count("_New")
     session.press("n", "Control_L")
@@ -1645,7 +1689,10 @@ def global_menu_date_menu(session, checks, out_dir):
 @test
 def global_menu_app_name(session, checks, out_dir):
     """An application without menus, Ptyxis, has the menu of its name: the items of its desktop file, the items of the
-    window, and Quit, and Minimize there minimizes the window."""
+    window, and Quit, and Minimize there minimizes the window. Quit is labelled with the number of the application's
+    windows, also those on other workspaces, which it quits too, while Ubuntu Dock counts only the windows on the active
+    workspace with its isolate-workspaces, as configure-gnome-desktop.sh sets it. Once the window is minimized, the
+    desktop of Desktop Icons NG has the focus, and the top bar shows no menus for it."""
     install_global_menu(session)
     session.login()
     session.call("activateApp", PTYXIS)
@@ -1666,9 +1713,42 @@ def global_menu_app_name(session, checks, out_dir):
     labels = [item_label(i) for i in state["items"] or []]
     checks.check("the menu has New Window, the window's items and Quit",
                  "New Window" in labels and "Minimize" in labels and "Close" in labels and labels[-1] == "Quit", str(labels))
+    session.press("Escape")
+    wait_menu(session, lambda s: s["open"] is None)
+
+    def quit_label():
+        session.call("activateWindow", window["id"])
+        shown_window(session, PTYXIS, lambda w: w["id"] == window["id"] and w["focused"], 10)
+        session.press("Alt_L")
+        items = wait_menu(session, lambda s: s["open"] == name)["items"] or []
+        session.press("Escape")
+        wait_menu(session, lambda s: s["open"] is None)
+        return item_label(items[-1]) if items else None
+
+    # The second window is moved once it is shown, as mutter activates a new window when it shows it, also on another
+    # workspace.
+    session.call("openNewWindow", PTYXIS)
+    other = shown_window(session, PTYXIS, lambda w: w["id"] != window["id"], 30)
+    checks.check("Ptyxis opened a second window", bool(other), str(session.windows(PTYXIS)))
+    if other:
+        session.call("moveWindowToWorkspace", other["id"], 1)
+        label = quit_label()
+        checks.check("with the second window on another workspace, Quit counts both windows", label == "Quit 2 Windows",
+                     str(label))
+
+    session.call("activateWindow", window["id"])
+    focused = shown_window(session, PTYXIS, lambda w: w["id"] == window["id"] and w["focused"], 10)
+    session.press("Alt_L")
+    wait_menu(session, lambda s: s["open"] == name)
     session.call("clickGlobalMenuItem", "Minimize")
     minimized = wait_for(lambda: next((w["minimized"] for w in session.windows(PTYXIS) if w["id"] == window["id"]), None), 5)
-    checks.check("Minimize minimizes the window", bool(minimized), str(session.windows(PTYXIS)))
+    checks.check("Minimize minimizes the window", bool(minimized),
+                 str([window_summary(focused), session.call("workspaces"), session.windows(PTYXIS)]))
+    # Meta.WindowType.DESKTOP is 1.
+    desktop = wait_for(lambda: session.eval("global.display.focus_window?.get_window_type() === 1"), 10)
+    state = wait_menu(session, lambda s: not s["shown"], 5)
+    checks.check("with the desktop focused, the top bar shows no menus", desktop and not state["shown"],
+                 str([session.eval("global.display.focus_window?.title ?? null"), state]))
     session.logout()
     return {"labels": labels}
 
@@ -1851,8 +1931,10 @@ def write_png(path, size=16, color=(200, 30, 30)):
                      chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
-# The page whose History entry global_menu_firefox checks, also its title, which has underscores.
+# The page whose History entry global_menu_firefox checks, also its title, which has underscores, and the page it
+# visits before.
 ICON_PAGE = "page_with_icon"
+EARLIER_PAGE = "page_visited_earlier"
 
 
 @test
@@ -1862,19 +1944,23 @@ def global_menu_firefox(session, checks, out_dir):
     patches/firefox/global-menu-mnemonics.patch, so Alt+F opens File, and the underscores of a label as they are, so the
     History entry of a page whose title has underscores shows them. With global-menu-icons.patch, the entry also has an
     icon, and so has the bookmark of the page the first time its folder opens, although Firefox adds the icon of a menu
-    item only when it first shows the item, after it exported the item."""
+    item only when it first shows the item, after it exported the item. The History menu keeps the order of its entries
+    while it opens again, although Firefox lists them anew then, see DbusMenuModel._queuePropertiesChanged()."""
     pages = pathlib.Path.home() / "pages"
     pages.mkdir(parents=True, exist_ok=True)
     write_png(pages / "icon.png")
-    (pages / f"{ICON_PAGE}.html").write_text(
-        f'<!DOCTYPE html><title>{ICON_PAGE}</title><link rel="icon" href="icon.png"><p>{ICON_PAGE}</p>\n')
+    for name in (EARLIER_PAGE, ICON_PAGE):
+        (pages / f"{name}.html").write_text(
+            f'<!DOCTYPE html><title>{name}</title><link rel="icon" href="icon.png"><p>{name}</p>\n')
     server = serve(pages)
     history = {}
 
     def visit(window):
-        session.press("l", "Control_L")
-        time.sleep(0.5)
-        session.type_text(f"localhost:{WEB_PORT}/{ICON_PAGE}.html\n")
+        for name in (EARLIER_PAGE, ICON_PAGE):
+            session.press("l", "Control_L")
+            time.sleep(0.5)
+            session.type_text(f"localhost:{WEB_PORT}/{name}.html\n")
+            time.sleep(2)
 
     def open_history(window):
         # Firefox stores the icon of a page a moment after loading it, and fills the History menu when it opens.
@@ -1889,6 +1975,22 @@ def global_menu_firefox(session, checks, out_dir):
             if history["entry"] and history["entry"]["icon"]:
                 return
             time.sleep(1)
+
+    def entries(items):
+        return [label for label in map(item_label, items or []) if label in (ICON_PAGE, EARLIER_PAGE)]
+
+    def reopened_in_order():
+        orders = [order for order in history.get("reopened") or [] if len(order) == 2]
+        return bool(orders) and all(order == [ICON_PAGE, EARLIER_PAGE] for order in orders)
+
+    def reopen_history(window):
+        session.call("recordGlobalMenu", True)
+        session.call("clickGlobalMenu", "History")
+        wait_menu(session, lambda s: s["open"] == "History", 5)
+        time.sleep(2)
+        history["reopened"] = [entries(items) for items in session.call("recordGlobalMenu", False) if items is not None]
+        session.press("Escape")
+        wait_menu(session, lambda s: s["open"] is None)
 
     def find_entry(items):
         for item in items or []:
@@ -1920,6 +2022,8 @@ def global_menu_firefox(session, checks, out_dir):
                                    [(visit, f"loads the page {ICON_PAGE}", lambda window: find(session.windows(), titled(ICON_PAGE))),
                                     (open_history, f"the History menu lists {ICON_PAGE} with its underscores and its icon",
                                      lambda window: bool(history.get("entry") and history["entry"]["icon"])),
+                                    (reopen_history, f"opened again, the History menu always lists {ICON_PAGE} before "
+                                     f"{EARLIER_PAGE}, which was visited earlier", lambda window: reopened_in_order()),
                                     (open_bookmark, f"the Bookmarks Toolbar menu lists the bookmark of {ICON_PAGE} with its icon "
                                      "the first time it opens", lambda window: bool(history.get("bookmark") and history["bookmark"]["icon"])),
                                     (["File", "New Window"], "opens a second window", more_windows(session))])
@@ -1927,6 +2031,8 @@ def global_menu_firefox(session, checks, out_dir):
         server.terminate()
         if "labels" in history and not (history["entry"] and history["entry"]["icon"]):
             checks.check(f"the History menu had the entries {history['labels']}, {ICON_PAGE} as {history['entry']}", False)
+        if "reopened" in history and not reopened_in_order():
+            checks.check(f"the History menu showed its entries in the orders {history['reopened']}", False)
         if "bookmarks" in history and not (history["bookmark"] and history["bookmark"]["icon"]):
             checks.check(f"the Bookmarks menu had the items {history['bookmarks']}", False)
 
@@ -2165,6 +2271,16 @@ def global_menu_overflow(session, checks, out_dir):
     session.press(letter.lower(), "Alt_L")
     state = wait_menu(session, lambda s: menu_open(s, last) and s["focus"] == f"Item {letter}")
     checks.check(f"Alt+{letter} opens {last} in the overflow button with the keyboard focus on its item",
+                 menu_open(state, last) and state["focus"] == f"Item {letter}", str(state))
+    # The overflow button stays open, and the keyboard focus moves into the submenu of the other menu.
+    previous = overflowed[-2]
+    session.press(previous[-1].lower())
+    state = wait_menu(session, lambda s: menu_open(s, previous) and s["focus"] == f"Item {previous[-1]}")
+    checks.check(f"then {previous[-1]}, which no item of {last} has, opens {previous} with the keyboard focus on its item",
+                 menu_open(state, previous) and state["focus"] == f"Item {previous[-1]}", str(state))
+    session.press(letter.lower(), "Alt_L")
+    state = wait_menu(session, lambda s: menu_open(s, last) and s["focus"] == f"Item {letter}")
+    checks.check(f"then Alt+{letter} opens {last} again with the keyboard focus on its item",
                  menu_open(state, last) and state["focus"] == f"Item {letter}", str(state))
     session.press("Escape")
     wait_menu(session, lambda s: s["open"] is None)

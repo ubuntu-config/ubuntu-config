@@ -111,6 +111,16 @@ function describeLayout(menu) {
 }
 
 /**
+ * @param {Clutter.Actor} actor - an actor
+ * @returns {{x: number, y: number, width: number, height: number}} where the actor is on the stage, rounded
+ */
+function describeBounds(actor) {
+    const [x, y] = actor.get_transformed_position();
+    const [width, height] = actor.get_transformed_size();
+    return {x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height)};
+}
+
+/**
  * Finds an item of an open menu by its label, also in its open submenus.
  *
  * @param {object} menu - the menu
@@ -493,8 +503,9 @@ class SessionTest {
      * @returns {object} the global menu in the top bar: whether the extension shows it, the titles of its buttons, the
      *     first being the application's name, the titles of the menus which do not fit and are in the overflow button,
      *     the title of the open menu, which is the label of the overflow button for it, and its items, see
-     *     describeItems(), the label of the item which has the keyboard focus, and the key which names the menu shown,
-     *     different for each menu an application exports
+     *     describeItems(), where they are, see describeLayout(), where the menu is on the stage, the label of the item
+     *     which has the keyboard focus, and the key which names the menu shown, different for each menu an application
+     *     exports
      */
     globalMenu() {
         this._ensurePointer();
@@ -511,11 +522,44 @@ class SessionTest {
             open: open?.label.text ?? null,
             items: open ? describeItems(open.menu) : null,
             layout: open ? describeLayout(open.menu) : null,
+            bounds: open ? describeBounds(open.menu.actor) : null,
             underlinedTitles: buttons.filter(button => button.label.clutter_text.use_markup)
                 .map(button => button.label.text),
             focus: focus?.label?.text ?? null,
             menuKey: Main.extensionManager.lookup('global-menu@mitar.tnode.com')?.stateObj?._menuBar?._modelKey ?? null,
         };
+    }
+
+    /**
+     * Starts recording the items of the open menu of the global menu each time GNOME Shell paints, or ends the
+     * recording and returns it, so that a test sees also what the menu showed for a moment only.
+     *
+     * @param {boolean} start - true to start, false to end
+     * @returns {Array|null} at the end, the items of the open menu after each paint which changed them, see
+     *     describeItems(), or null while no menu was open
+     */
+    recordGlobalMenu(start) {
+        if (this._menuRecording) {
+            global.stage.disconnect(this._menuRecording.id);
+            this._menuRecording.id = 0;
+        }
+        if (!start) {
+            const states = this._menuRecording?.states ?? [];
+            this._menuRecording = null;
+            return states;
+        }
+        const recording = {states: [], last: null, id: 0};
+        recording.id = global.stage.connect('after-paint', () => {
+            const open = [...globalMenuButtons() ?? [], globalMenuOverflow()].find(button => button?.menu.isOpen);
+            const items = open ? describeItems(open.menu) : null;
+            const key = JSON.stringify(items);
+            if (key !== recording.last) {
+                recording.last = key;
+                recording.states.push(items);
+            }
+        });
+        this._menuRecording = recording;
+        return null;
     }
 
     async _ensureKeyboard() {

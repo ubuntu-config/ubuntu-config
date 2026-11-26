@@ -10,3 +10,10 @@
 .global-menu-icon-space {
     width: 16px;
 }
+
+/* A long label, as the title of a page in Firefox's History and Bookmarks menus, ends with an ellipsis at the width
+   Firefox gives its own menu items at most. A wider menu would not fit on the monitor, and GNOME Shell places such a
+   menu partly left of it. */
+.global-menu-item-label {
+    max-width: 42em;
+}

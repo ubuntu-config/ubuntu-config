@@ -1,9 +1,10 @@
 Description: Quit an application without a quit action with SIGTERM to the processes of its windows.
- Quit in the dash, the app grid, Ubuntu Dock and the global menu extension calls shell_app_request_quit(), which
- activates the "quit" action of an application which exports one over D-Bus, as GtkApplication does. For any other
- application it closes the windows one by one, and Chromium, Firefox and Electron applications export no such action.
- A browser treats windows closed one by one as windows the user closed: the next start of Chromium restores only the
- window closed last, and Firefox restores at most browser.sessionstore.max_windows_undo of them (Mozilla bug 1827994).
+ Quit in the dash, the app grid and the global menu extension calls shell_app_request_quit(), which activates the
+ "quit" action of an application which exports one over D-Bus, as GtkApplication does. For any other application it
+ closes the windows one by one, and Chromium, Firefox and Electron applications export no such action. The Quit of
+ Ubuntu Dock closes the windows itself, one by one, and the patch does not change it. A browser treats windows closed
+ one by one as windows the user closed: the next start of Chromium restores only the window closed last, and Firefox
+ restores at most browser.sessionstore.max_windows_undo of them (Mozilla bug 1827994).
  .
  With this patch, such an application receives SIGTERM instead, to each process which owns one of its windows, once,
  as at the end of the session. Chromium handles it as the end of the session and restores every window at its next
@@ -16,7 +17,7 @@ Description: Quit an application without a quit action with SIGTERM to the proce
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=1827994
 Forwarded: not-needed
-Last-Update: 2026-11-24
+Last-Update: 2026-11-26
 
 diff --git a/src/shell-app.c b/src/shell-app.c
 --- a/src/shell-app.c

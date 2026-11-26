@@ -15,6 +15,10 @@ const INTERFACE = 'com.canonical.dbusmenu';
 const LAYOUT_QUIET_MS = 50;
 const LAYOUT_MAX_DELAY_MS = 500;
 
+// How long to wait after an ItemsPropertiesUpdated signal for a LayoutUpdated signal before showing the changed
+// properties, see _queuePropertiesChanged().
+const PROPERTIES_QUIET_MS = 20;
+
 // How often an item is looked up and activated, and how long to wait between the attempts, see _activateByPath().
 const ACTIVATE_ATTEMPTS = 3;
 const ACTIVATE_RETRY_MS = 100;
@@ -88,6 +92,11 @@ export class DbusMenuModel extends Signals.EventEmitter {
         // Each read of the whole layout is numbered, and only the last one started is used, as they can finish out of
         // order.
         this._fetchSerial = 0;
+        // The number of reads of the whole layout under way, and the changes of properties announced meanwhile, as
+        // [updated, removed] of ItemsPropertiesUpdated, which a read can return without.
+        this._fetching = 0;
+        this._fetchProperties = [];
+        this._propertiesTimeoutId = 0;
         this._subscriptionId = this._bus.signal_subscribe(busName, INTERFACE, null, path, null,
             Gio.DBusSignalFlags.NONE,
             (_bus, _sender, _path, _interface, signal, parameters) => this._onSignal(signal, parameters));
@@ -100,6 +109,9 @@ export class DbusMenuModel extends Signals.EventEmitter {
         if (this._layoutTimeoutId)
             GLib.source_remove(this._layoutTimeoutId);
         this._layoutTimeoutId = 0;
+        if (this._propertiesTimeoutId)
+            GLib.source_remove(this._propertiesTimeoutId);
+        this._propertiesTimeoutId = 0;
     }
 
     /**
@@ -130,6 +142,7 @@ export class DbusMenuModel extends Signals.EventEmitter {
 
     async _fetch() {
         const serial = ++this._fetchSerial;
+        this._fetching++;
         try {
             const root = await this._getLayout(0);
             // Only the menus which can open next are filled: the top-level menus, and the submenus of the open menus
@@ -142,11 +155,22 @@ export class DbusMenuModel extends Signals.EventEmitter {
             }
             if (serial !== this._fetchSerial)
                 return;
+            // A change announced while the layout was read can be missing from it, and applying again one which it
+            // has changes nothing.
+            for (const [updated, removed] of this._fetchProperties)
+                this._applyProperties(root, updated, removed);
             this._root = root;
         } catch (error) {
-            if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
-                console.debug(`global-menu: reading the menu of ${this._busName} failed: ${error.message}`);
+            if (error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                return;
+            console.debug(`global-menu: reading the menu of ${this._busName} failed: ${error.message}`);
+            // The changes of properties which waited for the read are shown without it.
+            if (serial === this._fetchSerial)
+                this._changed();
             return;
+        } finally {
+            if (--this._fetching === 0)
+                this._fetchProperties = [];
         }
         this._changed();
     }
@@ -214,6 +238,10 @@ export class DbusMenuModel extends Signals.EventEmitter {
 
     _onSignal(signal, parameters) {
         if (signal === 'LayoutUpdated') {
+            // The read of the layout shows the changed properties too.
+            if (this._propertiesTimeoutId)
+                GLib.source_remove(this._propertiesTimeoutId);
+            this._propertiesTimeoutId = 0;
             const now = GLib.get_monotonic_time();
             if (this._layoutTimeoutId)
                 GLib.source_remove(this._layoutTimeoutId);
@@ -228,23 +256,45 @@ export class DbusMenuModel extends Signals.EventEmitter {
             });
         } else if (signal === 'ItemsPropertiesUpdated') {
             const [updated, removed] = parameters.recursiveUnpack();
-            for (const [id, props] of updated) {
-                const node = this._find(id);
-                if (node)
-                    Object.assign(node.props, props);
-            }
-            for (const [id, names] of removed) {
-                const node = this._find(id);
-                for (const name of names)
-                    delete node?.props[name];
-            }
-            this._changed();
+            this._applyProperties(this._root, updated, removed);
+            if (this._fetching)
+                this._fetchProperties.push([updated, removed]);
+            this._queuePropertiesChanged();
         } else if (signal === 'ItemActivationRequested') {
             const [id] = parameters.deepUnpack();
             const index = this._topLevel().findIndex(node => this._find(id, node));
             if (index >= 0)
                 this.emit('activation-requested', index);
         }
+    }
+
+    _applyProperties(root, updated, removed) {
+        for (const [id, props] of updated) {
+            const node = this._find(id, root);
+            if (node)
+                Object.assign(node.props, props);
+        }
+        for (const [id, names] of removed) {
+            const node = this._find(id, root);
+            for (const name of names)
+                delete node?.props[name];
+        }
+    }
+
+    // Shows changed properties once no LayoutUpdated signal followed them within PROPERTIES_QUIET_MS, and no read of
+    // the layout is pending, which shows them itself. An application which moves its items sends the new labels with
+    // ItemsPropertiesUpdated and the new order with LayoutUpdated, and the new labels shown in the old order would put
+    // the items in a wrong order for a moment. Firefox lists the entries of its History menu again each time the menu
+    // opens, and gives them the items it gave the old entries, in the reverse order.
+    _queuePropertiesChanged() {
+        if (this._propertiesTimeoutId)
+            return;
+        this._propertiesTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, PROPERTIES_QUIET_MS, () => {
+            this._propertiesTimeoutId = 0;
+            if (!this._layoutTimeoutId && !this._fetching)
+                this._changed();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _find(id, node = this._root) {

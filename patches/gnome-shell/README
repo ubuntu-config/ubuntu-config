@@ -86,12 +86,14 @@ run-time-limits-shutdown-first-tests.patch
     the time limits manager's shutdown before destroying uiGroup.
 
 quit-with-sigterm.patch
-    Quit in the dash, the app grid, Ubuntu Dock and the menu of the application's name of the global
-    menu (gnome-extensions/global-menu@mitar.tnode.com) calls shell_app_request_quit() in
-    src/shell-app.c. It activates the quit action of an application which exports one over D-Bus, as
-    GtkApplication does. Chromium, Firefox and Electron applications export no such action, for which
-    GNOME Shell closes the windows one by one, and the browsers treat such windows as windows the user
-    closed: the next start of Chromium restores only the window closed last, and Firefox at most
+    Quit in the dash, the app grid and the menu of the application's name of the global menu
+    (gnome-extensions/global-menu@mitar.tnode.com) calls shell_app_request_quit() in src/shell-app.c.
+    Ubuntu Dock's Quit does not: it closes the windows the dock shows for the application one by one
+    (closeAllWindows() in its appIcons.js), which the patch leaves as it is. shell_app_request_quit()
+    activates the quit action of an application which exports one over D-Bus, as GtkApplication does.
+    Chromium, Firefox and Electron applications export no such action, for which GNOME Shell closes the
+    windows one by one, and the browsers treat such windows as windows the user closed: the next start
+    of Chromium restores only the window closed last, and Firefox at most
     browser.sessionstore.max_windows_undo of them, 5 by default (Mozilla bug 1827994). With the patch,
     each process which owns a window of such an application receives SIGTERM once instead, as at the
     end of the session, which Chromium handles as the end of the session, and Firefox as a quit with
@@ -112,7 +114,8 @@ quit-with-sigterm.patch
     Check by hand after a rebuild and a new login, with three Chromium windows on different
     workspaces:
 
-      Quit 3 Windows in the dock   should end Chromium, and its next start restores all 3 windows
+      Quit 3 Windows in the menu of Chromium's name in the top bar
+                                   should end Chromium, and its next start restores all 3 windows
 
 looking-glass-focus-while-hidden.patch
     Looking Glass is created hidden, the first time Main.createLookingGlass() is called, and adding the

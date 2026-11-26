@@ -12,18 +12,20 @@ import * as Signals from 'resource:///org/gnome/shell/misc/signals.js';
 
 import {fillAppMenu} from './appMenu.js';
 import {
-    activateMnemonic, addSubmenuItem, isWindowShortcut, setLabelMnemonic, setMenuMnemonicsShown, setMnemonicShown,
+    activateMnemonic, addSubmenuItem, hasModifiers, isWindowShortcut, setLabelMnemonic, setMenuMnemonicsShown,
+    setMnemonicShown, typedLetter,
 } from './util.js';
 
 // How long a menu without items waits for the application to fill it before it gives up opening.
 const FILL_TIMEOUT_MS = 1000;
 
-// The window properties which name the menu of a window.
-const MENU_PROPERTIES = [
+// The window properties which name the menu of a window, and its type, which tells whether it is the desktop.
+const WINDOW_PROPERTIES = [
     'dbus-appmenu-service-name',
     'dbus-appmenu-object-path',
     'gtk-unique-bus-name',
     'gtk-menubar-object-path',
+    'window-type',
 ];
 
 const MenuButton = GObject.registerClass(
@@ -306,12 +308,20 @@ export class MenuBar extends Signals.EventEmitter {
         this._focusOnOpen = button;
         this._focusIndex = overflowed ? index : -1;
         this._keyboardUsed = true;
+        // Opening a menu which is open already would fill it again, which replaces the submenus of the overflow
+        // button, so the focus only moves to its first item, or for the overflow button into the submenu of the menu.
+        if (button.menu.isOpen) {
+            this._updateMnemonics();
+            this._focusFirstItem(button);
+            return;
+        }
         button.menu.open();
     }
 
     // The keys pressed in an open menu show the letters of the mnemonics: Alt while it is held, any other key until no
-    // menu is open anymore. The letter of a mnemonic acts on its item, and a shortcut of the window closes the menu and
-    // reaches the window.
+    // menu is open anymore. The letter of a mnemonic acts on its item, or else opens the top-level menu with that
+    // mnemonic, Space and Return act on the title while no item has the keyboard focus, and a shortcut of the window
+    // closes the menu and reaches the window.
     _watchKeys(button) {
         button.menu.actor.connectObject('captured-event', (actor, event) => {
             const type = event.type();
@@ -332,9 +342,31 @@ export class MenuBar extends Signals.EventEmitter {
                 global.display.forward_key_event(event);
                 return Clutter.EVENT_STOP;
             }
+            // GNOME Shell activates an item which has the keyboard focus with Space and Return, and toggles the menu of
+            // a title which has it. While a menu is open, the keyboard focus is in the menu, and with no item focused,
+            // as in a menu opened with a click, it is on the menu itself, where these keys did nothing. They act on the
+            // title then, whose menu is open, so they close it.
+            if ((key === Clutter.KEY_space || key === Clutter.KEY_Return) && !hasModifiers(event)) {
+                const focus = global.stage.get_key_focus();
+                if (!focus || focus === button.menu.actor || !button.menu.actor.contains(focus)) {
+                    button.menu.close();
+                    return Clutter.EVENT_STOP;
+                }
+            }
             this._keyboardUsed = true;
             this._updateMnemonics();
-            return activateMnemonic(button.menu, event) ? Clutter.EVENT_STOP : Clutter.EVENT_PROPAGATE;
+            if (activateMnemonic(button.menu, event))
+                return Clutter.EVENT_STOP;
+            // A letter which no item of the open menu has opens the top-level menu with that mnemonic, as a letter
+            // after a tap of Alt does in Qt, and in GTK while the open menu has no selected item. The menu of the
+            // application's name has no mnemonics, so there each underlined letter of a title opens its menu.
+            const letter = typedLetter(event);
+            const index = letter ? this._titles.findIndex(title => title.mnemonic === letter) : -1;
+            if (index < 0)
+                return Clutter.EVENT_PROPAGATE;
+            if (button !== this._buttons[index])
+                this.openMenu(index);
+            return Clutter.EVENT_STOP;
         }, this);
     }
 
@@ -385,6 +417,20 @@ export class MenuBar extends Signals.EventEmitter {
         } else {
             button.menu.actor.navigate_focus(null, St.DirectionType.TAB_FORWARD, false);
         }
+    }
+
+    /**
+     * Acts on a tap of the left Alt on its own. In a menu which the mouse opened and in which no key was used yet, it
+     * underlines the letters of the mnemonics, which then stay underlined, and leaves the menu open, and otherwise it
+     * opens the menu of the application's name, or closes the open menu, see toggleAppMenu().
+     */
+    tapAlt() {
+        if (this.isMenuOpen() && !this._keyboardUsed) {
+            this._keyboardUsed = true;
+            this._updateMnemonics();
+            return;
+        }
+        this.toggleAppMenu();
     }
 
     /**
@@ -480,13 +526,17 @@ export class MenuBar extends Signals.EventEmitter {
             return;
         this._window?.disconnectObject(this);
         this._window = window;
-        for (const property of MENU_PROPERTIES)
+        for (const property of WINDOW_PROPERTIES)
             window?.connectObject(`notify::${property}`, () => this._sync(), this);
     }
 
     _sync() {
-        const window = global.display.focus_window;
-        this._setWindow(window);
+        const focus = global.display.focus_window;
+        this._setWindow(focus);
+        // Desktop Icons NG shows the desktop in a window of the type DESKTOP, which has the focus while no other window
+        // has it. The menu bar shows nothing for it, as for no focused window, and not the name GNOME Shell gives the
+        // program of that window, gjs.
+        const window = focus?.get_window_type() === Meta.WindowType.DESKTOP ? null : focus;
         this._app = window ? this._tracker.get_window_app(window) : null;
         this._appButton.label.text = this._app?.get_name() ?? '';
         this._appButton.accessible_name = this._appButton.label.text;

@@ -4,12 +4,13 @@
 Usage: [MENUAPP_EXTRA_MENUS=N] menuapp.py gtk3|gtk4|qt LOG
 
 The window is titled "menu-test-<toolkit>" and has a focused text field under its menu bar, which has the menus File
-(New with Ctrl+N, Open with an icon), Edit (Copy, Paste with Shift+Insert and Preferences, which shares its mnemonic
-with Paste) and View (Show Toolbar, which can be checked, and the submenu Zoom with Zoom In and Zoom Out). GTK names the
-icon of Open from the icon theme, and Qt exports it as an image. With MENUAPP_EXTRA_MENUS, up to 18 further menus
-follow, titled Extra G, Extra H and so on, each with the mnemonic of its letter and an item named after it, Item G, Item
-H and so on. GTK exports the menu bar through gtk_shell1 and hides it when GNOME Shell announces that it shows the menu
-bars, and Qt exports it over com.canonical.dbusmenu while com.canonical.AppMenu.Registrar has an owner.
+(New with Ctrl+N, Open with an icon, and Long, whose label is wider than a monitor), Edit (Copy, Paste with Shift+Insert
+and Preferences, which shares its mnemonic with Paste) and View (Show Toolbar, which can be checked, and the submenu
+Zoom with Zoom In and Zoom Out). GTK names the icon of Open from the icon theme, and Qt exports it as an image. With
+MENUAPP_EXTRA_MENUS, up to 18 further menus follow, titled Extra G, Extra H and so on, each with the mnemonic of its
+letter and an item named after it, Item G, Item H and so on. GTK exports the menu bar through gtk_shell1 and hides it
+when GNOME Shell announces that it shows the menu bars, and Qt exports it over com.canonical.dbusmenu while
+com.canonical.AppMenu.Registrar has an owner.
 
 Each line of LOG is a JSON object with the event "activate" and the item's label for an activated menu item, "active"
 with the window's active state when it changes, "focus" with the text field's focus when it changes, with GTK "text"
@@ -28,6 +29,7 @@ LABELS = {
     "file": "_File",
     "new": "_New",
     "open": "_Open",
+    "long": "_Long, " + "a label wider than a monitor, " * 12,
     "edit": "_Edit",
     "copy": "_Copy",
     "paste": "_Paste",
@@ -60,7 +62,7 @@ def run_gtk(version):
     from gi.repository import Gio, GLib, Gtk
 
     def on_activate(app):
-        for name in ("new", "open", "copy", "paste", "preferences", "zoom-in", "zoom-out"):
+        for name in ("new", "open", "long", "copy", "paste", "preferences", "zoom-in", "zoom-out"):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda _action, _parameter, name=name: log("activate", LABELS[name]))
             app.add_action(action)
@@ -77,6 +79,7 @@ def run_gtk(version):
         open_item = Gio.MenuItem.new(LABELS["open"], "app.open")
         open_item.set_icon(Gio.ThemedIcon.new("document-open-symbolic"))
         file_menu.append_item(open_item)
+        file_menu.append(LABELS["long"], "app.long")
         menubar.append_submenu(LABELS["file"], file_menu)
         edit_menu = Gio.Menu()
         edit_menu.append(LABELS["copy"], "app.copy")
@@ -159,6 +162,7 @@ def run_qt():
     pixmap = QtGui.QPixmap(16, 16)
     pixmap.fill(QtGui.QColor("#3584e4"))
     add(file_menu, "open", icon=QtGui.QIcon(pixmap))
+    add(file_menu, "long")
     edit_menu = window.menuBar().addMenu(qt_label(LABELS["edit"]))
     add(edit_menu, "copy")
     add(edit_menu, "paste", "Shift+Ins")
