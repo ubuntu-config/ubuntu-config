@@ -1304,14 +1304,21 @@ def check_menu_titles(session, checks, name, titles, timeout=30):
 
 
 def global_menu_internals(session):
-    """Returns what the global menu extension holds, for the details of a failed check: its grabbed keys, GNOME Shell's
-    action mode, the focused window, and the items of the first menu."""
+    """Returns what the global menu extension holds, for the details of a failed check: its state and error as GNOME
+    Shell has them (state 1 is active and 2 inactive), the extensions GNOME Shell considers enabled, whether its menu
+    bar is in the left box of the top bar, its grabbed keys, GNOME Shell's action mode, the focused window, and the items
+    of the first menu."""
     return session.eval(f"""(() => {{
-        const extension = Main.extensionManager.lookup('{GLOBAL_MENU}')?.stateObj;
+        const record = Main.extensionManager.lookup('{GLOBAL_MENU}');
+        const extension = record?.stateObj;
         const bar = extension?._menuBar;
         const first = bar?._buttons[0];
         return {{
-            grabs: extension
+            state: record?.state ?? null,
+            error: record?.error || null,
+            enabledExtensions: Main.extensionManager._enabledExtensions ?? null,
+            barInLeftBox: bar ? bar._box.get_parent() === Main.panel._leftBox : null,
+            grabs: extension?._keyboard
                 ? [...extension._keyboard._grabs.keys()].map(a => imports.gi.Meta.external_binding_name_for_action(a))
                 : null,
             actionMode: Main.actionMode,
@@ -1736,14 +1743,20 @@ def global_menu_reenable(session, checks, out_dir):
                       json.dumps([TEST_EXTENSION, *TOP_BAR_EXTENSIONS]).replace('"', "'"))
     gone = wait_for(lambda: registrar_owner(session) is None, 10)
     state = wait_menu(session, lambda s: not s["shown"])
+    # GNOME Shell disables an extension, which removes the menu bar, then enables again the extensions enabled after it,
+    # waiting for those whose enable() waits, and only then marks it inactive and updates its list of enabled extensions.
+    # It enables only an inactive extension missing from that list, so the test waits for it to finish, as a user does.
+    inactive = wait_for(lambda: extension_state(session, GLOBAL_MENU) == EXTENSION_INACTIVE, 30)
     checks.check("disabling the extension makes global-menu-registrar give up its name and removes the menu from the top bar",
-                 bool(gone) and not state["shown"], str([registrar_owner(session), state]))
+                 bool(gone) and not state["shown"] and bool(inactive),
+                 str([registrar_owner(session), state, extension_state(session, GLOBAL_MENU)]))
 
     session.enable_extensions(GLOBAL_MENU)
     owner = wait_for(lambda: registrar_owner(session), 10)
     state = wait_menu(session, lambda s: s["shown"] and s["titles"][1:] == titles, 30)
     checks.check("enabling it again shows Signal's menu in the top bar again",
-                 bool(owner) and state["shown"] and state["titles"][1:] == titles, str([owner, state, menu_registrations(session)]))
+                 bool(owner) and state["shown"] and state["titles"][1:] == titles,
+                 str([owner, state, menu_registrations(session), global_menu_internals(session)]))
     click_path(session, ["View", "Toggle Full Screen"])
     checks.check("Toggle Full Screen in its View menu makes the window fullscreen again",
                  wait_for(lambda: fullscreen(session)(window), 30), str(session.windows()))
@@ -2044,6 +2057,16 @@ def global_menu_quit_window_backed(session, checks, out_dir):
     checks.check("Quit closes the window and sends no SIGTERM", events == [{"event": "close", "value": True}], str(events))
     session.logout()
     return {"events": events}
+
+
+# The state of an inactive extension, ExtensionState.INACTIVE in GNOME Shell's misc/extensionUtils.js.
+EXTENSION_INACTIVE = 2
+
+
+def extension_state(session, uuid):
+    """Returns the state of an extension as GNOME Shell has it, see ExtensionState in its misc/extensionUtils.js, or
+    None for an unknown extension."""
+    return session.eval(f"Main.extensionManager.lookup('{uuid}')?.state ?? null")
 
 
 def registrar_owner(session):
