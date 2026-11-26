@@ -1235,6 +1235,19 @@ def wait_menu(session, predicate, timeout=10):
         or menu_state(session)
 
 
+def close_menus(session):
+    """Presses Escape until no menu of the global menu is open and no title is selected, as Escape closes one level at a
+    time, an open submenu, a menu or a selected title, and returns the state then."""
+    state = menu_state(session)
+    for _ in range(4):
+        if state["open"] is None and state["selected"] is None:
+            break
+        session.press("Escape")
+        before = [state[k] for k in ("open", "selected", "focus", "items")]
+        state = wait_menu(session, lambda s, before=before: [s[k] for k in ("open", "selected", "focus", "items")] != before, 2)
+    return state
+
+
 def item_label(item):
     """Returns the label of an item as globalMenu() describes it, without its marks."""
     if isinstance(item, dict):
@@ -1335,10 +1348,14 @@ def check_menu_keys(session, checks, name, titles, mnemonic):
     """Checks the keys of the global menu. F10 and a tap of the left Alt open the menu of the application's name with
     the keyboard focus on its first item, and Right moves from it to the first menu. Alt with the mnemonic of the first
     menu opens that menu with the keyboard focus on its first item. Right and Left move to the next menu and back, and
-    Escape closes the menu. An application which exports no mnemonics has mnemonic None, and the keys are checked from
-    the menu of the application's name."""
+    Escape closes the menu, which Left opened, at once. In the menu of the application's name, which F10 or the tap of
+    Alt opened, Escape closes the menu and leaves the name selected, and a second Escape ends the selection. An
+    application which exports no mnemonics has mnemonic None, and the keys are checked from the menu of the
+    application's name."""
     first, second = titles[0], titles[1]
     app = menu_state(session)["titles"][0]
+    # F10 and a tap of Alt open the menu of the title under the pointer.
+    session.call("movePointerAway")
 
     def first_item(state):
         return next((item_label(i) for i in state["items"] or [] if i != "---"), None)
@@ -1350,7 +1367,12 @@ def check_menu_keys(session, checks, name, titles, mnemonic):
                      state["open"] == app and state["focus"] == first_item(state),
                      str(state) if state["open"] == app else f"{state}, {global_menu_internals(session)}")
         session.press("Escape")
-        wait_menu(session, lambda s: s["open"] is None)
+        state = wait_menu(session, lambda s: s["open"] is None and s["selected"] == app)
+        checks.check(f"{name}: Escape closes the menu of the application's name, opened with {how}, and leaves the name "
+                     "selected", state["open"] is None and state["selected"] == app, str(state))
+        session.press("Escape")
+        state = wait_menu(session, lambda s: s["selected"] is None)
+        checks.check(f"{name}: a second Escape ends the selection", state["selected"] is None, str(state))
 
     session.press("Alt_L")
     wait_menu(session, lambda s: s["open"] == app)
@@ -1359,8 +1381,7 @@ def check_menu_keys(session, checks, name, titles, mnemonic):
     checks.check(f"{name}: Right moves from the menu of the application's name to {first}", state["open"] == first,
                  str(state) if state["open"] == first else f"{state}, {global_menu_internals(session)}")
     if mnemonic:
-        session.press("Escape")
-        wait_menu(session, lambda s: s["open"] is None)
+        close_menus(session)
         session.press(mnemonic, "Alt_L")
         state = wait_menu(session, lambda s: s["open"] == first)
         checks.check(f"{name}: Alt+{mnemonic.upper()} opens {first} with the keyboard focus on its first item",
@@ -1380,7 +1401,10 @@ def check_menu_keys(session, checks, name, titles, mnemonic):
     checks.check(f"{name}: Left moves back to {first}", state["open"] == first, str(state))
     session.press("Escape")
     state = wait_menu(session, lambda s: s["open"] is None)
-    checks.check(f"{name}: Escape closes the menu", state["open"] is None, str(state))
+    time.sleep(0.5)
+    state = menu_state(session)
+    checks.check(f"{name}: Escape closes {first}, which Left opened without going into it, and leaves no title selected",
+                 state["open"] is None and state["selected"] is None, str(state))
 
 def menu_app(session, checks, out_dir, toolkit):
     """The test application apps/menuapp.py, whose menu bar the global menu shows instead of the window: the keys open
@@ -1425,15 +1449,13 @@ def menu_app(session, checks, out_dir, toolkit):
     state = wait_menu(session, lambda s: s["open"] == "Edit" and s["focus"] == "Copy")
     checks.check(f"{toolkit}: after a tap of Alt, E opens Edit with the keyboard focus on its first item",
                  state["open"] == "Edit" and state["focus"] == "Copy", str(state))
-    session.press("Escape")
-    wait_menu(session, lambda s: s["open"] is None)
+    close_menus(session)
     session.press("f", "Alt_L")
     wait_menu(session, lambda s: s["open"] == "File")
     session.press("v")
     state = wait_menu(session, lambda s: s["open"] == "View")
     checks.check(f"{toolkit}: in File, V opens View", state["open"] == "View", str(state))
-    session.press("Escape")
-    wait_menu(session, lambda s: s["open"] is None)
+    close_menus(session)
     # A tap of Alt in a menu which the mouse opened underlines the letters of the mnemonics and leaves the menu open,
     # and a second tap closes it.
     session.call("clickGlobalMenu", "Edit")
@@ -1462,14 +1484,131 @@ def menu_app(session, checks, out_dir, toolkit):
     state = wait_menu(session, lambda s: s["open"] == "Edit" and s["layout"])
     checks.check(f"{toolkit}: a menu opened with a click underlines no letters",
                  not any(i["underlined"] for i in state["layout"] or []) and not state["underlinedTitles"], str(state))
-    # No item has the keyboard focus, as the pointer rests on the title, so Space acts on the title.
+    # No item has the keyboard focus, as the pointer rests on the title, so Space acts on the title, which stays
+    # selected, and Space opens its menu again, as a click does.
     count = len(activated())
     session.press("space")
-    after = wait_menu(session, lambda s: s["open"] is None)
+    after = wait_menu(session, lambda s: s["open"] is None and s["selected"] == "Edit")
     time.sleep(0.5)
-    checks.check(f"{toolkit}: Space in a menu opened with a click, with no item focused, closes it and activates no item",
-                 state["focus"] is None and after["open"] is None and len(activated()) == count,
-                 str([state, after, activated()]))
+    checks.check(f"{toolkit}: Space in a menu opened with a click, with no item focused, closes it, activates no item "
+                 "and leaves its title selected", state["focus"] is None and after["open"] is None and
+                 after["selected"] == "Edit" and len(activated()) == count, str([state, after, activated()]))
+    session.press("space")
+    state = wait_menu(session, lambda s: s["open"] == "Edit" and s["layout"])
+    time.sleep(0.5)
+    state = menu_state(session)
+    checks.check(f"{toolkit}: Space on the selected Edit opens it again, with no item focused",
+                 state["open"] == "Edit" and state["focus"] is None, str(state))
+    session.press("space")
+    state = wait_menu(session, lambda s: s["open"] is None and s["selected"] == "Edit")
+    checks.check(f"{toolkit}: and Space closes it again", state["open"] is None and state["selected"] == "Edit",
+                 str(state))
+    session.press("space")
+    wait_menu(session, lambda s: s["open"] == "Edit" and s["layout"])
+    session.press("Escape")
+    state = wait_menu(session, lambda s: s["open"] is None and s["selected"] == "Edit")
+    checks.check(f"{toolkit}: Escape closes Edit, opened with Space, and leaves it selected, as Space does",
+                 state["open"] is None and state["selected"] == "Edit", str(state))
+    session.press("Right")
+    state = wait_menu(session, lambda s: s["selected"] == "View")
+    checks.check(f"{toolkit}: Right selects View", state["selected"] == "View" and state["open"] is None, str(state))
+    session.press("Down")
+    state = wait_menu(session, lambda s: s["open"] == "View" and s["focus"] == "Show Toolbar")
+    checks.check(f"{toolkit}: Down opens View with the keyboard focus on its first item",
+                 state["open"] == "View" and state["focus"] == "Show Toolbar", str(state))
+    session.press("Escape")
+    state = wait_menu(session, lambda s: s["open"] is None and s["selected"] == "View")
+    checks.check(f"{toolkit}: Escape closes View and leaves it selected", state["open"] is None and
+                 state["selected"] == "View", str(state))
+    session.press("Escape")
+    state = wait_menu(session, lambda s: s["selected"] is None)
+    news = activated().count("_New")
+    session.press("n", "Control_L")
+    checks.check(f"{toolkit}: a second Escape ends the selection, and the keys reach the window again, Ctrl+N activating "
+                 "New", state["selected"] is None and wait_for(lambda: activated().count("_New") > news, 5),
+                 str([state, activated()]))
+
+    def select_edit():
+        session.call("clickGlobalMenu", "Edit")
+        wait_menu(session, lambda s: s["open"] == "Edit" and s["layout"])
+        session.press("space")
+        return wait_menu(session, lambda s: s["open"] is None and s["selected"] == "Edit")
+
+    # The other ends of the selection: a click on another title, which opens that menu, a click elsewhere, an item
+    # chosen in the menu opened from the selected title, and another key, which reaches the window.
+    select_edit()
+    session.call("clickGlobalMenu", "File")
+    state = wait_menu(session, lambda s: s["open"] == "File")
+    checks.check(f"{toolkit}: with Edit selected, a click on File ends the selection and opens File",
+                 state["open"] == "File" and state["selected"] is None, str(state))
+    close_menus(session)
+    select_edit()
+    session.call("clickAway")
+    state = wait_menu(session, lambda s: s["selected"] is None)
+    checks.check(f"{toolkit}: with Edit selected, a click elsewhere ends the selection",
+                 state["selected"] is None and state["open"] is None, str(state))
+    select_edit()
+    session.press("space")
+    wait_menu(session, lambda s: s["open"] == "Edit" and s["layout"])
+    copies = activated().count("_Copy")
+    session.call("clickGlobalMenuItem", "Copy")
+    state = wait_menu(session, lambda s: s["open"] is None and s["selected"] is None)
+    checks.check(f"{toolkit}: Copy clicked in Edit, opened from the selected title, ends the selection",
+                 state["selected"] is None and wait_for(lambda: activated().count("_Copy") > copies, 5), str(state))
+    select_edit()
+    session.press("x")
+    state = wait_menu(session, lambda s: s["selected"] is None)
+
+    # Qt logs no text of its text field.
+    def typed():
+        return toolkit == "qt" or any(e["event"] == "text" and "x" in e["value"] for e in read_events(log))
+
+    checks.check(f"{toolkit}: with Edit selected, X ends the selection and reaches the window"
+                 f"{'' if toolkit == 'qt' else ', whose text field receives it'}",
+                 state["selected"] is None and wait_for(typed, 5), str([state, read_events(log)[-3:]]))
+
+    # Escape closes one level at a time: the submenu Zoom, opened with the keyboard, then View, whose title stays
+    # selected, and then the selection.
+    session.press("v", "Alt_L")
+    wait_menu(session, lambda s: s["open"] == "View" and s["focus"] == "Show Toolbar")
+    session.press("z")
+    wait_menu(session, lambda s: submenu_open(s["items"], "Zoom") and s["focus"] == "Zoom In")
+    session.press("Escape")
+    state = wait_menu(session, lambda s: s["open"] == "View" and not submenu_open(s["items"], "Zoom"))
+    checks.check(f"{toolkit}: Escape in the submenu Zoom of View closes only Zoom, with the keyboard focus back on Zoom",
+                 state["open"] == "View" and not submenu_open(state["items"], "Zoom") and state["focus"] == "Zoom",
+                 str(state))
+    session.press("Escape")
+    state = wait_menu(session, lambda s: s["open"] is None and s["selected"] == "View")
+    checks.check(f"{toolkit}: a second Escape closes View and leaves it selected",
+                 state["open"] is None and state["selected"] == "View", str(state))
+    session.press("Escape")
+    state = wait_menu(session, lambda s: s["selected"] is None)
+    checks.check(f"{toolkit}: a third Escape ends the selection", state["selected"] is None, str(state))
+    # The pointer opened Edit and the keyboard was not used in it, so Escape closes it with everything else.
+    session.call("clickGlobalMenu", "Edit")
+    wait_menu(session, lambda s: s["open"] == "Edit" and s["layout"])
+    session.press("Escape")
+    wait_menu(session, lambda s: s["open"] is None)
+    time.sleep(0.5)
+    state = menu_state(session)
+    checks.check(f"{toolkit}: Escape closes Edit, which a click opened, and leaves no title selected",
+                 state["open"] is None and state["selected"] is None, str(state))
+
+    # F10 and a tap of Alt open the menu of the title under the pointer, also when the pointer rests there after its
+    # menu closed.
+    session.press("F10")
+    state = wait_menu(session, lambda s: s["open"] == "Edit" and s["focus"] == "Copy")
+    checks.check(f"{toolkit}: with the pointer resting on Edit, F10 opens Edit with the keyboard focus on its first item",
+                 state["open"] == "Edit" and state["focus"] == "Copy", str(state))
+    close_menus(session)
+    session.call("hoverTopBar", "View")
+    session.press("Alt_L")
+    state = wait_menu(session, lambda s: s["open"] == "View" and s["focus"] == "Show Toolbar")
+    checks.check(f"{toolkit}: with the pointer on View, a tap of Alt opens View with the keyboard focus on its first item",
+                 state["open"] == "View" and state["focus"] == "Show Toolbar", str(state))
+    close_menus(session)
+    session.call("movePointerAway")
     click_path(session, ["Edit", "Paste"])
     checks.check(f"{toolkit}: clicking Edit, Paste activates Paste", wait_for(lambda: "_Paste" in activated(), 5),
                  str(activated()))
@@ -1486,8 +1625,7 @@ def menu_app(session, checks, out_dir, toolkit):
     checks.check(f"{toolkit}: in Edit, P moves the keyboard focus between Paste and Preferences, which share it",
                  {first, second} == {"Paste", "Preferences"} and "_Preferences" not in activated(),
                  str((before, first, second)))
-    session.press("Escape")
-    wait_menu(session, lambda s: s["open"] is None)
+    close_menus(session)
     session.press("v", "Alt_L")
     wait_menu(session, lambda s: s["open"] == "View")
     session.press("z")
@@ -1510,8 +1648,7 @@ def menu_app(session, checks, out_dir, toolkit):
     starts = {item["x"] for item in state["layout"] or []}
     checks.check(f"{toolkit}: in View, Zoom has the space of a check mark too, so the labels line up",
                  len(state["layout"] or []) == 2 and len(starts) == 1, str(state["layout"]))
-    session.press("Escape")
-    wait_menu(session, lambda s: s["open"] is None)
+    close_menus(session)
     session.call("clickGlobalMenu", "File")
     state = wait_menu(session, lambda s: s["open"] == "File" and s["layout"] and
                       all(item["x"] is not None for item in s["layout"]))
@@ -1619,13 +1756,17 @@ def global_menu_input_method(session, checks, out_dir):
     state = wait_menu(session, lambda s: s["focus"] in ("Paste", "Preferences"))
     checks.check("P in the open menu Edit reaches the menu, which moves the keyboard focus to Paste",
                  state["focus"] in ("Paste", "Preferences"), str([before, state]))
-    # The input method would also receive Escape, on which it drops what it composed.
+    # The input method would also receive Escape, on which it drops what it composed. The first Escape closes the menu,
+    # in which the keyboard moved the focus, to its title, and the second ends the selection of the title.
     session.press("Escape")
-    closed = wait_menu(session, lambda s: s["open"] is None)
+    wait_menu(session, lambda s: s["open"] is None and s["selected"] == "Edit")
+    session.press("Escape")
+    closed = wait_menu(session, lambda s: s["open"] is None and s["selected"] is None)
     session.press("space")
     wait_for(lambda: text() != composed, 5)
-    checks.check("Escape closes the menu, and Space after it reaches the text field as a space, nothing composed of P",
-                 closed["open"] is None and text() == composed + " ", repr([closed["open"], composed, text()]))
+    checks.check("Escape closes the menu, a second one ends the selection of its title, and Space after them reaches the "
+                 "text field as a space, nothing composed of P", closed["open"] is None and closed["selected"] is None and
+                 text() == composed + " ", repr([closed["open"], closed["selected"], composed, text()]))
     session.logout()
     return {"events": read_events(log)}
 
@@ -1677,11 +1818,14 @@ def global_menu_date_menu(session, checks, out_dir):
     checks.check("the window has its keyboard focus again while File is open",
                  wait_for(lambda: focus()[len(at_date):][-1:] == [True], 5), str(focus()[len(at_date):]))
 
+    # File opened by the pointer, so Escape closes it with the selection of its title.
     session.press("Escape")
     state = wait_menu(session, lambda s: s["open"] is None)
     time.sleep(1)
-    checks.check("Escape closes File, and the window keeps its keyboard focus",
-                 state["open"] is None and focus()[-1:] == [True], str([state["open"], focus()]))
+    state = menu_state(session)
+    checks.check("Escape closes File, which the pointer opened, leaves no title selected, and the window keeps its "
+                 "keyboard focus", state["open"] is None and state["selected"] is None and focus()[-1:] == [True],
+                 str([state["open"], state["selected"], focus()]))
     session.logout()
     return {"events": read_events(log)}
 
@@ -1713,16 +1857,14 @@ def global_menu_app_name(session, checks, out_dir):
     labels = [item_label(i) for i in state["items"] or []]
     checks.check("the menu has New Window, the window's items and Quit",
                  "New Window" in labels and "Minimize" in labels and "Close" in labels and labels[-1] == "Quit", str(labels))
-    session.press("Escape")
-    wait_menu(session, lambda s: s["open"] is None)
+    close_menus(session)
 
     def quit_label():
         session.call("activateWindow", window["id"])
         shown_window(session, PTYXIS, lambda w: w["id"] == window["id"] and w["focused"], 10)
         session.press("Alt_L")
         items = wait_menu(session, lambda s: s["open"] == name)["items"] or []
-        session.press("Escape")
-        wait_menu(session, lambda s: s["open"] is None)
+        close_menus(session)
         return item_label(items[-1]) if items else None
 
     # The second window is moved once it is shown, as mutter activates a new window when it shows it, also on another
@@ -1886,6 +2028,7 @@ def global_menu_vscode(session, checks, out_dir):
         return check
 
     def shortcut_in_open_menu(window):
+        session.call("movePointerAway")
         session.press("Alt_L")
         wait_menu(session, lambda s: s["open"] == "Visual Studio Code")
         session.press("n", "Control_L", "Shift_L")
@@ -1970,8 +2113,7 @@ def global_menu_firefox(session, checks, out_dir):
                 item["label"] == ICON_PAGE and item["icon"] for item in s["layout"] or []), 5)
             history["entry"] = next((item for item in state["layout"] or [] if item["label"] == ICON_PAGE), None)
             history["labels"] = [item["label"] for item in state["layout"] or []]
-            session.press("Escape")
-            wait_menu(session, lambda s: s["open"] is None)
+            close_menus(session)
             if history["entry"] and history["entry"]["icon"]:
                 return
             time.sleep(1)
@@ -1989,8 +2131,7 @@ def global_menu_firefox(session, checks, out_dir):
         wait_menu(session, lambda s: s["open"] == "History", 5)
         time.sleep(2)
         history["reopened"] = [entries(items) for items in session.call("recordGlobalMenu", False) if items is not None]
-        session.press("Escape")
-        wait_menu(session, lambda s: s["open"] is None)
+        close_menus(session)
 
     def find_entry(items):
         for item in items or []:
@@ -2011,11 +2152,7 @@ def global_menu_firefox(session, checks, out_dir):
         state = wait_menu(session, lambda s: (find_entry(s["layout"]) or {}).get("icon"), 10)
         history["bookmark"] = find_entry(state["layout"])
         history["bookmarks"] = state["layout"]
-        for _ in range(3):
-            if menu_state(session)["open"] is None:
-                break
-            session.press("Escape")
-            wait_menu(session, lambda s: s["open"] is None, 2)
+        close_menus(session)
 
     try:
         return electron_or_browser(session, checks, "Firefox", "firefox about:blank", "Firefox", None, "f",
@@ -2282,8 +2419,7 @@ def global_menu_overflow(session, checks, out_dir):
     state = wait_menu(session, lambda s: menu_open(s, last) and s["focus"] == f"Item {letter}")
     checks.check(f"then Alt+{letter} opens {last} again with the keyboard focus on its item",
                  menu_open(state, last) and state["focus"] == f"Item {letter}", str(state))
-    session.press("Escape")
-    wait_menu(session, lambda s: s["open"] is None)
+    close_menus(session)
 
     def activated():
         return [e["value"] for e in read_events(log) if e["event"] == "activate"]

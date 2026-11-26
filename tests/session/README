@@ -108,30 +108,41 @@ and V-Shell has closed the dialog it opens meanwhile:
   global-menu-gtk3, global-menu-gtk4, global-menu-qt
                   The window of apps/menuapp.py hides its menu bar, and the top bar shows the application's name and
                   File, Edit and View. Alt+F opens File with the keyboard focus on its first item, Right and Left move
-                  between the menus, Escape closes them, and F10 and a tap of the left Alt open the menu of the
-                  application's name, from which Right moves to File. Return, and clicks on items, also in the
-                  submenu of View, activate them, a checked item shows its mark, Open shows its icon, the labels of a
-                  menu with a check mark or an icon line up, and the window never loses its active state or its
-                  keyboard focus meanwhile. Holding the left Alt underlines the letters of the mnemonics in the
-                  titles, until another key is pressed with it. A menu opened with Alt+F underlines them in its items
-                  and in the titles, while one opened with a click does not. The letter of an item activates it, the
-                  one of Zoom opens its submenu, and P, which Paste and Preferences share, moves the keyboard focus
-                  between them. A letter which no item of the open menu has opens the menu with that mnemonic: E in the
-                  menu of the application's name, which has no mnemonics, opens Edit, and V in File opens View. A tap
-                  of the left Alt in a menu opened with a click underlines the letters and leaves the menu open, and a
-                  second tap closes it. Space in a menu opened with a click, before an item has the keyboard focus,
-                  closes it, as on its title, and activates no item. Ctrl+N, the shortcut of New, pressed while a menu is open, closes the menu and
-                  activates New in the window. Shift+Insert, the shortcut of Paste, also closes the menu and reaches
-                  the window, where GTK activates Paste and Qt gives it to the focused text field. File, with an item
-                  whose label is wider than the monitor, lies within the monitor, as the label ends with an
+                  between the menus, and F10 and a tap of the left Alt open the menu of the application's name, from
+                  which Right moves to File. Escape closes one level at a time: in a menu which the keyboard opened, or
+                  moved the focus in, the first Escape closes the menu and leaves its title selected, and the second
+                  ends the selection, and in View, opened with Alt+V, Escape closes the submenu Zoom, opened with Z,
+                  then View, then the selection. A menu which a click opened, or Left or Right without going into it,
+                  closes with the selection at the first Escape. Return, and clicks on items, also in the submenu of
+                  View, activate them, a checked item shows its mark, Open shows its icon, the labels of a menu with a
+                  check mark or an icon line up, and the window never loses its active state or its keyboard focus
+                  meanwhile. Holding the left Alt underlines the letters of the mnemonics in the titles, until another
+                  key is pressed with it. A menu opened with Alt+F underlines them in its items and in the titles, while
+                  one opened with a click does not. The letter of an item activates it, the one of Zoom opens its
+                  submenu, and P, which Paste and Preferences share, moves the keyboard focus between them. A letter
+                  which no item of the open menu has opens the menu with that mnemonic: E in the menu of the
+                  application's name, which has no mnemonics, opens Edit, and V in File opens View. A tap of the left
+                  Alt in a menu opened with a click underlines the letters and leaves the menu open, and a second tap
+                  closes it. Space in a menu opened with a click, before an item has the keyboard focus, closes it, as
+                  on its title, activates no item, and leaves the title selected: Space opens and closes its menu again,
+                  Right selects the next title, Down opens its menu with the keyboard focus on its first item, Escape in
+                  a menu opened with Space or Down returns to the title, and a second Escape returns the keyboard to the
+                  window, where Ctrl+N activates New. A click on another title, a click elsewhere, an item clicked in
+                  the menu opened from the title, and another key also end the selection, and X reaches the text field
+                  of the GTK windows. With the pointer on a title, also resting there after its menu closed, F10 and a
+                  tap of the left Alt open that menu. Ctrl+N, the shortcut of New, pressed while a menu is open, closes
+                  the menu and activates New in the window. Shift+Insert, the shortcut of Paste, also closes the menu
+                  and reaches the window, where GTK activates Paste and Qt gives it to the focused text field. File,
+                  with an item whose label is wider than the monitor, lies within the monitor, as the label ends with an
                   ellipsis.
   global-menu-input-method
                   With IBus and its Pinyin engine, an input method which composes Chinese text from the letters typed,
                   in the text field of the GTK 4 window of apps/menuapp.py, once the text field has the focus of the
-                  input method, the letter of an item pressed in an open menu reaches the menu, and Escape closes it.
-                  Mutter gives every key to the input method first, and patches/mutter/keep-keyboard-focus.patch moves
-                  the focus of the input method away from the window while the menu is open, without which the input
-                  method receives both keys. Space after the menu then reaches the text field as a space.
+                  input method, the letter of an item pressed in an open menu reaches the menu, Escape closes it, and a
+                  second Escape ends the selection of its title. Mutter gives every key to the input method first, and
+                  patches/mutter/keep-keyboard-focus.patch moves the focus of the input method away from the window
+                  while the menu is open, without which the input method receives both keys. Space after the menu then
+                  reaches the text field as a space.
   global-menu-date-menu
                   Just Perfection shows the clock at the far right of the top bar. The pointer moved from File, opened
                   over the GTK 4 window of apps/menuapp.py, onto the clock opens the date menu, and moved back opens

@@ -16,9 +16,10 @@ const MENU_MODIFIER = 'Alt_L';
 //       terminals and other applications which bind it.
 
 /**
- * The keys which open the menus of the menu bar: F10 and a tap of the left Alt open the menu of the application's name,
- * or close the open menu, except that a tap of the left Alt in a menu which the mouse opened underlines the letters of
- * the mnemonics there, see MenuBar.tapAlt(). Alt with the mnemonic of a top-level menu opens that menu. The mnemonics
+ * The keys which open the menus of the menu bar: F10 and a tap of the left Alt open the menu of the title under the
+ * pointer, or of the application's name, or close the open menu, see MenuBar.toggleMenu(), except that a tap of the
+ * left Alt in a menu which the mouse opened underlines the letters of the mnemonics there, see MenuBar.tapAlt(). Alt
+ * with the mnemonic of a top-level menu opens that menu. The mnemonics
  * are grabbed only while the focused window has menus with them, so in other windows these keys reach the window.
  * While the left Alt is held on its own, the titles of the menus underline the letters of their mnemonics.
  */
@@ -93,7 +94,7 @@ export class Keyboard {
         if (!this._active)
             return;
         this._mnemonicKey = mnemonicKey;
-        this._grab(OPEN_ACCELERATOR, () => this._menuBar.toggleAppMenu());
+        this._grab(OPEN_ACCELERATOR, () => this._menuBar.toggleMenu());
         const grabbed = new Set();
         titles.forEach(({mnemonic}, index) => {
             if (!mnemonic || grabbed.has(mnemonic))

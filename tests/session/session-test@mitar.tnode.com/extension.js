@@ -502,7 +502,8 @@ class SessionTest {
     /**
      * @returns {object} the global menu in the top bar: whether the extension shows it, the titles of its buttons, the
      *     first being the application's name, the titles of the menus which do not fit and are in the overflow button,
-     *     the title of the open menu, which is the label of the overflow button for it, and its items, see
+     *     the title of the open menu, which is the label of the overflow button for it, the title which has the
+     *     keyboard focus, which the global menu selects after Space closed its menu, the open menu's items, see
      *     describeItems(), where they are, see describeLayout(), where the menu is on the stage, the label of the item
      *     which has the keyboard focus, and the key which names the menu shown, different for each menu an application
      *     exports
@@ -511,7 +512,10 @@ class SessionTest {
         this._ensurePointer();
         const buttons = globalMenuButtons();
         if (!buttons)
-            return {shown: false, titles: [], overflowed: [], open: null, items: null, focus: null, menuKey: null};
+            return {
+                shown: false, titles: [], overflowed: [], open: null, selected: null, items: null, focus: null,
+                menuKey: null,
+            };
         const overflow = globalMenuOverflow();
         const open = [...buttons, overflow].find(button => button?.menu.isOpen);
         const focus = global.stage.get_key_focus();
@@ -520,6 +524,7 @@ class SessionTest {
             titles: buttons.map(button => button.label.text),
             overflowed: buttons.slice(1).filter(button => !button.reactive).map(button => button.label.text),
             open: open?.label.text ?? null,
+            selected: [...buttons, overflow].find(button => button?.has_key_focus())?.label.text ?? null,
             items: open ? describeItems(open.menu) : null,
             layout: open ? describeLayout(open.menu) : null,
             bounds: open ? describeBounds(open.menu.actor) : null,
@@ -600,6 +605,19 @@ class SessionTest {
         this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), global.stage.width / 2,
             global.stage.height - 2);
         await sleep(100);
+    }
+
+    /**
+     * Clicks the middle of the screen with the virtual pointer, away from the top bar.
+     */
+    async clickAway() {
+        await this._ensurePointer();
+        this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), global.stage.width / 2,
+            global.stage.height / 2);
+        await sleep(200);
+        this._pointer.notify_button(GLib.get_monotonic_time(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+        await sleep(50);
+        this._pointer.notify_button(GLib.get_monotonic_time(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
     }
 
     async _click(actor) {

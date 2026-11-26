@@ -207,21 +207,26 @@ Chromium and Electron applications, receive SIGTERM, as at the end of the sessio
 Chromium and Firefox restore all their windows at their next start. The Quit of the dash and of the app grid does the
 same, while the Quit of Ubuntu Dock closes the windows the dock shows for the application one by one, with its
 isolate-workspaces only those on the active workspace. A tap of the Alt key (which after the key rotation of [Keyboard
-like on macOS](#keyboard-like-on-macos) is only the left physical Win key) or F10 opens the menu of the application's
-name, and Alt with the underlined letter of a menu opens that menu. In an open menu the letters are underlined while Alt
-is held, and once the keyboard opened the menu or was used in it, and pressing the letter of an item acts on that item,
-while a letter which no item has opens the menu with that letter, so after a tap of Alt the letter of a menu alone opens
-it. A tap of Alt in a menu opened with the mouse underlines the letters and leaves the menu open. Space and Return act
-on the item with the keyboard focus, and in a menu opened with the mouse, before an item has the focus, they close the
-menu, as they do on its title. Some Electron applications export their menus without underlined letters, so there Alt
-with a letter stays with the application. The window stays active while one of these menus is open, and the keys of the
-menu go to the menu, while a shortcut of the window, a key with Ctrl or Super, Insert or Delete with Shift, or a
-function key, closes the menu and acts in the window. While the middle of the top bar is empty, as it is with the clock
-moved to the right by Just Perfection, the menus have the whole width of the top bar up to the status icons, which keep
-their full width, and follow indicators which extensions add or remove. Otherwise they end before the middle. Menus
-which do not fit are submenus of a » button after the last menu which fits. A long item, such as a page with a long
-title in Firefox's History and Bookmarks menus, ends with an ellipsis where Firefox ends its own menu items, so that its
-menu fits on the monitor.
+like on macOS](#keyboard-like-on-macos) is only the left physical Win key) or F10 opens the menu of the title under the
+pointer, or else of the application's name, and Alt with the underlined letter of a menu opens that menu. In an open
+menu the letters are underlined while Alt is held, and once the keyboard opened the menu or was used in it, and pressing
+the letter of an item acts on that item, while a letter which no item has opens the menu with that letter, so after a
+tap of Alt the letter of a menu alone opens it. A tap of Alt in a menu opened with the mouse underlines the letters and
+leaves the menu open. Space and Return act on the item with the keyboard focus, and in a menu opened with the mouse,
+before an item has the focus, they close the menu, as they do on its title, which stays selected: Space or Return opens
+its menu again, Down opens it with the keyboard focus on its first item, Left and Right select the next title, and
+Escape, a click or another key returns the keyboard to the window, which receives that other key. Escape closes one
+level at a time: an open submenu, then the menu, whose title stays selected when the keyboard opened the menu or moved
+the focus in it, and then the selection. A menu which only the pointer used, or which Left or Right opened without going
+into it, closes at once. Some Electron applications export their menus without underlined letters, so there Alt with a
+letter stays with the application. The window stays active while one of these menus is open, and the keys of the menu go
+to the menu, while a shortcut of the window, a key with Ctrl or Super, Insert or Delete with Shift, or a function key,
+closes the menu and acts in the window. While the middle of the top bar is empty, as it is with the clock moved to the
+right by Just Perfection, the menus have the whole width of the top bar up to the status icons, which keep their full
+width, and follow indicators which extensions add or remove. Otherwise they end before the middle. Menus which do not
+fit are submenus of a » button after the last menu which fits. A long item, such as a page with a long title in
+Firefox's History and Bookmarks menus, ends with an ellipsis where Firefox ends its own menu items, so that its menu
+fits on the monitor.
 
 GTK 3 and GTK 4 applications, Qt applications, Chromium, Firefox, LibreOffice and Electron applications such as Signal,
 Slack, Claude Desktop and Visual Studio Code show their menus there. GTK applications show their menu bars in their

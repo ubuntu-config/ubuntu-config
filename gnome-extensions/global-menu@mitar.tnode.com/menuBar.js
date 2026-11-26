@@ -12,12 +12,18 @@ import * as Signals from 'resource:///org/gnome/shell/misc/signals.js';
 
 import {fillAppMenu} from './appMenu.js';
 import {
-    activateMnemonic, addSubmenuItem, hasModifiers, isWindowShortcut, setLabelMnemonic, setMenuMnemonicsShown,
-    setMnemonicShown, typedLetter,
+    activateMnemonic, addSubmenuItem, focusedSubmenuItem, hasModifiers, isWindowShortcut, setLabelMnemonic,
+    setMenuMnemonicsShown, setMnemonicShown, typedLetter,
 } from './util.js';
 
 // How long a menu without items waits for the application to fill it before it gives up opening.
 const FILL_TIMEOUT_MS = 1000;
+
+// The keys which move the keyboard focus between the items of an open menu.
+const NAVIGATION_KEYS = new Set([
+    Clutter.KEY_Up, Clutter.KEY_Down, Clutter.KEY_Left, Clutter.KEY_Right, Clutter.KEY_Tab, Clutter.KEY_ISO_Left_Tab,
+    Clutter.KEY_Home, Clutter.KEY_End, Clutter.KEY_Page_Up, Clutter.KEY_Page_Down,
+]);
 
 // The window properties which name the menu of a window, and its type, which tells whether it is the desktop.
 const WINDOW_PROPERTIES = [
@@ -34,10 +40,12 @@ class MenuButton extends PanelMenu.Button {
      * @param {string} text - the title shown in the top bar
      * @param {string} styleClass - the style class of the title
      * @param {function(PopupMenu.PopupMenu): void} fill - fills the menu right before it opens
-     * @param {function(function(): void): void} [prepare] - asks the application to fill a menu which has no items
-     *   and calls its argument once the items are there or it gave up waiting for them
+     * @param {function(function(): void): void|null} prepare - asks the application to fill a menu which has no
+     *   items and calls its argument once the items are there or it gave up waiting for them, or null
+     * @param {function(Clutter.Event): boolean} onEvent - receives the events of the open menu before GNOME Shell does,
+     *   and returns Clutter.EVENT_STOP for an event it handled
      */
-    _init(text, styleClass, fill, prepare) {
+    _init(text, styleClass, fill, prepare, onEvent) {
         // The menu is centered under its title, as the menus of the status icons are.
         super._init(0.5, text);
         // A menu without items does not open, so it is filled before PopupMenu.open() checks that, also when the
@@ -67,6 +75,9 @@ class MenuButton extends PanelMenu.Button {
         // A grab of the menu leaves the keyboard focus with the focused window, so that Chromium and Electron keep
         // the window active and act on the item chosen.
         global.display.set_grab_keeps_keyboard_focus(this.menu.actor, true);
+        // GNOME Shell's menu manager closes the whole menu on Escape, which onEvent closes one level at a time, so
+        // onEvent is connected first.
+        this.menu.actor.connect('captured-event', (actor, event) => onEvent(event));
         Main.panel.menuManager.addMenu(this.menu);
     }
 });
@@ -210,9 +221,22 @@ export class MenuBar extends Signals.EventEmitter {
         this._altHeld = false;
         this._mnemonicsShown = false;
         this._mnemonicsResetId = 0;
+        // The grab of the menu bar while a title stays selected after Space or Return closed its menu, see
+        // _selectTitle(), and whether such a menu is closing.
+        this._titleGrab = null;
+        this._closingToTitle = false;
+        // Whether the keyboard was used in the open menu, which Escape then closes to its title, see _onMenuEvent(),
+        // and the button whose menu is engaged when it opens.
+        this._engaged = false;
+        this._engageOnOpen = null;
 
         this._box = new MenuBarBox();
-        this._box.connectObject('overflow-changed', () => this._syncOverflow(), this);
+        this._box.connectObject(
+            'overflow-changed', () => this._syncOverflow(),
+            'captured-event', (actor, event) => this._onTitleEvent(event),
+            this);
+        // The grab of a selected title leaves the keyboard focus with the focused window, as the grabs of the menus do.
+        global.display.set_grab_keeps_keyboard_focus(this._box, true);
         const leftBox = Main.panel._leftBox;
         const activities = Main.panel.statusArea.activities?.container;
         if (activities?.get_parent() === leftBox)
@@ -223,22 +247,21 @@ export class MenuBar extends Signals.EventEmitter {
         this._appButton = new MenuButton('', 'global-menu-app-name', menu => {
             if (this._app)
                 fillAppMenu(menu, this._app, this._window);
-        });
+        }, null, event => this._onMenuEvent(this._appButton, event));
         this._appButton.menu.connectObject('open-state-changed', (menu, open) => {
             if (open && this._focusOnOpen === this._appButton)
                 this._focusFirstItem(this._appButton);
             else if (!open)
                 this._rebuildIfPending();
-            this._onMnemonicsOpenStateChanged(open);
+            this._onMenuOpenStateChanged(this._appButton, open);
         }, this);
-        this._watchKeys(this._appButton);
         this._box.add_child(this._appButton.container);
 
-        this._overflowButton = new MenuButton('\u00bb', 'global-menu-title', menu => this._fillOverflow(menu));
+        this._overflowButton = new MenuButton('\u00bb', 'global-menu-title', menu => this._fillOverflow(menu), null,
+            event => this._onMenuEvent(this._overflowButton, event));
         this._overflowButton.add_style_class_name('global-menu-overflow');
         this._overflowButton.menu.connectObject('open-state-changed',
             (menu, open) => this._onOverflowOpenStateChanged(open), this);
-        this._watchKeys(this._overflowButton);
         this._box.add_child(this._overflowButton.container);
 
         global.display.connectObject('notify::focus-window', () => this._sync(), this);
@@ -248,6 +271,7 @@ export class MenuBar extends Signals.EventEmitter {
     }
 
     destroy() {
+        this._leaveTitle();
         if (this._mnemonicsResetId)
             GLib.source_remove(this._mnemonicsResetId);
         this._mnemonicsResetId = 0;
@@ -269,8 +293,10 @@ export class MenuBar extends Signals.EventEmitter {
      */
     setActive(active) {
         this._active = active;
-        if (!active)
+        if (!active) {
             this.closeMenus();
+            this._leaveTitle();
+        }
         this._box.visible = active && !!this._app;
         this._updateMnemonics();
     }
@@ -304,13 +330,26 @@ export class MenuBar extends Signals.EventEmitter {
         // A menu which does not fit opens as the submenu of the overflow button.
         const overflowed = index >= this._box.fitCount;
         const button = index < 0 ? this._appButton : overflowed ? this._overflowButton : this._buttons[index];
+        this._openWithFocus(button, overflowed ? index : -1);
+    }
+
+    /**
+     * Opens the menu of a button with the keyboard focus on its first item.
+     *
+     * @param {MenuButton} button - the button
+     * @param {number} focusIndex - for the overflow button the index of the menu whose submenu is shown, or -1 to focus
+     *   the first item of the overflow button's menu
+     */
+    _openWithFocus(button, focusIndex) {
         // The menu opens later when the application still has to fill it, and its first item has the focus then.
         this._focusOnOpen = button;
-        this._focusIndex = overflowed ? index : -1;
+        this._focusIndex = focusIndex;
         this._keyboardUsed = true;
+        this._engageOnOpen = button;
         // Opening a menu which is open already would fill it again, which replaces the submenus of the overflow
         // button, so the focus only moves to its first item, or for the overflow button into the submenu of the menu.
         if (button.menu.isOpen) {
+            this._engaged = true;
             this._updateMnemonics();
             this._focusFirstItem(button);
             return;
@@ -320,54 +359,187 @@ export class MenuBar extends Signals.EventEmitter {
 
     // The keys pressed in an open menu show the letters of the mnemonics: Alt while it is held, any other key until no
     // menu is open anymore. The letter of a mnemonic acts on its item, or else opens the top-level menu with that
-    // mnemonic, Space and Return act on the title while no item has the keyboard focus, and a shortcut of the window
-    // closes the menu and reaches the window.
-    _watchKeys(button) {
-        button.menu.actor.connectObject('captured-event', (actor, event) => {
-            const type = event.type();
-            if (type !== Clutter.EventType.KEY_PRESS && type !== Clutter.EventType.KEY_RELEASE)
-                return Clutter.EVENT_PROPAGATE;
-            const key = event.get_key_symbol();
-            if (key === Clutter.KEY_Alt_L || key === Clutter.KEY_Alt_R) {
-                this._altHeld = type === Clutter.EventType.KEY_PRESS;
-                this._updateMnemonics();
-                return Clutter.EVENT_PROPAGATE;
-            }
-            if (type !== Clutter.EventType.KEY_PRESS)
-                return Clutter.EVENT_PROPAGATE;
-            // A shortcut of the window acts as if the menu were not open, also one which an item shows. The key is
-            // forwarded once the menu closed, as the window receives no keys while the menu grabs them.
-            if (typeof global.display.forward_key_event === 'function' && isWindowShortcut(event)) {
-                button.menu.close();
-                global.display.forward_key_event(event);
-                return Clutter.EVENT_STOP;
-            }
-            // GNOME Shell activates an item which has the keyboard focus with Space and Return, and toggles the menu of
-            // a title which has it. While a menu is open, the keyboard focus is in the menu, and with no item focused,
-            // as in a menu opened with a click, it is on the menu itself, where these keys did nothing. They act on the
-            // title then, whose menu is open, so they close it.
-            if ((key === Clutter.KEY_space || key === Clutter.KEY_Return) && !hasModifiers(event)) {
-                const focus = global.stage.get_key_focus();
-                if (!focus || focus === button.menu.actor || !button.menu.actor.contains(focus)) {
-                    button.menu.close();
-                    return Clutter.EVENT_STOP;
-                }
-            }
-            this._keyboardUsed = true;
+    // mnemonic, Space and Return act on the title while no item has the keyboard focus, see _selectTitle(), Escape
+    // closes one level, and a shortcut of the window closes the menu and reaches the window.
+    _onMenuEvent(button, event) {
+        const type = event.type();
+        if (type !== Clutter.EventType.KEY_PRESS && type !== Clutter.EventType.KEY_RELEASE)
+            return Clutter.EVENT_PROPAGATE;
+        const key = event.get_key_symbol();
+        if (key === Clutter.KEY_Alt_L || key === Clutter.KEY_Alt_R) {
+            this._altHeld = type === Clutter.EventType.KEY_PRESS;
             this._updateMnemonics();
-            if (activateMnemonic(button.menu, event))
-                return Clutter.EVENT_STOP;
-            // A letter which no item of the open menu has opens the top-level menu with that mnemonic, as a letter
-            // after a tap of Alt does in Qt, and in GTK while the open menu has no selected item. The menu of the
-            // application's name has no mnemonics, so there each underlined letter of a title opens its menu.
-            const letter = typedLetter(event);
-            const index = letter ? this._titles.findIndex(title => title.mnemonic === letter) : -1;
-            if (index < 0)
-                return Clutter.EVENT_PROPAGATE;
-            if (button !== this._buttons[index])
-                this.openMenu(index);
+            return Clutter.EVENT_PROPAGATE;
+        }
+        if (type !== Clutter.EventType.KEY_PRESS)
+            return Clutter.EVENT_PROPAGATE;
+        // A shortcut of the window acts as if the menu were not open, also one which an item shows. The key is
+        // forwarded once the menu closed, as the window receives no keys while the menu grabs them.
+        if (typeof global.display.forward_key_event === 'function' && isWindowShortcut(event)) {
+            button.menu.close();
+            this._leaveTitle();
+            global.display.forward_key_event(event);
             return Clutter.EVENT_STOP;
-        }, this);
+        }
+        // Escape closes the innermost level only: an open submenu which has the keyboard focus, or whose item has
+        // it, then the menu, whose title stays selected once the keyboard was used in the menu, and then the
+        // selection of the title, see _onTitleEvent(). A menu which only the pointer used, or which Left or Right
+        // opened without going into it, closes with everything else.
+        if (key === Clutter.KEY_Escape && !hasModifiers(event)) {
+            const submenu = focusedSubmenuItem(button.menu, global.stage.get_key_focus());
+            if (submenu) {
+                submenu.setSubmenuShown(false);
+                submenu.grab_key_focus();
+                this._engaged = true;
+            } else if (this._engaged) {
+                this._selectTitle(button);
+            } else {
+                button.menu.close();
+                this._leaveTitle();
+            }
+            return Clutter.EVENT_STOP;
+        }
+        // GNOME Shell activates an item which has the keyboard focus with Space and Return, and toggles the menu of
+        // a title which has it. While a menu is open, the keyboard focus is in the menu, and with no item focused,
+        // as in a menu opened with a click, it is on the menu itself, where these keys did nothing. They act on the
+        // title then, whose menu is open, so they close it, and the title stays selected.
+        if ((key === Clutter.KEY_space || key === Clutter.KEY_Return) && !hasModifiers(event)) {
+            const focus = global.stage.get_key_focus();
+            if (!focus || focus === button.menu.actor || !button.menu.actor.contains(focus)) {
+                this._selectTitle(button);
+                return Clutter.EVENT_STOP;
+            }
+        }
+        this._keyboardUsed = true;
+        this._updateMnemonics();
+        if (NAVIGATION_KEYS.has(key))
+            this._engaged = true;
+        if (activateMnemonic(button.menu, event)) {
+            this._engaged = true;
+            return Clutter.EVENT_STOP;
+        }
+        // A letter which no item of the open menu has opens the top-level menu with that mnemonic, as a letter
+        // after a tap of Alt does in Qt, and in GTK while the open menu has no selected item. The menu of the
+        // application's name has no mnemonics, so there each underlined letter of a title opens its menu.
+        const letter = typedLetter(event);
+        const index = letter ? this._titles.findIndex(title => title.mnemonic === letter) : -1;
+        if (index < 0)
+            return Clutter.EVENT_PROPAGATE;
+        if (button !== this._buttons[index])
+            this.openMenu(index);
+        return Clutter.EVENT_STOP;
+    }
+
+    // Closes the open menu of a title and keeps the title selected, with the keyboard focus on it, so that Space or
+    // Return opens the menu again, see _onTitleEvent(). The menu bar grabs the keyboard meanwhile, before the menu's
+    // grab ends, so that the window keeps its keyboard focus throughout.
+    _selectTitle(button) {
+        if (!this._titleGrab) {
+            // Clutter emits the events only on reactive actors, and the menu bar is reactive only meanwhile, so that
+            // otherwise a click next to its titles reaches the top bar.
+            this._box.reactive = true;
+            this._titleGrab = Main.pushModal(this._box, {actionMode: Shell.ActionMode.POPUP});
+            global.stage.connectObject('notify::key-focus', () => this._onKeyFocusChanged(), this);
+        }
+        this._closingToTitle = true;
+        button.menu.close();
+        this._closingToTitle = false;
+        // A rebuild which waited for the menu to close can have removed the button.
+        if (![this._appButton, ...this._buttons, this._overflowButton].includes(button) || !button.reactive) {
+            this._leaveTitle();
+            return;
+        }
+        this._keyboardUsed = true;
+        button.grab_key_focus();
+        this._updateMnemonics();
+    }
+
+    // Ends the selection of a title, and the keyboard returns to the focused window.
+    _leaveTitle() {
+        if (!this._titleGrab)
+            return;
+        const grab = this._titleGrab;
+        this._titleGrab = null;
+        global.stage.disconnectObject(this);
+        Main.popModal(grab);
+        this._box.reactive = false;
+        this._queueMnemonicsReset();
+    }
+
+    // The selection of a title ends when the keyboard focus leaves the menu bar while no menu is open, as when the
+    // selected button is destroyed.
+    _onKeyFocusChanged() {
+        const focus = global.stage.get_key_focus();
+        if (!this.isMenuOpen() && !(focus && this._box.contains(focus)))
+            this._leaveTitle();
+    }
+
+    _selectedTitle() {
+        const focus = global.stage.get_key_focus();
+        return [this._appButton, ...this._buttons, this._overflowButton].find(button => button === focus) ?? null;
+    }
+
+    // The keys and clicks while a title is selected and no menu is open. Space and Return open its menu as a click
+    // does, with no item focused, so that they close it again, and Down opens it with the keyboard focus on its first
+    // item. Left and Right select the title next to it, and the letter of a mnemonic opens that menu. Escape, a click
+    // or another key ends the selection, and another key, as a shortcut of the window, reaches the window then.
+    _onTitleEvent(event) {
+        if (!this._titleGrab || this.isMenuOpen())
+            return Clutter.EVENT_PROPAGATE;
+        const type = event.type();
+        if (type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN ||
+            type === Clutter.EventType.SCROLL) {
+            // A click on a title then opens its menu as usual, and one elsewhere only ends the selection, as a click
+            // outside an open menu only closes the menu.
+            const onTitle = this._box.contains(global.stage.get_event_actor(event));
+            this._leaveTitle();
+            return onTitle && type !== Clutter.EventType.SCROLL ? Clutter.EVENT_PROPAGATE : Clutter.EVENT_STOP;
+        }
+        if (type !== Clutter.EventType.KEY_PRESS && type !== Clutter.EventType.KEY_RELEASE)
+            return Clutter.EVENT_PROPAGATE;
+        const key = event.get_key_symbol();
+        if (key === Clutter.KEY_Alt_L || key === Clutter.KEY_Alt_R) {
+            this._altHeld = type === Clutter.EventType.KEY_PRESS;
+            this._updateMnemonics();
+            return Clutter.EVENT_PROPAGATE;
+        }
+        if (type !== Clutter.EventType.KEY_PRESS)
+            return Clutter.EVENT_PROPAGATE;
+        const button = this._selectedTitle();
+        if (button && !hasModifiers(event)) {
+            switch (key) {
+            case Clutter.KEY_space:
+            case Clutter.KEY_Return:
+                this._focusOnOpen = null;
+                this._focusIndex = -1;
+                this._engageOnOpen = button;
+                button.menu.open();
+                return Clutter.EVENT_STOP;
+            case Clutter.KEY_Down:
+                this._openWithFocus(button, -1);
+                return Clutter.EVENT_STOP;
+            case Clutter.KEY_Left:
+            case Clutter.KEY_Right: {
+                const titles = [this._appButton, ...this._buttons, this._overflowButton].filter(b => b.reactive);
+                const step = key === Clutter.KEY_Left ? -1 : 1;
+                titles[(titles.indexOf(button) + step + titles.length) % titles.length]?.grab_key_focus();
+                return Clutter.EVENT_STOP;
+            }
+            case Clutter.KEY_Escape:
+                this._leaveTitle();
+                return Clutter.EVENT_STOP;
+            }
+        }
+        const letter = typedLetter(event);
+        const index = letter ? this._titles.findIndex(title => title.mnemonic === letter) : -1;
+        if (button && index >= 0) {
+            this.openMenu(index);
+            return Clutter.EVENT_STOP;
+        }
+        this._leaveTitle();
+        if (typeof global.display.forward_key_event === 'function')
+            global.display.forward_key_event(event);
+        return Clutter.EVENT_STOP;
     }
 
     /**
@@ -381,7 +553,8 @@ export class MenuBar extends Signals.EventEmitter {
     }
 
     _updateMnemonics() {
-        const shown = this._active && (this._altHeld || (this._keyboardUsed && this.isMenuOpen()));
+        const shown = this._active &&
+            (this._altHeld || (this._keyboardUsed && (this.isMenuOpen() || !!this._titleGrab)));
         if (shown === this._mnemonicsShown)
             return;
         this._mnemonicsShown = shown;
@@ -392,13 +565,13 @@ export class MenuBar extends Signals.EventEmitter {
     }
 
     // Moving from one menu to the next closes one and opens the other, so the letters are hidden only once no menu
-    // stays open.
+    // stays open and no title is selected.
     _queueMnemonicsReset() {
         if (this._mnemonicsResetId)
             return;
         this._mnemonicsResetId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             this._mnemonicsResetId = 0;
-            if (!this.isMenuOpen()) {
+            if (!this.isMenuOpen() && !this._titleGrab) {
                 this._keyboardUsed = false;
                 this._altHeld = false;
             }
@@ -422,7 +595,7 @@ export class MenuBar extends Signals.EventEmitter {
     /**
      * Acts on a tap of the left Alt on its own. In a menu which the mouse opened and in which no key was used yet, it
      * underlines the letters of the mnemonics, which then stay underlined, and leaves the menu open, and otherwise it
-     * opens the menu of the application's name, or closes the open menu, see toggleAppMenu().
+     * acts as F10, see toggleMenu().
      */
     tapAlt() {
         if (this.isMenuOpen() && !this._keyboardUsed) {
@@ -430,17 +603,27 @@ export class MenuBar extends Signals.EventEmitter {
             this._updateMnemonics();
             return;
         }
-        this.toggleAppMenu();
+        this.toggleMenu();
     }
 
     /**
-     * Opens the menu of the application's name, or closes the open menu.
+     * Acts on F10: closes the open menu, or ends the selection of a title, see _selectTitle(), and otherwise opens the
+     * menu of the title under the pointer, or of the application's name when the pointer is on no other title, with the
+     * keyboard focus on its first item.
      */
-    toggleAppMenu() {
-        if (this.isMenuOpen())
+    toggleMenu() {
+        if (this.isMenuOpen() || this._titleGrab) {
             this.closeMenus();
+            this._leaveTitle();
+            return;
+        }
+        if (!this.shown)
+            return;
+        const hovered = [...this._buttons, this._overflowButton].find(button => button.hover && button.reactive);
+        if (hovered === this._overflowButton)
+            this._openWithFocus(hovered, -1);
         else
-            this.openMenu(-1);
+            this.openMenu(hovered ? this._buttons.indexOf(hovered) : -1);
     }
 
     isMenuOpen() {
@@ -461,17 +644,31 @@ export class MenuBar extends Signals.EventEmitter {
         return this._titles.map((_title, index) => index).filter(index => index >= this._box.fitCount);
     }
 
-    // The buttons of the menus which do not fit are not shown, and cannot be focused or clicked either.
-    _onMnemonicsOpenStateChanged(open) {
-        if (open)
+    _onMenuOpenStateChanged(button, open) {
+        if (open) {
+            // A menu is engaged when the keyboard opened it with an item focused, or Space or Return on its selected
+            // title, and not when the pointer or Left and Right from another menu opened it.
+            this._engaged = this._engageOnOpen === button;
+            this._engageOnOpen = null;
             this._updateMnemonics();
-        else
-            this._queueMnemonicsReset();
+            return;
+        }
+        // A title stays selected when Space, Return or Escape closed its menu to it, see _selectTitle(), and when Left
+        // or Right moved to the next menu. An item chosen, a click and another menu opened by the pointer end the
+        // selection.
+        const event = Clutter.get_current_event();
+        const key = event?.type() === Clutter.EventType.KEY_PRESS ? event.get_key_symbol() : null;
+        if (!this._closingToTitle && key !== Clutter.KEY_Left && key !== Clutter.KEY_Right)
+            this._leaveTitle();
+        this._queueMnemonicsReset();
     }
 
+    // The buttons of the menus which do not fit are not shown, and cannot be focused or clicked either.
     _syncOverflow() {
         this._buttons.forEach((button, index) => button.setSensitive(index < this._box.fitCount));
         this._overflowButton.setSensitive(this._box.fitCount < this._buttons.length);
+        if (this._titleGrab && !this.isMenuOpen() && !this._selectedTitle()?.reactive)
+            this._leaveTitle();
     }
 
     // The overflow button has a submenu for each menu which does not fit.
@@ -491,7 +688,7 @@ export class MenuBar extends Signals.EventEmitter {
     // The application fills its menus when told that they open, as LibreOffice does, so all menus in the overflow
     // button are prepared when it opens, and refilled when they change.
     _onOverflowOpenStateChanged(open) {
-        this._onMnemonicsOpenStateChanged(open);
+        this._onMenuOpenStateChanged(this._overflowButton, open);
         const model = this._model;
         if (!model)
             return;
@@ -524,6 +721,7 @@ export class MenuBar extends Signals.EventEmitter {
     _setWindow(window) {
         if (window === this._window)
             return;
+        this._leaveTitle();
         this._window?.disconnectObject(this);
         this._window = window;
         for (const property of WINDOW_PROPERTIES)
@@ -611,26 +809,28 @@ export class MenuBar extends Signals.EventEmitter {
             this._box.set_child_below_sibling(button.container, this._overflowButton.container);
         this._box.reset(titles.length);
         this._syncOverflow();
+        if (this._titleGrab && !this._closingToTitle && !this._selectedTitle())
+            this._leaveTitle();
         this.emit('changed');
     }
 
     _createButton({text, index: mnemonicIndex}) {
         const button = new MenuButton(text, 'global-menu-title',
             menu => this._fill(this._buttons.indexOf(button), menu),
-            done => this._prepareEmpty(this._buttons.indexOf(button), done));
+            done => this._prepareEmpty(this._buttons.indexOf(button), done),
+            event => this._onMenuEvent(button, event));
         setLabelMnemonic(button.label, text, mnemonicIndex);
         setMnemonicShown(button.label, this._mnemonicsShown);
         button.menu.connectObject('open-state-changed',
             (menu, open) => this._onOpenStateChanged(this._buttons.indexOf(button), open), this);
-        this._watchKeys(button);
         this._box.insert_child_below(button.container, this._overflowButton.container);
         return button;
     }
 
     _onOpenStateChanged(index, open) {
-        this._onMnemonicsOpenStateChanged(open);
-        const model = this._model;
         const button = this._buttons[index];
+        this._onMenuOpenStateChanged(button, open);
+        const model = this._model;
         if (!model || !button)
             return;
         if (!open) {

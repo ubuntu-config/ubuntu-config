@@ -113,6 +113,25 @@ export function setMenuMnemonicsShown(menu, shown) {
 }
 
 /**
+ * Returns the item of the innermost open submenu of a menu which has the keyboard focus, or whose item has it.
+ *
+ * @param {PopupMenu.PopupMenuBase} menu - the menu
+ * @param {Clutter.Actor|null} focus - the actor with the keyboard focus
+ * @returns {PopupMenu.PopupSubMenuMenuItem|null} the item, or null when no open submenu has the focus
+ */
+export function focusedSubmenuItem(menu, focus) {
+    for (const item of menu._getMenuItems()) {
+        if (!item.menu?.isOpen)
+            continue;
+        if (focus && item.menu.actor.contains(focus))
+            return focusedSubmenuItem(item.menu, focus) ?? item;
+        if (item === focus)
+            return item;
+    }
+    return null;
+}
+
+/**
  * Returns the menu among a menu and its open submenus which has an item as one of its own items.
  *
  * @param {PopupMenu.PopupMenuBase} menu - the menu
