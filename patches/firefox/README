@@ -189,12 +189,13 @@ global-menu-icons.patch
     and its letter, and an underscore in a label, as in the title of a page in the History menu, was not shown.
     global-menu-mnemonics.patch marks the access key where the menus in the window underline it, and doubles the
     underscores of the labels. global-menu-icons.patch exports the icons of the menu items, such as the icons of the
-    pages in the History and Bookmarks menus, which Firefox left out (a TODO in its code): each item loads its icon
-    with IconLoader, as Firefox's own macOS menu bar does (nsMenuItemIconX), and exports it as a PNG of 32x32 pixels,
-    twice the size at which menus show icons, so that they stay sharp on screens with a scale of up to 2. A menu item
-    adds its icon only when it is first shown, after it was exported, so the patch looks at an item's icon again when
-    its image element is added or changes, as Firefox's macOS menu bar does (nsMenuItemX). Submenus, such as bookmark
-    folders, have no icon in the top bar.
+    pages in the History and Bookmarks menus, which Firefox left out (a TODO in its code): each item loads its icon with
+    IconLoader, as Firefox's own macOS menu bar does (nsMenuItemIconX), and exports it as a PNG of 32x32 pixels, twice
+    the size at which menus show icons, so that they stay sharp on screens with a scale of up to 2, a vector icon with
+    the colors of its menu item (SVG context paint), as in the menus in the window. A menu item adds its icon only when
+    it is first shown, after it was exported, so the patch looks at an item's icon again when its image element is added
+    or changes, as Firefox's macOS menu bar does (nsMenuItemX). Submenus, such as bookmark folders, have no icon in the
+    top bar.
 
     The first four patches are from Firefox 162. Firefox 161 removes and creates again all exported items whenever an
     item is added or removed, or its label, disabled or hidden state changes, and the four patches update the items in

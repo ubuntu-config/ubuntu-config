@@ -5,23 +5,17 @@ Description: Mark the access keys of the menus which Firefox exports over D-Bus 
  letter, and an underscore in a label, as in a page title in the History menu, marked a mnemonic the item does not
  have and was not shown. The labels now mark the access key where the menus in the window underline it
  (MozTextLabel.formatAccessKey in toolkit/content/widgets/text.js): at its first occurrence in the label, or else
- appended in parentheses, as some locales always do. Underscores in the labels are doubled.
+ appended in parentheses, as some locales always do. Underscores in the labels are doubled. The menus are exported
+ again also when an access key changes, as Fluent sets it after the label.
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2098058
 Forwarded: https://phabricator.services.mozilla.com/D346463
 Last-Update: 2026-11-26
 diff --git a/widget/gtk/NativeMenuGtk.cpp b/widget/gtk/NativeMenuGtk.cpp
-index e354d7b1e392..a1d5c6ae1e96 100644
+index e354d7b1e392..c4be924841b7 100644
 --- a/widget/gtk/NativeMenuGtk.cpp
 +++ b/widget/gtk/NativeMenuGtk.cpp
-@@ -12,12 +12,14 @@
- #include "gdk/gdkkeysyms-compat.h"
- #include "mozilla/BasicEvents.h"
- #include "mozilla/EventDispatcher.h"
-+#include "mozilla/StaticPrefs_ui.h"
- #include "mozilla/StaticPrefs_widget.h"
- #include "mozilla/WidgetUtilsGtk.h"
- #include "mozilla/dom/Document.h"
+@@ -18,6 +18,7 @@
  #include "mozilla/dom/DocumentInlines.h"
  #include "mozilla/dom/Element.h"
  #include "mozilla/dom/XULCommandEvent.h"
@@ -29,7 +23,7 @@ index e354d7b1e392..a1d5c6ae1e96 100644
  #include "nsCRT.h"
  #include "nsGtkKeyUtils.h"
  #include "nsGtkUtils.h"
-@@ -26,6 +28,7 @@
+@@ -26,6 +27,7 @@
  #include "nsPresContext.h"
  #include "nsStubMutationObserver.h"
  #include "nsThreadUtils.h"
@@ -37,6 +31,14 @@ index e354d7b1e392..a1d5c6ae1e96 100644
  #include "nsWindow.h"
  
  #ifdef MOZ_WAYLAND
+@@ -266,6 +268,7 @@ void MenuModel::AttributeChanged(dom::Element* aElement, int32_t,
+                                  const nsAttrValue*) {
+   if (NodeIsRelevant(*aElement) &&
+       (aAttribute == nsGkAtoms::label || aAttribute == nsGkAtoms::aria_label ||
++       aAttribute == nsGkAtoms::accesskey ||
+        aAttribute == nsGkAtoms::disabled || aAttribute == nsGkAtoms::hidden)) {
+     DirtyModel();
+   }
 @@ -796,6 +799,87 @@ static DbusmenuMenuitem* GetOrCreateChild(
    return aChildren.InsertElementAt(aPosition, std::move(item))->get();
  }
@@ -53,11 +55,12 @@ index e354d7b1e392..a1d5c6ae1e96 100644
 +  }
 +}
 +
-+// Returns the label of aElement for the dbusmenu protocol, with its access key
-+// marked as the mnemonic, where the menus in the window underline it (see
-+// MozTextLabel.formatAccessKey in toolkit/content/widgets/text.js): the first
-+// occurrence of the key in the label, or else the key appended in parentheses.
-+static nsCString DBusLabel(const dom::Element& aElement) {
++// Sets aResult to the label of aElement for the dbusmenu protocol, with its
++// access key marked as the mnemonic, where the menus in the window underline it
++// (see MozTextLabel.formatAccessKey in toolkit/content/widgets/text.js): the
++// first occurrence of the key in the label, or else the key appended in
++// parentheses.
++static void GetDBusLabel(const dom::Element& aElement, nsACString& aResult) {
 +  nsAutoString label;
 +  aElement.GetAttr(nsGkAtoms::label, label);
 +  if (label.IsEmpty()) {
@@ -65,13 +68,13 @@ index e354d7b1e392..a1d5c6ae1e96 100644
 +  }
 +
 +  nsAutoString accessKey;
-+  if (StaticPrefs::ui_key_menuAccessKey() != 0) {
-+    aElement.GetAttr(nsGkAtoms::accesskey, accessKey);
-+  }
++  aElement.GetAttr(nsGkAtoms::accesskey, accessKey);
 +  nsAutoString result;
-+  if (accessKey.IsEmpty()) {
++  // As in formatAccessKey(), an empty label shows no access key either.
++  if (accessKey.IsEmpty() || label.IsEmpty()) {
 +    AppendEscapedForDBus(label, result);
-+    return NS_ConvertUTF16toUTF8(result);
++    CopyUTF16toUTF8(result, aResult);
++    return;
 +  }
 +  accessKey.Truncate(1);
 +  nsAutoString upperAccessKey(accessKey);
@@ -87,9 +90,7 @@ index e354d7b1e392..a1d5c6ae1e96 100644
 +      index = upperLabel.Find(upperAccessKey);
 +    }
 +  } else {
-+    nsAutoString appended(u"("_ns);
-+    appended.Append(upperAccessKey);
-+    appended.Append(u')');
++    nsAutoString appended(u"("_ns + upperAccessKey + u")"_ns);
 +    if (StringEndsWith(label, appended)) {
 +      index = int32_t(label.Length()) - 2;
 +    }
@@ -99,7 +100,8 @@ index e354d7b1e392..a1d5c6ae1e96 100644
 +    AppendEscapedForDBus(Substring(label, 0, index), result);
 +    result.Append(u'_');
 +    AppendEscapedForDBus(Substring(label, index), result);
-+    return NS_ConvertUTF16toUTF8(result);
++    CopyUTF16toUTF8(result, aResult);
++    return;
 +  }
 +
 +  // A colon at the end stays after the parentheses, and a space at the end
@@ -119,13 +121,13 @@ index e354d7b1e392..a1d5c6ae1e96 100644
 +  if (endsWithColon) {
 +    result.Append(u':');
 +  }
-+  return NS_ConvertUTF16toUTF8(result);
++  CopyUTF16toUTF8(result, aResult);
 +}
 +
  void MenubarModelDBus::SyncChildren(DbusmenuMenuitem* aParent,
                                      const dom::Element& aElement) {
    AutoTArray<RefPtr<DbusmenuMenuitem>, 32> children;
-@@ -817,13 +901,8 @@ void MenubarModelDBus::SyncChildren(DbusmenuMenuitem* aParent,
+@@ -817,13 +901,10 @@ void MenubarModelDBus::SyncChildren(DbusmenuMenuitem* aParent,
      if (child->IsXULElement(nsGkAtoms::menuitem)) {
        const dom::Element* element = child->AsElement();
        DbusmenuMenuitem* item = GetOrCreate(DBusItemKind::MenuItem, element);
@@ -134,21 +136,25 @@ index e354d7b1e392..a1d5c6ae1e96 100644
 -      if (label.IsEmpty()) {
 -        element->GetAttr(nsGkAtoms::aria_label, label);
 -      }
++      nsAutoCString label;
++      GetDBusLabel(*element, label);
        dbusmenu_menuitem_property_set(item, DBUSMENU_MENUITEM_PROP_LABEL,
 -                                     NS_ConvertUTF16toUTF8(label).get());
-+                                     DBusLabel(*element).get());
++                                     label.get());
        UpdateAccel(item, element);
        UpdateRadioOrCheck(item, element);
        UpdateEnabled(item, element);
-@@ -837,10 +916,8 @@ void MenubarModelDBus::SyncChildren(DbusmenuMenuitem* aParent,
+@@ -837,10 +918,10 @@ void MenubarModelDBus::SyncChildren(DbusmenuMenuitem* aParent,
      if (child->IsXULElement(nsGkAtoms::menu)) {
        if (const auto* popup = GetMenuPopupChild(*child->AsElement())) {
          DbusmenuMenuitem* submenu = GetOrCreate(DBusItemKind::Submenu, popup);
 -        nsAutoString label;
 -        child->AsElement()->GetAttr(nsGkAtoms::label, label);
++        nsAutoCString label;
++        GetDBusLabel(*child->AsElement(), label);
          dbusmenu_menuitem_property_set(submenu, DBUSMENU_MENUITEM_PROP_LABEL,
 -                                       NS_ConvertUTF16toUTF8(label).get());
-+                                       DBusLabel(*child->AsElement()).get());
++                                       label.get());
          UpdateEnabled(submenu, child);
          dbusmenu_menuitem_property_set(submenu,
                                         DBUSMENU_MENUITEM_PROP_CHILD_DISPLAY,
