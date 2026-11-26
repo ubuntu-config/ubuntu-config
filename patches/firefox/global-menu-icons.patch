@@ -8,7 +8,8 @@ Description: Export the icons of menu items with the menus which Firefox exports
  again when that child is added or removed or its src or srcset changes. An item loads its icon again only when the
  icon's URL changes.
 Author: Mitar
-Forwarded: no
+Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2098059
+Forwarded: https://phabricator.services.mozilla.com/D346464
 Last-Update: 2026-11-26
 diff --git a/widget/gtk/NativeMenuGtk.cpp b/widget/gtk/NativeMenuGtk.cpp
 index a1d5c6ae1e96..6f603f377e48 100644

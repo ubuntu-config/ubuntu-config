@@ -203,9 +203,11 @@ global-menu-icons.patch
     later, and apply to 161 only after them. An item with an icon then loads its icon once, and again only when the
     icon changes, not at every change of the menus.
 
-    The session test global-menu-firefox checks the last two: Alt+F opens File, and the History menu lists a page whose
-    title has underscores with its whole title and its icon. Not yet reported to Mozilla. Drop the first four once the
-    PPA's Firefox is 162 or newer.
+    The session test global-menu-firefox checks the last two: Alt+F opens File, the History menu lists a page whose
+    title has underscores with its whole title and its icon, and a page bookmarked with Ctrl+D has its icon the first
+    time its folder opens. global-menu-mnemonics.patch is proposed as D346463 on phabricator.services.mozilla.com for
+    Mozilla bug 2098058, and global-menu-icons.patch as D346464 for bug 2098059. Drop the first four once the PPA's
+    Firefox is 162 or newer.
 
 wasm-sandboxed-libraries.patch (debian-series)
     Builds graphite, ogg, hunspell, expat, woff2 and soundtouch as wasm sandboxed libraries, as Mozilla's own

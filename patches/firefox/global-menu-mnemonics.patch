@@ -7,7 +7,8 @@ Description: Mark the access keys of the menus which Firefox exports over D-Bus 
  (MozTextLabel.formatAccessKey in toolkit/content/widgets/text.js): at its first occurrence in the label, or else
  appended in parentheses, as some locales always do. Underscores in the labels are doubled.
 Author: Mitar
-Forwarded: no
+Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2098058
+Forwarded: https://phabricator.services.mozilla.com/D346463
 Last-Update: 2026-11-26
 diff --git a/widget/gtk/NativeMenuGtk.cpp b/widget/gtk/NativeMenuGtk.cpp
 index e354d7b1e392..a1d5c6ae1e96 100644
