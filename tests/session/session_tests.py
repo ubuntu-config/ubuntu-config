@@ -1745,7 +1745,8 @@ def global_menu_reenable(session, checks, out_dir):
     state = wait_menu(session, lambda s: not s["shown"])
     # GNOME Shell disables an extension, which removes the menu bar, then enables again the extensions enabled after it,
     # waiting for those whose enable() waits, and only then marks it inactive and updates its list of enabled extensions.
-    # It enables only an inactive extension missing from that list, so the test waits for it to finish, as a user does.
+    # It enables only an inactive extension missing from that list, so the test waits for it to finish, as a user does
+    # (https://gitlab.gnome.org/GNOME/gnome-shell/-/work_items/9555).
     inactive = wait_for(lambda: extension_state(session, GLOBAL_MENU) == EXTENSION_INACTIVE, 30)
     checks.check("disabling the extension makes global-menu-registrar give up its name and removes the menu from the top bar",
                  bool(gone) and not state["shown"] and bool(inactive),
