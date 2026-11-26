@@ -220,7 +220,10 @@ GTK 3 and GTK 4 applications, Qt applications, Chromium, Firefox, LibreOffice an
 Slack, Claude Desktop and Visual Studio Code show their menus there. GTK applications show their menu bars in their
 windows again as soon as the extension is disabled. Electron applications keep theirs hidden ([Electron issue
 56066](https://github.com/electron/electron/issues/56066)), so they have no menu until they start again, or until the
-extension is enabled again, which brings their menus back to the top bar.
+extension is enabled again, which brings their menus back to the top bar. A check box in a menu of an Electron
+application keeps showing its old state in the top bar after it changes, until the menu one level above it changes or
+the application sets its whole menu again ([Electron issue 56070](https://github.com/electron/electron/issues/56070)).
+Visual Studio Code sets its whole menu again whenever one of its menus opens, so its check boxes show their state.
 
 Requirements:
 
