@@ -176,6 +176,37 @@ local-handler-through-gio.patch
     Mozilla bug 2090791 from D340772 on phabricator.services.mozilla.com. Drop the patch once the
     PPA's Firefox is 162 or newer.
 
+global-menu-incremental-model.patch
+global-menu-reuse-items.patch
+global-menu-no-placeholder-items.patch
+global-menu-disabled-items.patch
+global-menu-mnemonics.patch
+global-menu-icons.patch
+    Complete the menus which Firefox exports for the top bar (the global menu bar, widget.gtk.global-menu.enabled, see
+    "Application menus in the top bar" in README.md). Firefox exports the menus of its menu bar with the dbusmenu
+    protocol, whose labels mark the underlined letter with an underscore before it, as GTK labels do. Firefox exported
+    its labels as they are, so the top bar neither underlined the access keys of its menus nor opened a menu with Alt
+    and its letter, and an underscore in a label, as in the title of a page in the History menu, was not shown.
+    global-menu-mnemonics.patch marks the access key where the menus in the window underline it, and doubles the
+    underscores of the labels. global-menu-icons.patch exports the icons of the menu items, such as the icons of the
+    pages in the History and Bookmarks menus, which Firefox left out (a TODO in its code): each item loads its icon
+    with IconLoader, as Firefox's own macOS menu bar does (nsMenuItemIconX), and exports it as a PNG of 32x32 pixels,
+    twice the size at which menus show icons, so that they stay sharp on screens with a scale of up to 2. A menu item
+    adds its icon only when it is first shown, after it was exported, so the patch looks at an item's icon again when
+    its image element is added or changes, as Firefox's macOS menu bar does (nsMenuItemX). Submenus, such as bookmark
+    folders, have no icon in the top bar.
+
+    The first four patches are from Firefox 162. Firefox 161 removes and creates again all exported items whenever an
+    item is added or removed, or its label, disabled or hidden state changes, and the four patches update the items in
+    place instead, for Mozilla bug 2029836 (KDE Plasma's global menu disappeared when nested menus opened) and bug
+    2013119 (Firefox lagged with the global menu on Wayland). The last two patches are written for Firefox 162 and
+    later, and apply to 161 only after them. An item with an icon then loads its icon once, and again only when the
+    icon changes, not at every change of the menus.
+
+    The session test global-menu-firefox checks the last two: Alt+F opens File, and the History menu lists a page whose
+    title has underscores with its whole title and its icon. Not yet reported to Mozilla. Drop the first four once the
+    PPA's Firefox is 162 or newer.
+
 wasm-sandboxed-libraries.patch (debian-series)
     Builds graphite, ogg, hunspell, expat, woff2 and soundtouch as wasm sandboxed libraries, as Mozilla's own
     builds do, where the packaging disables them. Ubuntu 26.04's wasm32 toolchain has two bugs which block that,

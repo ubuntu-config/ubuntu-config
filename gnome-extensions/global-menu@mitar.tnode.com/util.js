@@ -21,6 +21,9 @@ const itemKeys = new WeakMap();
 // The text of each label with a mnemonic, and the position of the mnemonic's letter in it.
 const labelMnemonics = new WeakMap();
 
+// The function of each item of addSubmenuItem() which is called when its submenu opens or closes.
+const submenuCallbacks = new WeakMap();
+
 /**
  * Splits a label with a mnemonic, written with an underscore before its letter as GTK and com.canonical.dbusmenu write
  * it, into the text to show and the mnemonic letter. Two underscores stand for one.
@@ -384,18 +387,19 @@ export function addItem(menu, params) {
 }
 
 /**
- * Shows the state of an item created by addSubmenuItem(): its label, icon and sensitivity. See addSubmenuItem() for the
- * parameters.
+ * Shows the state of an item created by addSubmenuItem(): its label, icon and sensitivity, and sets the function called
+ * when its submenu opens or closes. See addSubmenuItem() for the parameters.
  *
  * @param {PopupMenu.PopupSubMenuMenuItem} item - the item
  * @param {object} params - the item
  */
-function updateSubmenuItem(item, {text, mnemonicIndex = -1, enabled = true, icon = null}) {
+function updateSubmenuItem(item, {text, mnemonicIndex = -1, enabled = true, icon = null, onOpenStateChanged = null}) {
     updateLabel(item.label, text, mnemonicIndex);
     if (icon && !item.icon.gicon?.equal(icon))
         item.icon.gicon = icon;
     item.setSensitive(enabled);
     itemMarks.set(item, {toggle: null, icon: !!icon});
+    submenuCallbacks.set(item, onOpenStateChanged);
 }
 
 /**
@@ -407,10 +411,13 @@ function updateSubmenuItem(item, {text, mnemonicIndex = -1, enabled = true, icon
  * @param {number} [params.mnemonicIndex] - the position of the letter of its mnemonic in text, -1 without one
  * @param {boolean} [params.enabled] - whether it can be opened, true when not given
  * @param {Gio.Icon|null} [params.icon] - its icon
+ * @param {function(boolean): void} [params.onOpenStateChanged] - called with true when the submenu opens and with false
+ *   when it closes
  * @returns {PopupMenu.PopupSubMenuMenuItem} the item, whose menu receives the items of the submenu
  */
 export function addSubmenuItem(menu, params) {
     const item = new PopupMenu.PopupSubMenuMenuItem(params.text, !!params.icon);
+    item.menu.connect('open-state-changed', (_menu, open) => submenuCallbacks.get(item)?.(open));
     updateSubmenuItem(item, params);
     menu.addMenuItem(item);
     return item;

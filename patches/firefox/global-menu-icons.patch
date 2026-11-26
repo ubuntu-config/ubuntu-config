@@ -1,0 +1,253 @@
+Description: Export the icons of menu items with the menus which Firefox exports over D-Bus.
+ Items of the History and Bookmarks menus show the icon of their page in the menus in the window, but the global
+ menu bar (widget.gtk.global-menu.enabled) exported them without icons, as a TODO in the code noted. Each exported
+ item now loads the icon which NativeMenu::GetIcon() finds for it with IconLoader, as Firefox's own macOS menu bar
+ does (nsMenuItemIconX), and sets it as the item's icon-data once it is loaded, as a PNG of 32x32 pixels, twice the
+ size at which menus show icons, so that they stay sharp on screens with a scale of up to 2. A menu item adds its
+ icon, an <img> child, only when it is first shown, after the item was exported, so the item's icon is looked at
+ again when that child is added or removed or its src or srcset changes. An item loads its icon again only when the
+ icon's URL changes.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-26
+diff --git a/widget/gtk/NativeMenuGtk.cpp b/widget/gtk/NativeMenuGtk.cpp
+index a1d5c6ae1e96..6f603f377e48 100644
+--- a/widget/gtk/NativeMenuGtk.cpp
++++ b/widget/gtk/NativeMenuGtk.cpp
+@@ -20,10 +20,12 @@
+ #include "mozilla/dom/Element.h"
+ #include "mozilla/dom/XULCommandEvent.h"
+ #include "mozilla/intl/LocaleService.h"
++#include "mozilla/widget/IconLoader.h"
+ #include "nsCRT.h"
+ #include "nsGtkKeyUtils.h"
+ #include "nsGtkUtils.h"
+ #include "nsIWidget.h"
++#include "nsImageToPixbuf.h"
+ #include "nsLayoutUtils.h"
+ #include "nsPresContext.h"
+ #include "nsStubMutationObserver.h"
+@@ -49,6 +51,21 @@ static bool NodeIsRelevant(const nsINode& aNode) {
+                                   nsGkAtoms::menubar);
+ }
+ 
++// Returns the menu item whose icon aNode is, see NativeMenu::GetIcon(), or
++// null. A menu item adds its icon only when it is first shown, which is after
++// the item itself was added.
++static dom::Element* IconOwner(const nsINode& aNode) {
++  if (!aNode.IsHTMLElement(nsGkAtoms::img)) {
++    return nullptr;
++  }
++  dom::Element* parent = aNode.GetParentElement();
++  if (!parent || !parent->IsXULElement(nsGkAtoms::menuitem) ||
++      parent->GetFirstElementChild() != &aNode) {
++    return nullptr;
++  }
++  return parent;
++}
++
+ // If this is a radio / checkbox menuitem, get the current value.
+ static Maybe<bool> GetChecked(const dom::Element& aMenuItem) {
+   static dom::Element::AttrValuesArray strings[] = {nsGkAtoms::checkbox,
+@@ -201,6 +218,19 @@ class MenuModel : public nsStubMutationObserver {
+   virtual void RecomputeModel() = 0;
+   virtual ~MenuModel() { mElement->RemoveMutationObserver(this); }
+ 
++  // Called when the icon of aMenuItem changed, see IconOwner().
++  virtual void IconChanged(dom::Element& aMenuItem) {}
++
++  // Calls IconChanged() once the change of the DOM is complete, as an image
++  // which is being removed is still a child of its menu item.
++  void ScheduleIconChanged(dom::Element& aMenuItem) {
++    nsContentUtils::AddScriptRunner(NS_NewRunnableFunction(
++        "MenuModel::IconChanged",
++        [self = RefPtr{this}, menuItem = RefPtr{&aMenuItem}] {
++          self->IconChanged(*menuItem);
++        }));
++  }
++
+   void DirtyModel() {
+     mDirty = true;
+     if (mShowing) {
+@@ -249,18 +279,30 @@ void MenuModel::ContentWillBeRemoved(nsIContent* aChild,
+     nsContentUtils::AddScriptRunner(NS_NewRunnableFunction(
+         "MenuModel::ContentWillBeRemoved",
+         [self = RefPtr{this}, child = RefPtr{aChild}] { self->DirtyModel(); }));
++  } else if (dom::Element* owner = IconOwner(*aChild)) {
++    ScheduleIconChanged(*owner);
+   }
+ }
+ 
+ void MenuModel::ContentInserted(nsIContent* aChild, const ContentInsertInfo&) {
+   if (NodeIsRelevant(*aChild)) {
+     DirtyModel();
++  } else if (dom::Element* owner = IconOwner(*aChild)) {
++    ScheduleIconChanged(*owner);
+   }
+ }
+ 
+ void MenuModel::ContentAppended(nsIContent* aChild, const ContentAppendInfo&) {
+   if (NodeIsRelevant(*aChild)) {
+     DirtyModel();
++    return;
++  }
++  // aChild is the first of the appended children.
++  for (nsIContent* child = aChild; child; child = child->GetNextSibling()) {
++    if (dom::Element* owner = IconOwner(*child)) {
++      ScheduleIconChanged(*owner);
++      return;
++    }
+   }
+ }
+ 
+@@ -271,6 +313,10 @@ void MenuModel::AttributeChanged(dom::Element* aElement, int32_t,
+       (aAttribute == nsGkAtoms::label || aAttribute == nsGkAtoms::aria_label ||
+        aAttribute == nsGkAtoms::disabled || aAttribute == nsGkAtoms::hidden)) {
+     DirtyModel();
++  } else if (aAttribute == nsGkAtoms::src || aAttribute == nsGkAtoms::srcset) {
++    if (dom::Element* owner = IconOwner(*aElement)) {
++      ScheduleIconChanged(*owner);
++    }
+   }
+ }
+ 
+@@ -532,6 +578,7 @@ class MenubarModelDBus final : public MenuModel {
+ 
+  protected:
+   void RecomputeModel() override;
++  void IconChanged(dom::Element& aMenuItem) override;
+ 
+   // Brings the children of aParent in line with the children of aElement.
+   // The dbusmenu protocol identifies items by id, and a new DbusmenuMenuitem
+@@ -799,6 +846,120 @@ static DbusmenuMenuitem* GetOrCreateChild(
+   return aChildren.InsertElementAt(aPosition, std::move(item))->get();
+ }
+ 
++// The size of the icons of menu items, twice the 16 pixels at which menus show
++// them, so that they stay sharp on screens with a scale of up to 2. Clients
++// scale larger icons down to the size they show.
++static constexpr int32_t kDBusMenuIconSize = 32;
++
++// The icon of a DbusmenuMenuitem, see NativeMenu::GetIcon, which it owns. The
++// icon is loaded whenever the URL of the item's icon changes, and set as the
++// icon data of the item once it is loaded.
++class DBusMenuItemIcon final : public IconLoader::Listener {
++ public:
++  explicit DBusMenuItemIcon(DbusmenuMenuitem* aItem) : mItem(aItem) {}
++
++  ~DBusMenuItemIcon() {
++    if (mLoader) {
++      mLoader->Destroy();
++    }
++  }
++
++  const dom::Element* LastElement() const { return mLastElement; }
++
++  void Update(dom::Element& aElement) {
++    mLastElement = &aElement;
++    NativeMenuIcon icon = NativeMenu::GetIcon(aElement);
++    nsAutoCString spec;
++    if (icon) {
++      icon.mURI->GetSpec(spec);
++    }
++    if (spec == mSpec) {
++      return;
++    }
++    mSpec = spec;
++    if (mLoader) {
++      mLoader->Destroy();
++      mLoader = nullptr;
++    }
++    if (!icon) {
++      dbusmenu_menuitem_property_remove(mItem,
++                                        DBUSMENU_MENUITEM_PROP_ICON_DATA);
++      return;
++    }
++    mLoader = new IconLoader(this);
++    if (NS_FAILED(mLoader->LoadIcon(icon.mURI, &aElement))) {
++      mLoader->Destroy();
++      mLoader = nullptr;
++      dbusmenu_menuitem_property_remove(mItem,
++                                        DBUSMENU_MENUITEM_PROP_ICON_DATA);
++    }
++  }
++
++  nsresult OnComplete(imgIContainer* aImage) override {
++    RefPtr<GdkPixbuf> pixbuf = nsImageToPixbuf::ImageToPixbuf(
++        aImage, Some(nsIntSize(kDBusMenuIconSize, kDBusMenuIconSize)));
++    if (pixbuf) {
++      dbusmenu_menuitem_property_set_image(
++          mItem, DBUSMENU_MENUITEM_PROP_ICON_DATA, pixbuf);
++    } else {
++      dbusmenu_menuitem_property_remove(mItem,
++                                        DBUSMENU_MENUITEM_PROP_ICON_DATA);
++    }
++    RefPtr<IconLoader> loader = std::move(mLoader);
++    loader->Destroy();
++    return NS_OK;
++  }
++
++ private:
++  DbusmenuMenuitem* const mItem;
++  RefPtr<IconLoader> mLoader;
++  // The menu item whose icon was looked at last, only compared and never
++  // dereferenced, as the menu item may be gone.
++  const dom::Element* mLastElement = nullptr;
++  // The URL of the icon loaded last, empty for an item without an icon.
++  nsCString mSpec;
++};
++
++// Looks at the icon of aElement for aItem. Unless aForce is true, an item
++// which already has the icon of aElement keeps it, as changes of the icon
++// arrive through MenubarModelDBus::IconChanged().
++static void UpdateIcon(DbusmenuMenuitem* aItem, dom::Element& aElement,
++                       bool aForce) {
++  static const char kKey[] = "moz-menu-item-icon";
++  auto* icon =
++      static_cast<DBusMenuItemIcon*>(g_object_get_data(G_OBJECT(aItem), kKey));
++  if (!icon) {
++    icon = new DBusMenuItemIcon(aItem);
++    g_object_set_data_full(G_OBJECT(aItem), kKey, icon, [](gpointer aIcon) {
++      delete static_cast<DBusMenuItemIcon*>(aIcon);
++    });
++  } else if (!aForce && icon->LastElement() == &aElement) {
++    return;
++  }
++  icon->Update(aElement);
++}
++
++// Returns the item below aParent which shows aElement, or null.
++static DbusmenuMenuitem* FindItem(DbusmenuMenuitem* aParent,
++                                  const dom::Element& aElement) {
++  for (GList* l = dbusmenu_menuitem_get_children(aParent); l; l = l->next) {
++    auto* item = static_cast<DbusmenuMenuitem*>(l->data);
++    if (Props::Element(item) == &aElement) {
++      return item;
++    }
++    if (DbusmenuMenuitem* found = FindItem(item, aElement)) {
++      return found;
++    }
++  }
++  return nullptr;
++}
++
++void MenubarModelDBus::IconChanged(dom::Element& aMenuItem) {
++  if (DbusmenuMenuitem* item = FindItem(mRoot.get(), aMenuItem)) {
++    UpdateIcon(item, aMenuItem, /* aForce */ true);
++  }
++}
++
+ // Appends aText to aResult, doubling its underscores, which the dbusmenu
+ // protocol uses to mark the mnemonic of a label.
+ static void AppendEscapedForDBus(const nsAString& aText, nsAString& aResult) {
+@@ -906,7 +1067,9 @@ void MenubarModelDBus::SyncChildren(DbusmenuMenuitem* aParent,
+       UpdateAccel(item, element);
+       UpdateRadioOrCheck(item, element);
+       UpdateEnabled(item, element);
+-      // TODO: icons
++      // NativeMenu::GetIcon() computes the style of the icon, which needs a
++      // mutable element.
++      UpdateIcon(item, const_cast<dom::Element&>(*element), /* aForce */ false);
+       continue;
+     }
+     if (child->IsXULElement(nsGkAtoms::menuseparator)) {

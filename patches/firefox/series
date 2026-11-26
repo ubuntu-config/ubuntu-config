@@ -8,3 +8,9 @@ sigterm-handler-after-app-shell.patch
 tab-crash-without-frame-loader.patch
 quit-at-session-end.patch
 local-handler-through-gio.patch
+global-menu-incremental-model.patch
+global-menu-reuse-items.patch
+global-menu-no-placeholder-items.patch
+global-menu-disabled-items.patch
+global-menu-mnemonics.patch
+global-menu-icons.patch

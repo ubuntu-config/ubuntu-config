@@ -92,10 +92,10 @@ function describeItems(menu) {
 
 /**
  * Describes where the labels of the items of a menu start, which items have an icon, and which labels underline the
- * letter of their mnemonic, which the global menu does with markup.
+ * letter of their mnemonic, which the global menu does with markup, also for the items of its open submenus.
  *
  * @param {object} menu - the menu
- * @returns {object[]} each item with a label, as {label, x, icon, underlined}
+ * @returns {object[]} each item with a label, as {label, x, icon, underlined}, and an open submenu also with its items
  */
 function describeLayout(menu) {
     return menu._getMenuItems()
@@ -106,6 +106,7 @@ function describeLayout(menu) {
             icon: item.get_children().some(child => child instanceof St.Icon && child.gicon &&
                 child.has_style_class_name('popup-menu-icon')),
             underlined: item.label.clutter_text.use_markup,
+            ...item.menu?.isOpen ? {items: describeLayout(item.menu)} : {},
         }));
 }
 

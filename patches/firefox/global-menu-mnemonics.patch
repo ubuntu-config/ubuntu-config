@@ -1,0 +1,153 @@
+Description: Mark the access keys of the menus which Firefox exports over D-Bus as their mnemonics.
+ With the global menu bar (widget.gtk.global-menu.enabled), Firefox exports the menus of its menu bar with the
+ dbusmenu protocol, whose labels mark the mnemonic with an underscore before its letter, as GTK labels do. Firefox
+ exported the plain labels, so the desktop could neither underline the access keys nor open a menu with Alt and its
+ letter, and an underscore in a label, as in a page title in the History menu, marked a mnemonic the item does not
+ have and was not shown. The labels now mark the access key where the menus in the window underline it
+ (MozTextLabel.formatAccessKey in toolkit/content/widgets/text.js): at its first occurrence in the label, or else
+ appended in parentheses, as some locales always do. Underscores in the labels are doubled.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-26
+diff --git a/widget/gtk/NativeMenuGtk.cpp b/widget/gtk/NativeMenuGtk.cpp
+index e354d7b1e392..a1d5c6ae1e96 100644
+--- a/widget/gtk/NativeMenuGtk.cpp
++++ b/widget/gtk/NativeMenuGtk.cpp
+@@ -12,12 +12,14 @@
+ #include "gdk/gdkkeysyms-compat.h"
+ #include "mozilla/BasicEvents.h"
+ #include "mozilla/EventDispatcher.h"
++#include "mozilla/StaticPrefs_ui.h"
+ #include "mozilla/StaticPrefs_widget.h"
+ #include "mozilla/WidgetUtilsGtk.h"
+ #include "mozilla/dom/Document.h"
+ #include "mozilla/dom/DocumentInlines.h"
+ #include "mozilla/dom/Element.h"
+ #include "mozilla/dom/XULCommandEvent.h"
++#include "mozilla/intl/LocaleService.h"
+ #include "nsCRT.h"
+ #include "nsGtkKeyUtils.h"
+ #include "nsGtkUtils.h"
+@@ -26,6 +28,7 @@
+ #include "nsPresContext.h"
+ #include "nsStubMutationObserver.h"
+ #include "nsThreadUtils.h"
++#include "nsUnicharUtils.h"
+ #include "nsWindow.h"
+ 
+ #ifdef MOZ_WAYLAND
+@@ -796,6 +799,87 @@ static DbusmenuMenuitem* GetOrCreateChild(
+   return aChildren.InsertElementAt(aPosition, std::move(item))->get();
+ }
+ 
++// Appends aText to aResult, doubling its underscores, which the dbusmenu
++// protocol uses to mark the mnemonic of a label.
++static void AppendEscapedForDBus(const nsAString& aText, nsAString& aResult) {
++  for (uint32_t i = 0; i < aText.Length(); ++i) {
++    char16_t c = aText.CharAt(i);
++    if (c == u'_') {
++      aResult.Append(u'_');
++    }
++    aResult.Append(c);
++  }
++}
++
++// Returns the label of aElement for the dbusmenu protocol, with its access key
++// marked as the mnemonic, where the menus in the window underline it (see
++// MozTextLabel.formatAccessKey in toolkit/content/widgets/text.js): the first
++// occurrence of the key in the label, or else the key appended in parentheses.
++static nsCString DBusLabel(const dom::Element& aElement) {
++  nsAutoString label;
++  aElement.GetAttr(nsGkAtoms::label, label);
++  if (label.IsEmpty()) {
++    aElement.GetAttr(nsGkAtoms::aria_label, label);
++  }
++
++  nsAutoString accessKey;
++  if (StaticPrefs::ui_key_menuAccessKey() != 0) {
++    aElement.GetAttr(nsGkAtoms::accesskey, accessKey);
++  }
++  nsAutoString result;
++  if (accessKey.IsEmpty()) {
++    AppendEscapedForDBus(label, result);
++    return NS_ConvertUTF16toUTF8(result);
++  }
++  accessKey.Truncate(1);
++  nsAutoString upperAccessKey(accessKey);
++  ToUpperCase(upperAccessKey);
++
++  auto* localeService = intl::LocaleService::GetInstance();
++  int32_t index = kNotFound;
++  if (!localeService->AlwaysAppendAccesskeys()) {
++    index = label.Find(accessKey);
++    if (index == kNotFound) {
++      nsAutoString upperLabel(label);
++      ToUpperCase(upperLabel);
++      index = upperLabel.Find(upperAccessKey);
++    }
++  } else {
++    nsAutoString appended(u"("_ns);
++    appended.Append(upperAccessKey);
++    appended.Append(u')');
++    if (StringEndsWith(label, appended)) {
++      index = int32_t(label.Length()) - 2;
++    }
++  }
++
++  if (index != kNotFound) {
++    AppendEscapedForDBus(Substring(label, 0, index), result);
++    result.Append(u'_');
++    AppendEscapedForDBus(Substring(label, index), result);
++    return NS_ConvertUTF16toUTF8(result);
++  }
++
++  // A colon at the end stays after the parentheses, and a space at the end
++  // separates them already.
++  bool endsWithColon = StringEndsWith(label, u":"_ns);
++  if (endsWithColon) {
++    label.Truncate(label.Length() - 1);
++  }
++  AppendEscapedForDBus(label, result);
++  if (localeService->InsertSeparatorBeforeAccesskeys() &&
++      !StringEndsWith(label, u" "_ns)) {
++    result.Append(u' ');
++  }
++  result.Append(u"(_"_ns);
++  AppendEscapedForDBus(upperAccessKey, result);
++  result.Append(u')');
++  if (endsWithColon) {
++    result.Append(u':');
++  }
++  return NS_ConvertUTF16toUTF8(result);
++}
++
+ void MenubarModelDBus::SyncChildren(DbusmenuMenuitem* aParent,
+                                     const dom::Element& aElement) {
+   AutoTArray<RefPtr<DbusmenuMenuitem>, 32> children;
+@@ -817,13 +901,8 @@ void MenubarModelDBus::SyncChildren(DbusmenuMenuitem* aParent,
+     if (child->IsXULElement(nsGkAtoms::menuitem)) {
+       const dom::Element* element = child->AsElement();
+       DbusmenuMenuitem* item = GetOrCreate(DBusItemKind::MenuItem, element);
+-      nsAutoString label;
+-      element->GetAttr(nsGkAtoms::label, label);
+-      if (label.IsEmpty()) {
+-        element->GetAttr(nsGkAtoms::aria_label, label);
+-      }
+       dbusmenu_menuitem_property_set(item, DBUSMENU_MENUITEM_PROP_LABEL,
+-                                     NS_ConvertUTF16toUTF8(label).get());
++                                     DBusLabel(*element).get());
+       UpdateAccel(item, element);
+       UpdateRadioOrCheck(item, element);
+       UpdateEnabled(item, element);
+@@ -837,10 +916,8 @@ void MenubarModelDBus::SyncChildren(DbusmenuMenuitem* aParent,
+     if (child->IsXULElement(nsGkAtoms::menu)) {
+       if (const auto* popup = GetMenuPopupChild(*child->AsElement())) {
+         DbusmenuMenuitem* submenu = GetOrCreate(DBusItemKind::Submenu, popup);
+-        nsAutoString label;
+-        child->AsElement()->GetAttr(nsGkAtoms::label, label);
+         dbusmenu_menuitem_property_set(submenu, DBUSMENU_MENUITEM_PROP_LABEL,
+-                                       NS_ConvertUTF16toUTF8(label).get());
++                                       DBusLabel(*child->AsElement()).get());
+         UpdateEnabled(submenu, child);
+         dbusmenu_menuitem_property_set(submenu,
+                                        DBUSMENU_MENUITEM_PROP_CHILD_DISPLAY,

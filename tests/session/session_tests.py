@@ -12,9 +12,11 @@ import os
 import pathlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
+import zlib
 
 # Python runs with -I, which leaves this directory out of the search path.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -1326,8 +1328,8 @@ def check_menu_keys(session, checks, name, titles, mnemonic):
     """Checks the keys of the global menu. F10 and a tap of the left Alt open the menu of the application's name with
     the keyboard focus on its first item, and Right moves from it to the first menu. Alt with the mnemonic of the first
     menu opens that menu with the keyboard focus on its first item. Right and Left move to the next menu and back, and
-    Escape closes the menu. An application which exports no mnemonics, as Firefox, has mnemonic None, and the keys are
-    checked from the menu of the application's name."""
+    Escape closes the menu. An application which exports no mnemonics has mnemonic None, and the keys are checked from
+    the menu of the application's name."""
     first, second = titles[0], titles[1]
     app = menu_state(session)["titles"][0]
 
@@ -1826,13 +1828,93 @@ def global_menu_chromium(session, checks, out_dir):
                                None, "f", [(["File", "New window"], "opens a second window", more_windows(session))])
 
 
+def write_png(path, size=16, color=(200, 30, 30)):
+    """Writes a square PNG of a single color."""
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    rows = b"".join(b"\x00" + bytes(color) * size for _ in range(size))
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)) +
+                     chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+# The page whose History entry global_menu_firefox checks, also its title, which has underscores.
+ICON_PAGE = "page_with_icon"
+
+
 @test
 def global_menu_firefox(session, checks, out_dir):
     """Firefox names its menu with org_kde_kwin_appmenu with the preferences of firefox/policies.json, and New Window in
-    its File menu opens a window. Firefox exports its menus without mnemonics, so Alt with a letter stays with
-    Firefox."""
-    return electron_or_browser(session, checks, "Firefox", "firefox about:blank", "Firefox", None, None,
-                               [(["File", "New Window"], "opens a second window", more_windows(session))])
+    its File menu opens a window. Firefox exports the access keys of its menus as mnemonics with
+    patches/firefox/global-menu-mnemonics.patch, so Alt+F opens File, and the underscores of a label as they are, so the
+    History entry of a page whose title has underscores shows them. With global-menu-icons.patch, the entry also has an
+    icon, and so has the bookmark of the page the first time its folder opens, although Firefox adds the icon of a menu
+    item only when it first shows the item, after it exported the item."""
+    pages = pathlib.Path.home() / "pages"
+    pages.mkdir(parents=True, exist_ok=True)
+    write_png(pages / "icon.png")
+    (pages / f"{ICON_PAGE}.html").write_text(
+        f'<!DOCTYPE html><title>{ICON_PAGE}</title><link rel="icon" href="icon.png"><p>{ICON_PAGE}</p>\n')
+    server = serve(pages)
+    history = {}
+
+    def visit(window):
+        session.press("l", "Control_L")
+        time.sleep(0.5)
+        session.type_text(f"localhost:{WEB_PORT}/{ICON_PAGE}.html\n")
+
+    def open_history(window):
+        # Firefox stores the icon of a page a moment after loading it, and fills the History menu when it opens.
+        for _ in range(10):
+            session.call("clickGlobalMenu", "History")
+            state = wait_menu(session, lambda s: s["open"] == "History" and any(
+                item["label"] == ICON_PAGE and item["icon"] for item in s["layout"] or []), 5)
+            history["entry"] = next((item for item in state["layout"] or [] if item["label"] == ICON_PAGE), None)
+            history["labels"] = [item["label"] for item in state["layout"] or []]
+            session.press("Escape")
+            wait_menu(session, lambda s: s["open"] is None)
+            if history["entry"] and history["entry"]["icon"]:
+                return
+            time.sleep(1)
+
+    def find_entry(items):
+        for item in items or []:
+            found = item if item["label"] == ICON_PAGE else find_entry(item.get("items"))
+            if found:
+                return found
+        return None
+
+    def open_bookmark(window):
+        # Ctrl+D adds the page to the Bookmarks Toolbar folder, and Return closes the panel it opens. Only the first
+        # opening of the folder shows whether Firefox exports an icon which it adds after exporting the item, as a later
+        # change of the menus exports it in any case.
+        session.press("d", "Control_L")
+        time.sleep(3)
+        session.press("Return")
+        time.sleep(3)
+        click_path(session, ["Bookmarks", "Bookmarks Toolbar"])
+        state = wait_menu(session, lambda s: (find_entry(s["layout"]) or {}).get("icon"), 10)
+        history["bookmark"] = find_entry(state["layout"])
+        history["bookmarks"] = state["layout"]
+        for _ in range(3):
+            if menu_state(session)["open"] is None:
+                break
+            session.press("Escape")
+            wait_menu(session, lambda s: s["open"] is None, 2)
+
+    try:
+        return electron_or_browser(session, checks, "Firefox", "firefox about:blank", "Firefox", None, "f",
+                                   [(visit, f"loads the page {ICON_PAGE}", lambda window: find(session.windows(), titled(ICON_PAGE))),
+                                    (open_history, f"the History menu lists {ICON_PAGE} with its underscores and its icon",
+                                     lambda window: bool(history.get("entry") and history["entry"]["icon"])),
+                                    (open_bookmark, f"the Bookmarks Toolbar menu lists the bookmark of {ICON_PAGE} with its icon "
+                                     "the first time it opens", lambda window: bool(history.get("bookmark") and history["bookmark"]["icon"])),
+                                    (["File", "New Window"], "opens a second window", more_windows(session))])
+    finally:
+        server.terminate()
+        if "labels" in history and not (history["entry"] and history["entry"]["icon"]):
+            checks.check(f"the History menu had the entries {history['labels']}, {ICON_PAGE} as {history['entry']}", False)
+        if "bookmarks" in history and not (history["bookmark"] and history["bookmark"]["icon"]):
+            checks.check(f"the Bookmarks menu had the items {history['bookmarks']}", False)
 
 
 @test

@@ -15,9 +15,6 @@ const INTERFACE = 'com.canonical.dbusmenu';
 const LAYOUT_QUIET_MS = 50;
 const LAYOUT_MAX_DELAY_MS = 500;
 
-// How deep submenus which come without items are filled, see _fillEmptySubmenus().
-const SUBMENU_DEPTH = 3;
-
 // How often an item is looked up and activated, and how long to wait between the attempts, see _activateByPath().
 const ACTIVATE_ATTEMPTS = 3;
 const ACTIVATE_RETRY_MS = 100;
@@ -59,7 +56,7 @@ function iconOf(node) {
 /**
  * The menu of a window exported over com.canonical.dbusmenu, by Chromium, Electron, Firefox, Qt and LibreOffice under
  * XWayland. It keeps the whole layout, read again whenever the application announces a change, so that a menu opens
- * with its items at once, and it asks the application to update a menu right before the menu opens.
+ * with its items at once, and it asks the application to update a menu or submenu right before it opens.
  *
  * Signals: "titles-changed" when the top-level menus change, "content-changed" when anything changes, and
  * "activation-requested" with the index of a top-level menu when the application asks for it to be opened, which Qt
@@ -81,6 +78,9 @@ export class DbusMenuModel extends Signals.EventEmitter {
         // The IDs of the submenus asked to fill themselves, which are asked only once, as an application can leave a
         // submenu empty and announce a new layout each time it is asked.
         this._asked = new Set();
+        // The paths of the open menus and submenus, see _pathEntry(), by their JSON. Their submenus can open next, so
+        // they are filled whenever the layout is read.
+        this._openPaths = new Map();
         this._layoutTimeoutId = 0;
         // The time of the first LayoutUpdated signal since the layout was last read, in microseconds of the monotonic
         // clock.
@@ -132,7 +132,14 @@ export class DbusMenuModel extends Signals.EventEmitter {
         const serial = ++this._fetchSerial;
         try {
             const root = await this._getLayout(0);
-            await this._fillEmptySubmenus(root, SUBMENU_DEPTH);
+            // Only the menus which can open next are filled: the top-level menus, and the submenus of the open menus
+            // and submenus, which an application which sets its menu again, as Electron does, sends empty again.
+            await this._fillEmptySubmenus(root);
+            for (const path of this._openPaths.values()) {
+                const node = this._lookup(root, path);
+                if (node)
+                    await this._fillEmptySubmenus(node);
+            }
             if (serial !== this._fetchSerial)
                 return;
             this._root = root;
@@ -145,22 +152,53 @@ export class DbusMenuModel extends Signals.EventEmitter {
     }
 
     /**
-     * Reads the items of the submenus which come without items. Electron fills a submenu only when it is about to be
-     * shown, while a menu without items does not open, and the items have to be there for the keyboard to reach them.
+     * Reads the items of the submenus of a node which come without items. Electron fills a submenu only when it is
+     * about to be shown (AboutToShow), and Firefox only when it is told that the submenu opened, as with the folders of
+     * its Bookmarks menu, so both are sent, as KDE Plasma sends them, and the submenu is closed again. A menu without
+     * items does not open, and the items have to be there for the keyboard to reach them.
      *
      * @param {{id: number, props: object, children: object[]}} node - the node whose submenus are filled
-     * @param {number} depth - how many levels of submenus below the node are filled
+     * @returns {Promise<boolean>} whether a submenu received items
      */
-    async _fillEmptySubmenus(node, depth) {
-        if (depth <= 0)
-            return;
+    async _fillEmptySubmenus(node) {
+        let filled = false;
         for (const child of node.children) {
-            if (child.props['children-display'] === 'submenu' && !child.children.length && !this._asked.has(child.id)) {
-                this._asked.add(child.id);
-                await this._call('AboutToShow', new GLib.Variant('(i)', [child.id]), '(b)');
-                child.children = (await this._getLayout(child.id)).children;
-            }
-            await this._fillEmptySubmenus(child, depth - 1);
+            if (child.props['children-display'] !== 'submenu' || child.children.length || this._asked.has(child.id))
+                continue;
+            this._asked.add(child.id);
+            await this._call('AboutToShow', new GLib.Variant('(i)', [child.id]), '(b)');
+            await this._notify(child.id, 'opened');
+            child.children = (await this._getLayout(child.id)).children;
+            this._notify(child.id, 'closed');
+            filled ||= child.children.length > 0;
+        }
+        return filled;
+    }
+
+    /**
+     * Returns the node at a path in a layout, without asking the application to fill the submenus on the way, which
+     * _findByPath() does.
+     *
+     * @param {{id: number, props: object, children: object[]}} root - the layout
+     * @param {{label: string, nth: number}[]} path - the path, see _findByPath()
+     * @returns {object|null} the node, or null when the layout has no such node
+     */
+    _lookup(root, path) {
+        let node = root;
+        for (const {label, nth} of path) {
+            node = node.children.filter(child => child.props.label === label)[nth];
+            if (!node)
+                return null;
+        }
+        return node;
+    }
+
+    // Forgets an open menu or submenu, and the open submenus inside it, whose paths start with its path.
+    _forgetOpen(path) {
+        const prefix = JSON.stringify(path).slice(0, -1);
+        for (const key of [...this._openPaths.keys()]) {
+            if (key.startsWith(prefix))
+                this._openPaths.delete(key);
         }
     }
 
@@ -253,12 +291,17 @@ export class DbusMenuModel extends Signals.EventEmitter {
         const node = this._topLevel()[index];
         if (!node)
             return false;
+        const path = [this._pathEntry(this._root, node)];
+        this._openPaths.set(JSON.stringify(path), path);
         let needUpdate = false;
         try {
             [needUpdate] = (await this._call('AboutToShow', new GLib.Variant('(i)', [node.id]), '(b)')).deepUnpack();
             this._notify(node.id, 'opened');
             if (needUpdate)
                 node.children = (await this._getLayout(node.id)).children;
+            // The submenus of the menu can open next.
+            if (await this._fillEmptySubmenus(node))
+                needUpdate = true;
         } catch (error) {
             if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 console.debug(`global-menu: updating a menu of ${this._busName} failed: ${error.message}`);
@@ -274,8 +317,10 @@ export class DbusMenuModel extends Signals.EventEmitter {
      */
     closed(index) {
         const node = this._topLevel()[index];
-        if (node)
-            this._notify(node.id, 'closed');
+        if (!node)
+            return;
+        this._forgetOpen([this._pathEntry(this._root, node)]);
+        this._notify(node.id, 'closed');
     }
 
     _event(id, eventId, timestamp = 0) {
@@ -351,6 +396,7 @@ export class DbusMenuModel extends Signals.EventEmitter {
             if (props['children-display'] === 'submenu' || node.children.length) {
                 const submenu = spec.addSubmenu({
                     text, mnemonicIndex: index, enabled: props.enabled !== false, icon: iconOf(node),
+                    onOpenStateChanged: open => this._submenuOpenStateChanged(path, open),
                 });
                 this._fillChildren(node, submenu, path);
                 continue;
@@ -368,6 +414,32 @@ export class DbusMenuModel extends Signals.EventEmitter {
             });
         }
         spec.trimSeparator();
+    }
+
+    // Tells the application about a submenu which opened or closed, as prepare() and closed() do for a top-level
+    // menu, so that it can update the submenu, as Firefox does with the History and Bookmarks submenus. The layout is
+    // read again then, which also fills the empty submenus of an opened submenu, so that they can open too. The
+    // submenu is looked up by its path, as _activate() looks up an item.
+    async _submenuOpenStateChanged(path, open) {
+        if (open)
+            this._openPaths.set(JSON.stringify(path), path);
+        else
+            this._forgetOpen(path);
+        try {
+            const node = await this._findByPath(await this._getLayout(0), path);
+            if (!node)
+                return;
+            if (!open) {
+                await this._notify(node.id, 'closed');
+                return;
+            }
+            await this._call('AboutToShow', new GLib.Variant('(i)', [node.id]), '(b)');
+            await this._notify(node.id, 'opened');
+            await this._fetch();
+        } catch (error) {
+            if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                console.debug(`global-menu: updating a submenu of ${this._busName} failed: ${error.message}`);
+        }
     }
 
     async _activate(path, event) {

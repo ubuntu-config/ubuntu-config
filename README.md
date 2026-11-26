@@ -207,8 +207,8 @@ Chromium and Firefox restore all their windows at their next start. The Quit of 
 same. A tap of the Alt key (which after the key rotation of [Keyboard like on macOS](#keyboard-like-on-macos) is only
 the left physical Win key) or F10 opens the menu of the application's name, and Alt with the underlined letter of a menu
 opens that menu. In an open menu the letters are underlined while Alt is held, and once the keyboard opened the menu or
-was used in it, and pressing the letter of an item acts on that item. Firefox and some Electron applications export
-their menus without underlined letters, so there Alt with a letter stays with the application. The window stays active
+was used in it, and pressing the letter of an item acts on that item. Some Electron applications export their menus
+without underlined letters, so there Alt with a letter stays with the application. The window stays active
 while one of these menus is open, and the keys of the menu go to the menu, while a shortcut of the window, a key with
 Ctrl or Super, Insert or Delete with Shift, or a function key, closes the menu and acts in the window. While the middle
 of the top bar is empty, as it is with the clock moved to the right by Just Perfection, the menus have the whole width
@@ -236,7 +236,9 @@ Requirements:
   applications started (`global-menu-registrar.py`, `systemd/user/global-menu-registrar.service`, installed by
   `configure-gnome-desktop.sh`).
 - Firefox exporting its menu, which it does only with two preferences, set as defaults by an enterprise policy
-  (`firefox/policies.json`, installed by `configure-gnome-desktop.sh`), and with the `libdbusmenu-gtk3-4` package.
+  (`firefox/policies.json`, installed by `configure-gnome-desktop.sh`), and with the `libdbusmenu-gtk3-4` package, and
+  exporting the underlined letters of its menus and the icons of its menu items, such as the icons of the pages in
+  its History menu (`patches/firefox/`).
 - Visual Studio Code with its native title bar, without which it draws its menus itself and exports none
   (`window.titleBarStyle` set to `native` by `configure-gnome-desktop.sh`, and left out of Settings Sync).
 
