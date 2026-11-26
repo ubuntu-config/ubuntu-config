@@ -2203,6 +2203,40 @@ def global_menu_overflow(session, checks, out_dir):
 
 
 @test
+def fixed_size_window_centered(session, checks, out_dir):
+    """With center-new-windows off, as configure-gnome-desktop.sh sets it, a window which can be resized opens in the
+    first free spot, and a window of a fixed size without a parent opens in the middle of the work area, as Claude
+    Desktop's Quick Entry should (patches/mutter/center-fixed-size-windows.patch). The windows are GTK 3, which declares
+    the fixed size before the window's first commit, as Electron does."""
+    session.login()
+    setting = subprocess.run(["gsettings", "get", "org.gnome.mutter", "center-new-windows"], capture_output=True,
+                             text=True).stdout.strip()
+    checks.check("center-new-windows is off", setting == "false", setting)
+    work_area = session.eval("""(() => {
+        const area = Main.layoutManager.getWorkAreaForMonitor(Main.layoutManager.primaryIndex);
+        return {x: area.x, y: area.y, width: area.width, height: area.height};
+    })()""")
+
+    def centered(window):
+        x = work_area["x"] + (work_area["width"] - window["width"]) // 2
+        y = work_area["y"] + (work_area["height"] - window["height"]) // 2
+        return abs(window["x"] - x) <= 1 and abs(window["y"] - y) <= 1
+
+    windows = {}
+    for title, fixed in (("resizable-window", ""), ("fixed-size-window", " fixed")):
+        session.call("spawnCommandLine", f"python3 {APPS_DIR}/sizedwindow.py gtk3 {title} 400 300{fixed}")
+        windows[title] = shown_window(session, None, lambda w, title=title: w["title"] == title, 30)
+        checks.check(f"the window {title} opened", bool(windows[title]), str(window_summary(windows[title])))
+    resizable, fixed = windows["resizable-window"], windows["fixed-size-window"]
+    checks.check("the window which can be resized is not in the middle of the work area",
+                 bool(resizable) and not centered(resizable), str([work_area, window_summary(resizable)]))
+    checks.check("the window of a fixed size is in the middle of the work area", bool(fixed) and centered(fixed),
+                 str([work_area, window_summary(fixed)]))
+    session.logout()
+    return {}
+
+
+@test
 def looking_glass_focus(session, checks, out_dir):
     """Creating Looking Glass leaves the keyboard with the focused window. Just Perfection creates it a second after it
     is enabled, at every login, and Looking Glass, created hidden, selects its first page then, which moved the key focus

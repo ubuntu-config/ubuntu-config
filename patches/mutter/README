@@ -339,6 +339,34 @@ forward-key-event.patch
 
       open a menu in the top bar         then Ctrl+Shift+N should close it and open a new window
 
+center-fixed-size-windows.patch
+    Centers a normal window whose minimum and maximum sizes are equal, as mutter centers a dialog, also with
+    center-new-windows off, which configure-gnome-desktop.sh sets. Claude Desktop's Quick Entry opened near
+    the top left of the monitor: it runs natively on Wayland, where a client cannot position its windows,
+    and Quick Entry is a normal window without a parent, which mutter placed in the first free spot.
+    Electron declares a BrowserWindow which cannot be resized, as Quick Entry, with equal minimum and
+    maximum sizes, which the patch looks at. Other windows of a fixed size without a parent open in the
+    middle too, while windows which can be resized keep the first free spot, and a window with a parent is
+    still centered over its parent. Mutter places a Wayland window at its first commit, and GTK 3 and
+    Electron declare the fixed size before it, while GTK 4 declares it only later, so a GTK 4 window of a
+    fixed size still opens in the first free spot.
+
+    The stacking test fixed-size-placement is added, which runs during the build. With center-new-windows
+    off, it checks that a window which can be resized is still placed in the first free spot, and that a
+    window of a fixed size is centered on the monitor, from a Wayland and from an X11 client. The test
+    client gains the command set_fixed_size for it, which sets the window's minimum and maximum size to its
+    size. The reference test /wayland/toplevel/fixed-size-fullscreen opens a window of a fixed size without
+    center-new-windows, and its first reference image shows the window in the first free spot, so the test
+    moves the window there before it compares the image.
+
+    Not proposed upstream yet: mutter centers all new windows by default, so the change matters only with
+    center-new-windows off. After a version bump, check that window_place_centered() in src/core/place.c
+    still decides how a new normal window is placed.
+
+    Check by hand after a rebuild and a new login:
+
+      open Claude's Quick Entry          it should open in the middle of the monitor
+
 global-menu-symbols.patch (debian-series)
     Lists the functions keep-keyboard-focus.patch, kde-appmenu.patch, shell-shows-menubar.patch,
     watched-modifiers.patch and forward-key-event.patch add in debian/libmutter-18-0.symbols. Ubuntu

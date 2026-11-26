@@ -15,3 +15,4 @@ kde-appmenu.patch
 shell-shows-menubar.patch
 watched-modifiers.patch
 forward-key-event.patch
+center-fixed-size-windows.patch

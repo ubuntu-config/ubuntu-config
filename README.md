@@ -361,13 +361,17 @@ Requirements:
 
 Tapping the right Super on its own opens Claude Desktop's Quick Entry, and tapping the left Super on its own opens
 the overview. Held together with other keys, both stay an ordinary Super, so Ctrl+Super+L, both right of the
-space bar, locks the screen.
+space bar, locks the screen. Quick Entry opens in the middle of the monitor, although new windows otherwise open in
+the first free spot.
 
 Requirements:
 
 - Keys tapped on their own, next to GNOME's overview and locate-pointer keys, which send configured key combinations
   (`patches/mutter/`). The right Super sends XF86Launch9, which no physical key sends (`configure-gnome-keys.sh`).
 - Claude Desktop's Quick Entry shortcut set to that key, in the application.
+- Windows of a fixed size, as Quick Entry, opened in the middle of the monitor as dialogs are, while
+  `center-new-windows` is off for other windows (`patches/mutter/`). On Wayland, Claude Desktop cannot position
+  Quick Entry itself.
 
 Framework's BIOS can turn the key right of the right Alt into a Copilot key, but do not switch it and leave it as
 Right Ctrl, the default. This configuration supersedes a Copilot key: the key stays a full Super, and a tap of it

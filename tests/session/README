@@ -88,6 +88,11 @@ The tests:
                   the keyboard with the focused GTK 4 window of apps/menuapp.py, which needs
                   patches/gnome-shell/looking-glass-focus-while-hidden.patch. Opened, Looking Glass has the key focus in
                   its entry, and once it is closed the window has the keyboard again.
+  fixed-size-window-centered
+                  With center-new-windows off, as configure-gnome-desktop.sh sets it, a GTK 3 window of
+                  apps/sizedwindow.py which can be resized opens in the first free spot, and one of a fixed size opens
+                  in the middle of the work area, as Claude Desktop's Quick Entry should, which needs
+                  patches/mutter/center-fixed-size-windows.patch.
 
 The tests of the global menu, gnome-extensions/global-menu@mitar.tnode.com with patches/mutter/, each install the
 extension for the test user and enable it at login, after the extensions which change the top bar on the configured

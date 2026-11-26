@@ -301,7 +301,9 @@ test_session:
           - overview-thumbnails
           - restore-monitors
           - restart-bus
-      - TEST: looking-glass-focus
+      - TEST:
+          - looking-glass-focus
+          - fixed-size-window-centered
         SESSION_TEST_APPS: gtk
 
   before_script:

@@ -1,0 +1,183 @@
+Description: Center a normal window of a fixed size, as a dialog, also without center-new-windows.
+ With center-new-windows off, mutter centers only dialogs, modal dialogs and splash screens, and places a normal
+ window in the first free spot, often near the top left of the monitor. A Wayland client cannot position its
+ windows itself, and has no window type to tell mutter that a small window, as Claude Desktop's Quick Entry, should
+ open in the middle: such a window is a normal window without a parent, and only its size is fixed, its minimum and
+ maximum size being equal, which is how Electron declares a BrowserWindow which cannot be resized.
+ window_place_centered() now also centers a normal window whose minimum and maximum sizes are equal. A window with
+ a parent is still centered over its parent.
+ .
+ The stacking test fixed-size-placement checks that, with center-new-windows off, a window which can be resized is
+ still placed in the first free spot, and that a window of a fixed size is centered on the monitor, from a Wayland
+ and from an X11 client. The test client gains the command set_fixed_size, which sets the window's minimum and
+ maximum size to its size. The reference test /wayland/toplevel/fixed-size-fullscreen of wayland-unit-tests opens a
+ window of a fixed size without center-new-windows, and its first reference image shows the window in the first
+ free spot, so the test moves the window there before it compares the image.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-26
+
+diff --git a/src/core/place.c b/src/core/place.c
+index 43ffd2f..c2a07bd 100644
+--- a/src/core/place.c
++++ b/src/core/place.c
+@@ -445,6 +445,14 @@ window_overlaps_focus_window (MetaWindow *window,
+                                   &overlap);
+ }
+ 
++/* A window whose minimum and maximum sizes are equal cannot be resized. */
++static gboolean
++window_has_fixed_size (MetaWindow *window)
++{
++  return (window->size_hints.min_width == window->size_hints.max_width &&
++          window->size_hints.min_height == window->size_hints.max_height);
++}
++
+ static gboolean
+ window_place_centered (MetaWindow *window)
+ {
+@@ -452,10 +460,17 @@ window_place_centered (MetaWindow *window)
+ 
+   type = window->type;
+ 
++  /* A normal window of a fixed size is placed as a dialog is, centered,
++   * also without center-new-windows: a Wayland client cannot position its
++   * windows itself, and small windows of a fixed size which it would center,
++   * as quick entry or launcher windows, have no type which tells mutter.
++   */
+   return (type == META_WINDOW_DIALOG ||
+           type == META_WINDOW_MODAL_DIALOG ||
+           type == META_WINDOW_SPLASHSCREEN ||
+-         (type == META_WINDOW_NORMAL && meta_prefs_get_center_new_windows ()));
++         (type == META_WINDOW_NORMAL &&
++          (meta_prefs_get_center_new_windows () ||
++           window_has_fixed_size (window))));
+ }
+ 
+ static void
+diff --git a/src/tests/meson.build b/src/tests/meson.build
+index c18b21a..e95c3de 100644
+--- a/src/tests/meson.build
++++ b/src/tests/meson.build
+@@ -1243,6 +1243,7 @@ stacking_tests = [
+   'sticky-transients',
+   'strut-monitor-changes',
+   'window-placement',
++  'fixed-size-placement',
+   'x11-move',
+   'map-maximized',
+   'map-fullscreen',
+diff --git a/src/tests/stacking/fixed-size-placement.metatest b/src/tests/stacking/fixed-size-placement.metatest
+new file mode 100644
+index 0000000..7328886
+--- /dev/null
++++ b/src/tests/stacking/fixed-size-placement.metatest
+@@ -0,0 +1,30 @@
++new_client w wayland
++new_client x x11
++resize_monitor default 250 250
++set_pref center-new-windows false
++
++# Without center-new-windows, a window which can be resized is placed in the
++# first free spot.
++create w/1 csd
++resize w/1 100 100
++show w/1
++assert_position w/1 24 16
++assert_size w/1 100 100
++
++# A window of a fixed size without a parent is centered on the monitor, as a
++# dialog is.
++create w/2 csd
++set_fixed_size w/2 100 100
++show w/2
++assert_size w/2 100 100
++assert_position w/2 75 75
++
++destroy w/2
++
++# The same for an X11 client.
++create x/1 csd
++set_fixed_size x/1 100 100
++show x/1
++wait
++assert_size x/1 100 100
++assert_position x/1 75 75
+diff --git a/src/tests/test-client.c b/src/tests/test-client.c
+index 5d14118..4a91907 100644
+--- a/src/tests/test-client.c
++++ b/src/tests/test-client.c
+@@ -783,6 +783,41 @@ process_line (const char       *line,
+                          width,
+                          height - titlebar_height);
+     }
++  else if (strcmp (argv[0], "set_fixed_size") == 0)
++    {
++      int titlebar_height;
++
++      if (argc != 4)
++        {
++          g_print ("usage: %s <id> <width> <height>\n", argv[0]);
++          goto out;
++        }
++
++      GtkWidget *window = lookup_window (argv[1]);
++      if (!window)
++        goto out;
++
++      int width = atoi (argv[2]);
++      int height = atoi (argv[3]);
++
++      titlebar_height = calculate_titlebar_height (GTK_WINDOW (window));
++
++      /* The window has its size as both its minimum and maximum size, as
++       * Electron sets them for a BrowserWindow which cannot be resized. The
++       * hints include the title bar, which the size to resize to does not.
++       */
++      GdkGeometry geometry = {
++        .min_width = width,
++        .min_height = height,
++        .max_width = width,
++        .max_height = height,
++      };
++      gtk_window_set_geometry_hints (GTK_WINDOW (window), NULL, &geometry,
++                                     GDK_HINT_MIN_SIZE | GDK_HINT_MAX_SIZE);
++      gtk_window_resize (GTK_WINDOW (window),
++                         width,
++                         height - titlebar_height);
++    }
+   else if (strcmp (argv[0], "x11_geometry") == 0)
+     {
+       GtkWidget *window;
+diff --git a/src/tests/test-runner.c b/src/tests/test-runner.c
+index 3947dcd..0b9b7e0 100644
+--- a/src/tests/test-runner.c
++++ b/src/tests/test-runner.c
+@@ -1338,7 +1338,8 @@ test_case_do (TestCase    *test,
+       meta_wait_for_window_shown (window);
+     }
+   else if (strcmp (argv[0], "resize") == 0 ||
+-           strcmp (argv[0], "resize_ignore_titlebar") == 0)
++           strcmp (argv[0], "resize_ignore_titlebar") == 0 ||
++           strcmp (argv[0], "set_fixed_size") == 0)
+     {
+       MetaTestClient *client;
+       const char *window_id;
+diff --git a/src/tests/wayland-unit-tests.c b/src/tests/wayland-unit-tests.c
+index 2a09d01..d25928e 100644
+--- a/src/tests/wayland-unit-tests.c
++++ b/src/tests/wayland-unit-tests.c
+@@ -2446,6 +2446,13 @@ toplevel_fixed_size_fullscreen (void)
+     g_main_context_iteration (NULL, TRUE);
+   meta_wait_for_effects (window);
+ 
++  /* A window of a fixed size is centered when it is placed, and the
++   * reference image shows it where a window which can be resized is placed
++   * without center-new-windows, so the window is moved there.
++   */
++  meta_window_move_frame (window, FALSE, 17, 25);
++  meta_wait_for_effects (window);
++
+   meta_ref_test_verify_view (view,
+                              g_test_get_path (), 0,
+                              meta_ref_test_determine_ref_test_flag ());
