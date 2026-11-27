@@ -29,8 +29,17 @@ cursor-keeps-db-interface.patch
     including its test, which is added to tests/libtinysparql/tracker-sparql-test.c and runs during
     the build.
 
+serialize-test-startup-errors.patch
+    Makes tests/libtinysparql/tracker-serialize-test.c, which runs during the build, fail at once
+    with the error when its D-Bus endpoint or its HTTP endpoint on the fixed port 54322 does not
+    start. It waited for them forever, until meson killed it after 210 seconds, which failed a
+    build of the package without saying why. The patch is upstream's commit 064f4379 from
+    https://gitlab.gnome.org/GNOME/tinysparql/-/merge_requests/831, with a declaration of a variable
+    which a later upstream commit adds, and changes only the test.
+
 Drop resource-print-null-on-invalid-input.patch once Ubuntu ships a version which includes merge
 request 819. If upstream changed the commit before merging it, check first that all three
 functions still return NULL there. Drop service-test-wait-for-endpoint-loop.patch once Ubuntu
 ships a version whose tracker-service-test waits for the loop of the endpoint to run. Drop
-cursor-keeps-db-interface.patch once Ubuntu ships a version which includes merge request 820.
+cursor-keeps-db-interface.patch once Ubuntu ships a version which includes merge request 820, and
+serialize-test-startup-errors.patch once it ships one which includes merge request 831.
