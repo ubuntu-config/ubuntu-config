@@ -1,9 +1,9 @@
 Source package: gtk4
 
-The four patches in series together let a GTK 4 application name its windows to the compositor through the session
-management protocol, so that mutter places them again where they were. They are for Text Editor, which uses them
-with patches/gnome-text-editor/. No other installed GTK 4 application opts in, and GTK changes nothing for an
-application which does not set GtkApplication:support-save.
+The patches in series, except listitemmanager-unmatched-header.patch, together let a GTK 4 application name its
+windows to the compositor through the session management protocol, so that mutter places them again where they
+were. They are for Text Editor, which uses them with patches/gnome-text-editor/. No other installed GTK 4
+application opts in, and GTK changes nothing for an application which does not set GtkApplication:support-save.
 
 GTK keeps the window state of such an application in $XDG_STATE_HOME/<application ID>@fallback.state, for Text
 Editor ~/.local/state/org.gnome.TextEditor@fallback.state. It holds the name of the application's session with
@@ -50,6 +50,17 @@ application-store-unchanged-state.patch
     not write a state equal to what it holds. GTK main writes the same way, which makes this a candidate for an
     upstream merge request.
 
+listitemmanager-unmatched-header.patch
+    Upstream's commit fd669bc805 from GTK 4.25.1, with its test rebased onto 4.22. It is unrelated to session
+    management. When GTK adds items to a list with sections right after a section's header which an earlier change
+    had already marked unmatched, it did not mark that header and its footer unmatched to match them to the model's
+    sections again, and the sections of the list or grid view became inconsistent. GTK's test
+    /listitemmanager/exhaustive, which changes a list with sections at random, failed the build with this in 10 of
+    2000 runs, and an assertion in the library, which Ubuntu's build keeps enabled, can abort an application with
+    sections in the same state. The test append-to-section it adds fails without the change. GTK issue 6547 asks
+    for a backport to 4.22. Drop the patch once Ubuntu ships a GTK with the commit, which no 4.22 or 4.24 release
+    has yet.
+
 application-save-restore-symbols.patch (debian-series)
     Lists gtk_application_save, gtk_application_forget and gtk_restore_reason_get_type in
     debian/libgtk-4-1.symbols.in. dh_makeshlibs runs with -c4, which fails the build on any exported symbol the
@@ -59,13 +70,13 @@ Ubuntu's own debian/patches already carry upstream's commit 221cd8e190, which ke
 application forgets a window it never showed, which Text Editor does with a restored window it has no documents
 for.
 
-None of the patches adds a test to GTK's test suite, which runs during the build and shows that they break nothing
-existing. tests/gnome-text-editor/run-text-editor-session.sh tests with Text Editor that windows are named
-and restored, see the README there.
+None of the session management patches adds a test to GTK's test suite, which runs during the build and shows that
+they break nothing existing. tests/gnome-text-editor/run-text-editor-session.sh tests with Text Editor that windows
+are named and restored, see the README there.
 
-Drop the patches once Ubuntu ships a GTK whose GtkApplication has a public save/restore API again, which will not
-be this one: Text Editor then has to be ported to that API, and the RestoreSupported check checked against it. A
-rebuild of GTK means a rebuild for every Ubuntu update of it. After a version bump, check that
+Drop the session management patches once Ubuntu ships a GTK whose GtkApplication has a public save/restore API
+again, which will not be this one: Text Editor then has to be ported to that API, and the RestoreSupported check
+checked against it. A rebuild of GTK means a rebuild for every Ubuntu update of it. After a version bump, check that
 gtk/gtkapplication-dbus.c still registers with RegisterRestore and that gdk/wayland/gdkdisplay-wayland.c still
 has no session management entry in init_skip_protocols.
 

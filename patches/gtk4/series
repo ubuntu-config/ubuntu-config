@@ -3,3 +3,4 @@ wayland-session-management-without-debug-flag.patch
 application-restore-memory-leak.patch
 application-register-restore-only-when-supported.patch
 application-store-unchanged-state.patch
+listitemmanager-unmatched-header.patch

@@ -1,0 +1,91 @@
+Description: Handle an unmatched section header when items are added after it.
+ Upstream's commit fd669bc805, backported. When gtk_list_item_manager_add_items() adds items right after a section's
+ header, as it does for items appended to the end of the previous section, it marks that header and its footer
+ unmatched, so they are matched to the model's sections again. It did so only for a header which was matched, not for
+ one an earlier change had already marked unmatched, and the list's sections then became inconsistent. GTK's test
+ /listitemmanager/exhaustive, which changes a list with sections at random, failed with "section_state ==
+ UNMATCHED_SECTION" and, for some seeds, with "gtk_list_item_manager_ensure_items: code should not be reached", an
+ assertion in the library which Ubuntu's build keeps enabled, so an application with sections in a list or grid view
+ can abort too.
+ .
+ The test is upstream's test_append_to_section, with its registration rebased onto the tests of 4.22. It fails with
+ "section_state == UNMATCHED_SECTION" without the change in gtk/gtklistitemmanager.c. With random seeds, the
+ exhaustive test of 4.22.4 failed in 10 of 2000 runs without the change and in 0 of 2000 with it, and the six seeds
+ posted on GTK issues 6547, 6641 and 8542 failed without it and pass with it.
+Author: Christian Hergert <christian@sourceandstack.com>
+Origin: backport, https://gitlab.gnome.org/GNOME/gtk/-/commit/fd669bc80530023544398ef12978386ab9bfe6fb
+Bug: https://gitlab.gnome.org/GNOME/gtk/-/issues/6547
+Applied-Upstream: 4.25.1
+Last-Update: 2026-11-27
+--- a/gtk/gtklistitemmanager.c
++++ b/gtk/gtklistitemmanager.c
+@@ -965,7 +965,7 @@ gtk_list_item_manager_add_items (GtkList
+     {
+       GtkListTile *section = gtk_list_tile_get_previous_skip (tile);
+ 
+-      if (section != NULL && section->type == GTK_LIST_TILE_HEADER)
++      if (section != NULL && gtk_list_tile_is_header (section))
+         {
+           guint start, end;
+           GtkListTile *footer = gtk_list_tile_get_footer (self, section);
+--- a/testsuite/gtk/listitemmanager.c
++++ b/testsuite/gtk/listitemmanager.c
+@@ -378,6 +378,50 @@ test_create_with_items (void)
+   gtk_window_destroy (GTK_WINDOW (widget));
+ }
+ 
++static void
++test_append_to_section (void)
++{
++  const char *strings[] = { "A", "B", "C", NULL };
++  GtkListItemTracker *tracker;
++  GtkListItemManager *items;
++  GtkStringList *source;
++  GtkNoSelection *selection;
++  GListStore *store;
++  GtkWidget *widget;
++  guint i;
++
++  widget = gtk_window_new ();
++  items = gtk_list_item_manager_new (widget,
++                                     split_simple,
++                                     create_simple_item,
++                                     prepare_simple,
++                                     create_simple_header);
++  g_object_set_data_full (G_OBJECT (widget), "the-items", items, g_object_unref);
++
++  store = g_list_store_new (G_TYPE_OBJECT);
++  for (i = 0; i < 3; i++)
++    {
++      source = gtk_string_list_new (strings);
++      g_list_store_append (store, source);
++      g_object_unref (source);
++    }
++  source = g_list_model_get_item (G_LIST_MODEL (store), 1);
++  selection = gtk_no_selection_new (G_LIST_MODEL (gtk_flatten_list_model_new (G_LIST_MODEL (store))));
++  gtk_list_item_manager_set_model (items, GTK_SELECTION_MODEL (selection));
++  gtk_list_item_manager_set_has_sections (items, TRUE);
++  tracker = gtk_list_item_tracker_new (items);
++  gtk_list_item_tracker_set_position (items, tracker, 5, 0, 0);
++  check_list_item_manager (items, widget, &tracker, 1);
++
++  gtk_string_list_append (source, "D");
++  check_list_item_manager (items, widget, &tracker, 1);
++
++  gtk_list_item_tracker_free (items, tracker);
++  g_object_unref (source);
++  g_object_unref (selection);
++  gtk_window_destroy (GTK_WINDOW (widget));
++}
++
+ #define N_TRACKERS 3
+ #define N_WIDGETS_PER_TRACKER 10
+ #define N_RUNS 500
+@@ -560,6 +604,7 @@ main (int argc, char *argv[])
+ 
+   g_test_add_func ("/listitemmanager/create", test_create);
+   g_test_add_func ("/listitemmanager/create_with_items", test_create_with_items);
++  g_test_add_func ("/listitemmanager/append-to-section", test_append_to_section);
+   g_test_add_func ("/listitemmanager/exhaustive", test_exhaustive);
+ 
+   return g_test_run ();
