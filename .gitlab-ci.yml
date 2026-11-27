@@ -44,6 +44,12 @@ variables:
     - printf '*\t-\tcore\tunlimited\nroot\t-\tcore\tunlimited\n' > /etc/security/limits.d/90-cores.conf
     # Only on GitLab, as a local emulation of the job would change the pattern of the machine it runs on.
     - '[ "$GITLAB_CI" != true ] || echo "$CI_PROJECT_DIR/cores/core.%e.%p.%t" > /proc/sys/kernel/core_pattern'
+    # Installing systemd, which most jobs pull in, applies the sysctl.d files, and Debian's 10-coredump-debian.conf sets
+    # the pattern to core, a file in the working directory of the crashing process, which no artifact includes and
+    # where the builder user cannot write. A later file keeps the pattern as it is, which in a local emulation is the
+    # pattern of the machine it runs on.
+    - mkdir -p /etc/sysctl.d
+    - echo "kernel.core_pattern=$(cat /proc/sys/kernel/core_pattern)" > /etc/sysctl.d/90-cores.conf
 
 # Launchpad's file server, which serves the PPAs, answers some requests with 503 Service Unavailable when it is loaded,
 # and apt gives up on a file after 3 attempts by default. Every job lets apt try up to 10 times, waiting longer before
