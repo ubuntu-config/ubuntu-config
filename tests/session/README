@@ -104,7 +104,8 @@ and V-Shell has closed the dialog it opens meanwhile:
 
   global-menu-login
                   Signal started at login registers its menu with global-menu-registrar, which owns
-                  com.canonical.AppMenu.Registrar from before the applications started at login start, and exports it.
+                  com.canonical.AppMenu.Registrar from before the applications started at login start, and exports it,
+                  its own menu with _File to _Help, which replaces the default menu Electron sets when it starts.
   global-menu-gtk3, global-menu-gtk4, global-menu-qt
                   The window of apps/menuapp.py hides its menu bar, and the top bar shows the application's name and
                   File, Edit and View. Alt+F opens File with the keyboard focus on its first item, Right and Left move

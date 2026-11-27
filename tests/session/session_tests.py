@@ -1191,10 +1191,16 @@ def global_menu_login(session, checks, out_dir):
     session.login()
     registrations = wait_for(lambda: [r for r in menu_registrations(session) or [] if r[1] in processes_of(SIGNAL)], 60)
     checks.check("Signal started at login registered its menu", bool(registrations), str(menu_registrations(session)))
-    titles = menu_titles(session, registrations[0][0], registrations[0][3]) if registrations else None
-    # Signal exports its titles with their mnemonics, as _File.
-    checks.check("Signal exports its menu",
-                 isinstance(titles, list) and "File" in [(t or "").replace("_", "") for t in titles], str(titles))
+    # Electron sets a default menu when it starts, File, Edit, View and Window, which Signal replaces a moment later with
+    # its own, whose titles have mnemonics, _File, _Edit, _View, _Window and _Help.
+    signal_menu = ["_File", "_Edit", "_View", "_Window", "_Help"]
+
+    def titles_now():
+        current = [r for r in menu_registrations(session) or [] if r[1] in processes_of(SIGNAL)]
+        return menu_titles(session, current[-1][0], current[-1][3]) if current else None
+
+    titles = wait_for(lambda: (lambda t: t if t == signal_menu else None)(titles_now()), 30) or titles_now()
+    checks.check("Signal exports its own menu", titles == signal_menu, str(titles))
     session.logout()
     return {"registrations": registrations, "titles": titles}
 
