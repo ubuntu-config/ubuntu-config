@@ -301,6 +301,7 @@ test_session:
           - overview-thumbnails
           - restore-monitors
           - restart-bus
+          - portal-after-logout
       - TEST:
           - looking-glass-focus
           - fixed-size-window-centered

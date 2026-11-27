@@ -1009,6 +1009,8 @@ if [ -e /usr/lib/systemd/user/mpris-proxy.service ]; then
 fi
 # The accessibility bus sometimes fails when a session ends, see the drop-in.
 install_user_dropin at-spi-dbus-bus.service.d/50-stop-launcher-only.conf
+# The GTK portal backend fails when xdg-desktop-portal starts it after the session ended, see the drop-in.
+install_user_dropin xdg-desktop-portal-gtk.service.d/50-requisite-graphical-session.conf
 
 echo "=== file manager sidebar ==="
 # The folders in the Files sidebar are the entries of the GTK bookmarks file. xdg-user-dirs-gtk-update adds the

@@ -93,6 +93,8 @@ install -D -m 644 "$REPO_DIR/systemd/user/org.gnome.Shell@.service.d/50-before-a
   /etc/systemd/user/org.gnome.Shell@.service.d/50-before-application-scopes.conf
 install -D -m 644 "$REPO_DIR/systemd/user/at-spi-dbus-bus.service.d/50-stop-launcher-only.conf" \
   /etc/systemd/user/at-spi-dbus-bus.service.d/50-stop-launcher-only.conf
+install -D -m 644 "$REPO_DIR/systemd/user/xdg-desktop-portal-gtk.service.d/50-requisite-graphical-session.conf" \
+  /etc/systemd/user/xdg-desktop-portal-gtk.service.d/50-requisite-graphical-session.conf
 install -D -m 755 "$REPO_DIR/stop-application-scopes.sh" /usr/local/libexec/stop-application-scopes
 install -D -m 755 "$REPO_DIR/stop-application-scopes-before-shutdown.py" /usr/local/libexec/stop-application-scopes-before-shutdown
 install -D -m 755 "$REPO_DIR/global-menu-registrar.py" /usr/local/libexec/global-menu-registrar

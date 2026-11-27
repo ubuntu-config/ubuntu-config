@@ -83,6 +83,12 @@ The tests:
                   while GNOME Shell shuts down, which needs
                   patches/gnome-session/restart-dbus-replace-queued-jobs.patch. Otherwise the next login uses the old
                   bus.
+  portal-after-logout
+                  The GTK backend of xdg-desktop-portal, which xdg-desktop-portal starts through D-Bus activation, is
+                  not started once the session ended, which needs
+                  systemd/user/xdg-desktop-portal-gtk.service.d/50-requisite-graphical-session.conf. Otherwise an
+                  activation which waited in systemd's queue while the session stopped starts the backend after GNOME
+                  Shell is gone, and it fails without a display.
   looking-glass-focus
                   Creating Looking Glass, as Just Perfection does a second after it is enabled at every login, leaves
                   the keyboard with the focused GTK 4 window of apps/menuapp.py, which needs
@@ -237,7 +243,7 @@ the repository, and the packages of the local repository:
       /repo/tests/session/prepare-container.sh /debs &&
       /repo/tests/session/run-session-tests.sh /out/run spawn-scopes text-editor ptyxis firefox chromium \
         chromium-quit shutdown lock-screen workspace-attention portal-inhibit overview-thumbnails \
-        restore-monitors restart-bus'
+        restore-monitors restart-bus portal-after-logout'
 
 A later DEBS_DIR replaces packages of the same name of an earlier one, so a build to test can follow the local
 repository. prepare-container.sh can run again on a prepared container, for example without DEBS_DIR to install a

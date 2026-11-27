@@ -1136,6 +1136,29 @@ def restart_bus(session, checks, out_dir):
     return {}
 
 
+@test
+def portal_after_logout(session, checks, out_dir):
+    """The GTK backend of xdg-desktop-portal, which xdg-desktop-portal starts through D-Bus activation, is not started
+    once the session ended, so an activation which waited in systemd's queue while the session stopped leaves no
+    failed unit."""
+    session.login()
+    session.logout()
+    activation = subprocess.run(["busctl", "--user", "call", "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                                 "StartServiceByName", "su", "org.freedesktop.impl.portal.desktop.gtk", "0"],
+                                capture_output=True, text=True, timeout=60)
+
+    def state():
+        result = subprocess.run(["systemctl", "--user", "show", "--property=ActiveState", "--value", "xdg-desktop-portal-gtk.service"],
+                                capture_output=True, text=True)
+        value = result.stdout.strip()
+        return value if value not in ("activating", "deactivating") else None
+
+    final = wait_for(state, 10)
+    checks.check("the GTK portal backend is not started once the session ended", final == "inactive",
+                 f"state {final}, activation: {(activation.stdout or activation.stderr).strip()}")
+    return {"state": final, "activation": (activation.stdout or activation.stderr).strip()}
+
+
 GLOBAL_MENU = "global-menu@mitar.tnode.com"
 SIGNAL = "signal-desktop"
 

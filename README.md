@@ -108,6 +108,8 @@ It targets Ubuntu 26.04 with GNOME 50 on a Framework Laptop 13 Pro.
     mpris-proxy starts again together with the user's D-Bus.
   - [The accessibility bus does not fail when a session ends](#the-accessibility-bus-does-not-fail-when-a-session-ends):
     systemd sends SIGTERM to the bus launcher alone.
+  - [The GTK portal backend does not fail when a session ends](#the-gtk-portal-backend-does-not-fail-when-a-session-ends):
+    systemd starts it only while the graphical session runs.
   - [GDM does not fail at shutdown](#gdm-does-not-fail-at-shutdown): GDM is stopped before accounts-daemon.
   - [The encrypted disk is not closed while in use at shutdown](#the-encrypted-disk-is-not-closed-while-in-use-at-shutdown):
     the root filesystem's encrypted device is closed in the final phase of the shutdown.
@@ -1091,6 +1093,18 @@ bus itself when it receives SIGTERM, so a drop-in has systemd send SIGTERM to th
 for at-spi2-core's own unit in
 [at-spi2-core merge request 239](https://gitlab.gnome.org/GNOME/at-spi2-core/-/merge_requests/239), and the drop-in
 can go once Ubuntu ships an at-spi2-core which includes it.
+
+### The GTK portal backend does not fail when a session ends
+
+xdg-desktop-portal starts its GTK backend, xdg-desktop-portal-gtk, through D-Bus activation once its GNOME backend
+runs. When a session ended soon after it started, that activation could still wait in systemd's queue while the
+session stopped, so the GTK backend started after GNOME Shell was gone, exited with "cannot open display" and left
+`xdg-desktop-portal-gtk.service` failed. A drop-in has systemd start it only while `graphical-session.target` is
+active, as the unit of xdg-desktop-portal-gnome does, so a later activation fails without a failed unit
+(`systemd/user/xdg-desktop-portal-gtk.service.d/`, installed by `configure-gnome-desktop.sh`). The same setting is
+suggested for xdg-desktop-portal-gtk's own unit in
+[xdg-desktop-portal-gtk pull request 515](https://github.com/flatpak/xdg-desktop-portal-gtk/pull/515), and the
+drop-in can go once Ubuntu ships an xdg-desktop-portal-gtk which includes it.
 
 ### GDM does not fail at shutdown
 
