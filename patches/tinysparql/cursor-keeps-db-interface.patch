@@ -1,0 +1,74 @@
+Description: Keep the database interface alive as long as a cursor on it is open.
+ A cursor holds its statement, but the statement only borrows its SQLite interface, so closing the connection can free
+ the interface before the cursor is finalized, and closing the cursor then references freed memory.
+ The D-Bus endpoint of the tinysparql command crashed this way with SIGSEGV when it received SIGTERM right after
+ serving an export: it closed its connection while a worker thread still finalized the serializer and cursor of the
+ last query, which failed a build of the package in the functional test test_cli. The cursor now holds a reference to
+ the interface from its creation until it is closed. This is the first commit of the upstream merge request, with its
+ regression test, which runs during the build.
+ .
+ test_cli, run 2000 times with 48 at a time, crashed in test_export_dbus in 10 runs without the patch, always with
+ tracker_db_cursor_close() in tracker_db_cursor_finalize() on a worker thread, and in none with it.
+Author: ooonea <ooonea@gmail.com>
+Origin: upstream, https://gitlab.gnome.org/GNOME/tinysparql/-/merge_requests/820
+Forwarded: not-needed
+Last-Update: 2026-11-27
+--- a/src/libtinysparql/core/tracker-db-interface-sqlite.c
++++ b/src/libtinysparql/core/tracker-db-interface-sqlite.c
+@@ -2631,8 +2631,6 @@ tracker_db_cursor_close (TrackerSparqlCu
+ 
+ 	iface = cursor->ref_stmt->db_interface;
+ 
+-	g_object_ref (iface);
+-
+ 	tracker_db_interface_lock (iface);
+ 	tracker_db_statement_sqlite_release (cursor->ref_stmt);
+ 	g_clear_object (&cursor->ref_stmt);
+@@ -2752,6 +2750,7 @@ tracker_db_cursor_sqlite_new (TrackerDBS
+ 
+ 	cursor->stmt = ref_stmt->stmt;
+ 	cursor->ref_stmt = g_object_ref (ref_stmt);
++	g_object_ref (ref_stmt->db_interface);
+ 	tracker_db_statement_sqlite_grab (cursor->ref_stmt);
+ 
+ 	return cursor;
+--- a/tests/libtinysparql/tracker-sparql-test.c
++++ b/tests/libtinysparql/tracker-sparql-test.c
+@@ -153,6 +153,28 @@ test_tracker_sparql_connection_interleav
+ }
+ 
+ static void
++test_tracker_sparql_connection_close_cursor (void)
++{
++	TrackerSparqlConnection *connection;
++	TrackerSparqlCursor *cursor;
++	GError *error = NULL;
++
++	connection = create_local_connection (&error);
++	g_assert_no_error (error);
++
++	cursor = tracker_sparql_connection_query (connection, "ASK {}", NULL, &error);
++	g_assert_no_error (error);
++	g_assert_true (tracker_sparql_cursor_next (cursor, NULL, &error));
++	g_assert_no_error (error);
++	g_assert_false (tracker_sparql_cursor_next (cursor, NULL, &error));
++	g_assert_no_error (error);
++
++	tracker_sparql_connection_close (connection);
++	g_object_unref (cursor);
++	g_object_unref (connection);
++}
++
++static void
+ close_cb (GObject      *source,
+           GAsyncResult *res,
+           gpointer      user_data)
+@@ -435,6 +457,8 @@ main (gint argc, gchar **argv)
+ 	                 test_tracker_sparql_connection_no_ontology);
+ 	g_test_add_func ("/libtracker-sparql/tracker-sparql/tracker_sparql_connection_interleaved",
+ 	                 test_tracker_sparql_connection_interleaved);
++	g_test_add_func ("/libtracker-sparql/tracker-sparql/tracker_sparql_connection_close_cursor",
++	                 test_tracker_sparql_connection_close_cursor);
+ 	g_test_add_func ("/libtracker-sparql/tracker-sparql/tracker_sparql_connection_new_async",
+ 	                 test_tracker_sparql_connection_new_async);
+ 	g_test_add_func ("/libtracker-sparql/tracker-sparql/tracker_sparql_connection_new_rdf",

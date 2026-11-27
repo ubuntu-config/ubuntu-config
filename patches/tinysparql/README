@@ -18,7 +18,19 @@ service-test-wait-for-endpoint-loop.patch
     loop. A 200 ms sleep before g_main_loop_run() makes the test fail every time without the patch
     and pass with it. The patch changes only the test and is not proposed upstream yet.
 
-Drop resource-print-null-on-invalid-input.patch once Ubuntu ships a version which includes the
-merge request. If upstream changed the commit before merging it, check first that all three
+cursor-keeps-db-interface.patch
+    Keeps the database interface alive as long as a cursor on it is open. A cursor's statement only
+    borrows the interface, so closing a connection could free it while a worker thread still
+    finalized a cursor, which then referenced freed memory. The D-Bus endpoint of the tinysparql
+    command crashed this way when it received SIGTERM right after serving a query, which failed a
+    build of the package in the functional test test_cli, and 10 of 2000 local runs of that test
+    under load. The patch is the first commit of
+    https://gitlab.gnome.org/GNOME/tinysparql/-/merge_requests/820 by another contributor,
+    including its test, which is added to tests/libtinysparql/tracker-sparql-test.c and runs during
+    the build.
+
+Drop resource-print-null-on-invalid-input.patch once Ubuntu ships a version which includes merge
+request 819. If upstream changed the commit before merging it, check first that all three
 functions still return NULL there. Drop service-test-wait-for-endpoint-loop.patch once Ubuntu
-ships a version whose tracker-service-test waits for the loop of the endpoint to run.
+ships a version whose tracker-service-test waits for the loop of the endpoint to run. Drop
+cursor-keeps-db-interface.patch once Ubuntu ships a version which includes merge request 820.
