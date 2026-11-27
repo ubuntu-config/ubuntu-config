@@ -45,10 +45,14 @@ mount -o remount,size=50% /dev/shm
 # itself when it is not started by systemd.
 /usr/lib/systemd/systemd-journald > "$OUT/journald.log" 2>&1 &
 for _ in $(seq 100); do
-  [ -S /run/systemd/journal/socket ] && [ -S /run/systemd/journal/stdout ] && break
+  [ -S /run/systemd/journal/socket ] && [ -S /run/systemd/journal/stdout ] && [ -S /run/systemd/journal/dev-log ] && break
   sleep 0.1
 done
 [ -S /run/systemd/journal/stdout ] || { echo "journald did not start, see $OUT/journald.log" >&2; exit 1; }
+# Programs which log through syslog write to /dev/log, which systemd-journald-dev-log.socket links to journald's syslog
+# socket when systemd starts journald. The session bus logs this way which process each activation of a service was
+# requested by.
+ln -sf /run/systemd/journal/dev-log /dev/log
 # Members of systemd-journal may read the journal, as systemd's tmpfiles.d sets it up when the machine boots.
 chgrp -R systemd-journal /run/log/journal
 chmod -R g+rX /run/log/journal
