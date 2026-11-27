@@ -37,9 +37,20 @@ serialize-test-startup-errors.patch
     https://gitlab.gnome.org/GNOME/tinysparql/-/merge_requests/831, with a declaration of a variable
     which a later upstream commit adds, and changes only the test.
 
+test-ports-below-ephemeral-range.patch
+    Makes the tests' HTTP endpoints listen on ports from 10000 to 31999, and on 32321 to 32323
+    instead of the fixed 54321 to 54323, below the range from which Linux chooses the local ports
+    of outgoing connections, 32768 to 60999. The tests' own HTTP connections keep their local ports
+    in TIME_WAIT for a minute after they close, up to 71 at once during one run of the suite, and
+    an endpoint cannot listen on such a port, so a test sometimes failed with "Address already in
+    use", or waited until meson killed it for an endpoint which never started. The patch changes
+    only the tests and is not proposed upstream yet.
+
 Drop resource-print-null-on-invalid-input.patch once Ubuntu ships a version which includes merge
 request 819. If upstream changed the commit before merging it, check first that all three
 functions still return NULL there. Drop service-test-wait-for-endpoint-loop.patch once Ubuntu
 ships a version whose tracker-service-test waits for the loop of the endpoint to run. Drop
 cursor-keeps-db-interface.patch once Ubuntu ships a version which includes merge request 820, and
-serialize-test-startup-errors.patch once it ships one which includes merge request 831.
+serialize-test-startup-errors.patch once it ships one which includes merge request 831. Drop
+test-ports-below-ephemeral-range.patch once Ubuntu ships a version whose tests choose their HTTP
+ports outside of that range or let the system choose them.

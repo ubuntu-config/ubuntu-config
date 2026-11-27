@@ -1,0 +1,179 @@
+Description: Choose the ports of the tests' HTTP endpoints below the range of local ports of outgoing connections.
+ The tests listen with HTTP endpoints on random ports from 30000 to 65000 and on the fixed ports 54321 to 54323,
+ mostly within the range from which Linux chooses the local ports of outgoing connections, 32768 to 60999. The tests'
+ own HTTP connections to their endpoints keep the local port of their client side in TIME_WAIT for a minute after they
+ close, up to 71 ports at once during one run of the suite, and an endpoint cannot listen on a port which such a
+ connection still occupies. A test then failed with "Address already in use", or waited until meson killed it when it
+ waited for an endpoint which never started, as tracker-serialize-test did and the functional tests do, which failed
+ builds of the package. The random ports are now from 10000 to 31999 and the fixed ones 32321 to 32323, below that
+ range on Linux and below the ranges other systems use for outgoing connections.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-27
+--- a/tests/functional-tests/test_cli.py
++++ b/tests/functional-tests/test_cli.py
+@@ -121,7 +121,7 @@ class TestCli(fixtures.TrackerCommandLin
+         """Export contents of a D-Bus endpoint."""
+ 
+         with self.tmpdir() as tmpdir:
+-            port = random.randint(32000, 65000)
++            port = random.randint(10000, 31999)
+             address = "http://127.0.0.1:%d/sparql" % port
+ 
+             self.run_background(
+@@ -357,7 +357,7 @@ class TestCli(fixtures.TrackerCommandLin
+         """Query from a HTTP endpoint"""
+ 
+         with self.tmpdir() as tmpdir:
+-            port = random.randint(32000, 65000)
++            port = random.randint(10000, 31999)
+             address = "http://127.0.0.1:%d/sparql" % port
+ 
+             self.run_background(
+@@ -750,7 +750,7 @@ class TestCli(fixtures.TrackerCommandLin
+     def test_endpoint_same_http_port(self):
+         """Call 2 endpoint commands on the same HTTP port."""
+         with self.tmpdir() as tmpdir:
+-            port = random.randint(30000, 65000)
++            port = random.randint(10000, 31999)
+ 
+             self.run_background(
+                 [
+@@ -851,7 +851,7 @@ class TestCli(fixtures.TrackerCommandLin
+     def test_webide(self):
+         """Call webide command"""
+         with self.tmpdir() as tmpdir:
+-            port = random.randint(32000, 65000)
++            port = random.randint(10000, 31999)
+ 
+             self.run_background(
+                 [
+@@ -874,7 +874,7 @@ class TestCli(fixtures.TrackerCommandLin
+     def test_webide_404(self):
+         """Call webide command"""
+         with self.tmpdir() as tmpdir:
+-            port = random.randint(32000, 65000)
++            port = random.randint(10000, 31999)
+ 
+             self.run_background(
+                 [
+@@ -895,7 +895,7 @@ class TestCli(fixtures.TrackerCommandLin
+     def test_webide_404_2(self):
+         """Call webide command"""
+         with self.tmpdir() as tmpdir:
+-            port = random.randint(32000, 65000)
++            port = random.randint(10000, 31999)
+ 
+             self.run_background(
+                 [
+@@ -916,7 +916,7 @@ class TestCli(fixtures.TrackerCommandLin
+     def test_webide_non_GET(self):
+         """Call webide command"""
+         with self.tmpdir() as tmpdir:
+-            port = random.randint(32000, 65000)
++            port = random.randint(10000, 31999)
+ 
+             self.run_background(
+                 [
+@@ -937,7 +937,7 @@ class TestCli(fixtures.TrackerCommandLin
+     def test_webide_same_http_port(self):
+         """Call 2 web IDEs on the same HTTP port."""
+         with self.tmpdir() as tmpdir:
+-            port = random.randint(30000, 65000)
++            port = random.randint(10000, 31999)
+ 
+             self.run_background(
+                 [
+--- a/tests/functional-tests/test_endpoint_http.py
++++ b/tests/functional-tests/test_endpoint_http.py
+@@ -42,7 +42,7 @@ class TestEndpointHttp(fixtures.TrackerC
+ 
+         self._dirpath = Path(mkdtemp())
+ 
+-        port = random.randint(32000, 65000)
++        port = random.randint(10000, 31999)
+         self.address = "http://127.0.0.1:%d/sparql/" % port
+ 
+         # Create the database
+--- a/tests/libtinysparql/tracker-connection-test.c
++++ b/tests/libtinysparql/tracker-connection-test.c
+@@ -90,7 +90,7 @@ create_connections (void)
+ 	GError *error = NULL;
+ 	gchar *host;
+ 
+-	http_port = g_test_rand_int_range (30000, 60000);
++	http_port = g_test_rand_int_range (10000, 32000);
+ 
+ 	dbus_conn = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, &error);
+ 	g_assert_no_error (error);
+--- a/tests/libtinysparql/tracker-cursor-test.c
++++ b/tests/libtinysparql/tracker-cursor-test.c
+@@ -487,7 +487,7 @@ create_connections (void)
+ 	GError *error = NULL;
+ 	gchar *host;
+ 
+-	http_port = g_test_rand_int_range (30000, 60000);
++	http_port = g_test_rand_int_range (10000, 32000);
+ 
+ 	dbus_conn = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, &error);
+ 	g_assert_no_error (error);
+--- a/tests/libtinysparql/tracker-namespaces-test.c
++++ b/tests/libtinysparql/tracker-namespaces-test.c
+@@ -83,7 +83,7 @@ thread_func (gpointer user_data)
+ 	if (!endpoint)
+ 		return NULL;
+ 
+-	endpoint_http = tracker_endpoint_http_new (direct, 54323, NULL, NULL, NULL);
++	endpoint_http = tracker_endpoint_http_new (direct, 32323, NULL, NULL, NULL);
+ 	if (!endpoint_http)
+ 		return NULL;
+ 
+@@ -120,7 +120,7 @@ create_connections (void)
+ 	                                          &error);
+ 	g_assert_no_error (error);
+ 
+-	remote = tracker_sparql_connection_remote_new ("http://127.0.0.1:54323/sparql");
++	remote = tracker_sparql_connection_remote_new ("http://127.0.0.1:32323/sparql");
+ 	g_thread_unref (thread);
+ }
+ 
+--- a/tests/libtinysparql/tracker-serialize-test.c
++++ b/tests/libtinysparql/tracker-serialize-test.c
+@@ -265,7 +265,7 @@ thread_func (gpointer user_data)
+ 
+ 	endpoint = tracker_endpoint_dbus_new (data->direct, data->dbus_conn, NULL, NULL, &data->error);
+ 	if (endpoint && !data->error)
+-		endpoint_http = tracker_endpoint_http_new (data->direct, 54322, NULL, NULL, &data->error);
++		endpoint_http = tracker_endpoint_http_new (data->direct, 32322, NULL, NULL, &data->error);
+ 
+ 	g_async_queue_push (queue, GINT_TO_POINTER (1));
+ 	g_async_queue_unref (queue);
+@@ -316,7 +316,7 @@ create_connections (TrackerSparqlConnect
+ 	*dbus = tracker_sparql_connection_bus_new (bus_name,
+ 	                                           NULL, data.dbus_conn, error);
+ 	*direct = create_local_connection (error);
+-	*remote = tracker_sparql_connection_remote_new ("http://127.0.0.1:54322/sparql");
++	*remote = tracker_sparql_connection_remote_new ("http://127.0.0.1:32322/sparql");
+ 	g_thread_unref (thread);
+ 
+ 	return TRUE;
+--- a/tests/libtinysparql/tracker-statement-test.c
++++ b/tests/libtinysparql/tracker-statement-test.c
+@@ -585,7 +585,7 @@ thread_func (gpointer user_data)
+ 	if (!endpoint)
+ 		return NULL;
+ 
+-	endpoint_http = tracker_endpoint_http_new (data->direct, 54321, NULL, NULL, NULL);
++	endpoint_http = tracker_endpoint_http_new (data->direct, 32321, NULL, NULL, NULL);
+ 	if (!endpoint_http)
+ 		return NULL;
+ 
+@@ -624,7 +624,7 @@ create_connections (TrackerSparqlConnect
+ 	*dbus = tracker_sparql_connection_bus_new (bus_name,
+ 	                                           NULL, data.dbus_conn, error);
+ 	*direct = create_local_connection (error);
+-	*remote = tracker_sparql_connection_remote_new ("http://127.0.0.1:54321/sparql");
++	*remote = tracker_sparql_connection_remote_new ("http://127.0.0.1:32321/sparql");
+ 	g_thread_unref (thread);
+ 
+ 	return TRUE;
