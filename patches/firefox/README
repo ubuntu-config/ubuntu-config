@@ -139,8 +139,9 @@ quit-at-session-end.patch
     systemd at the end of a session which did not tell Firefox through the portal, or in which
     xdg-desktop-portal-gtk stopped waiting after 8 seconds, and systemctl or kill. The last patch quits Firefox with
     nsIAppStartup::Quit(eForceQuit), as Firefox does when an X11 session manager ends the session through XSMP. The
-    first patch is proposed as D340638 on phabricator.services.mozilla.com, for Mozilla bug 2086801. The last patch is
-    in Firefox 163, merged for Mozilla bug 2090663 from D340640.
+    first patch combines D340638 on phabricator.services.mozilla.com, merged into autoland for Mozilla bug 2086801,
+    with D346993, which proposes its quit while the event loop runs. The last patch is in Firefox 163, merged for
+    Mozilla bug 2090663 from D340640.
 
     With the first patch, SIGTERM from systemd, which reaches all processes of Firefox at once, ends the content
     processes while Firefox quits cleanly and closes its windows, and Firefox handles each of them as a crashed tab.
@@ -151,9 +152,9 @@ quit-at-session-end.patch
 
     The session test in tests/session/ checks that logging out leaves sessionstore.jsonlz4 in the profile, which
     Firefox writes only when it quits cleanly, and that Firefox has quit before GNOME Shell shuts down. Drop the first
-    patch once bug 2086801 is fixed, and the middle and the last one once the PPA's Firefox is 163 or newer. After a
-    version bump, check that XREMain::XRE_mainRun in toolkit/xre/nsAppRunner.cpp still runs after XPCOM is
-    initialized.
+    patch once the PPA's Firefox has both D340638 and D346993, and the middle and the last one once the PPA's Firefox
+    is 163 or newer. After a version bump, check that XREMain::XRE_mainRun in toolkit/xre/nsAppRunner.cpp still runs
+    after XPCOM is initialized.
 
 local-handler-through-gio.patch
     Launches an executable chosen as a handler through GIO, as Firefox launches applications from desktop entries,

@@ -18,7 +18,7 @@ Description: Install the SIGTERM handler once the app shell exists, so that SIGT
  with SIGTERM. Once Firefox has confirmed its shutdown, the handler still only ends the event loop, as before.
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2086801
 Author: Mitar
-Forwarded: https://phabricator.services.mozilla.com/D340638
+Forwarded: https://phabricator.services.mozilla.com/D340638, https://phabricator.services.mozilla.com/D346993
 Last-Update: 2026-11-27
 ---
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
