@@ -1192,7 +1192,9 @@ def global_menu_login(session, checks, out_dir):
     registrations = wait_for(lambda: [r for r in menu_registrations(session) or [] if r[1] in processes_of(SIGNAL)], 60)
     checks.check("Signal started at login registered its menu", bool(registrations), str(menu_registrations(session)))
     titles = menu_titles(session, registrations[0][0], registrations[0][3]) if registrations else None
-    checks.check("Signal exports its menu", isinstance(titles, list) and "File" in titles, str(titles))
+    # Signal exports its titles with their mnemonics, as _File.
+    checks.check("Signal exports its menu",
+                 isinstance(titles, list) and "File" in [(t or "").replace("_", "") for t in titles], str(titles))
     session.logout()
     return {"registrations": registrations, "titles": titles}
 
@@ -2088,7 +2090,9 @@ def global_menu_firefox(session, checks, out_dir):
     History entry of a page whose title has underscores shows them. With global-menu-icons.patch, the entry also has an
     icon, and so has the bookmark of the page the first time its folder opens, although Firefox adds the icon of a menu
     item only when it first shows the item, after it exported the item. The History menu keeps the order of its entries
-    while it opens again, although Firefox lists them anew then, see DbusMenuModel._queuePropertiesChanged()."""
+    while it opens again, although Firefox lists them anew then, see DbusMenuModel._queuePropertiesChanged(), and the
+    entry of a closed tab in its submenu Recently Closed Tabs keeps its icon while the submenu opens again, although
+    Firefox exports the entry first without its icon then, see DbusMenuModel._submenuOpenStateChanged()."""
     pages = pathlib.Path.home() / "pages"
     pages.mkdir(parents=True, exist_ok=True)
     write_png(pages / "icon.png")
@@ -2133,6 +2137,35 @@ def global_menu_firefox(session, checks, out_dir):
         history["reopened"] = [entries(items) for items in session.call("recordGlobalMenu", False) if items is not None]
         close_menus(session)
 
+    def closed_tab_icons(states):
+        """Returns whether the entry of the closed tab showed its icon in each state in which the submenu showed it."""
+        icons = []
+        for items in states:
+            submenu = next((i for i in items or [] if i["label"] == "Recently Closed Tabs" and "items" in i), None)
+            entry = next((i for i in (submenu or {}).get("items", []) if i["label"] == ICON_PAGE), None)
+            if entry:
+                icons.append(entry["icon"])
+        return icons
+
+    def reopen_closed_tabs(window):
+        # A tab with the page, closed, which Recently Closed Tabs lists. Its first opening loads the icon.
+        session.press("t", "Control_L")
+        time.sleep(0.5)
+        session.type_text(f"localhost:{WEB_PORT}/{ICON_PAGE}.html\n")
+        time.sleep(3)
+        session.press("w", "Control_L")
+        time.sleep(1)
+        click_path(session, ["History", "Recently Closed Tabs"])
+        wait_menu(session, lambda s: any(closed_tab_icons([s["layout"]])), 10)
+        close_menus(session)
+        session.call("recordGlobalMenu", True)
+        click_path(session, ["History", "Recently Closed Tabs"])
+        time.sleep(2)
+        states = session.call("recordGlobalMenu", False)
+        history["closed"] = closed_tab_icons(states)
+        history["closed_last"] = (states or [None])[-1]
+        close_menus(session)
+
     def find_entry(items):
         for item in items or []:
             found = item if item["label"] == ICON_PAGE else find_entry(item.get("items"))
@@ -2161,6 +2194,9 @@ def global_menu_firefox(session, checks, out_dir):
                                      lambda window: bool(history.get("entry") and history["entry"]["icon"])),
                                     (reopen_history, f"opened again, the History menu always lists {ICON_PAGE} before "
                                      f"{EARLIER_PAGE}, which was visited earlier", lambda window: reopened_in_order()),
+                                    (reopen_closed_tabs, f"opened again, Recently Closed Tabs always shows the icon of the "
+                                     f"closed tab of {ICON_PAGE}",
+                                     lambda window: bool(history.get("closed")) and all(history["closed"])),
                                     (open_bookmark, f"the Bookmarks Toolbar menu lists the bookmark of {ICON_PAGE} with its icon "
                                      "the first time it opens", lambda window: bool(history.get("bookmark") and history["bookmark"]["icon"])),
                                     (["File", "New Window"], "opens a second window", more_windows(session))])
@@ -2168,6 +2204,9 @@ def global_menu_firefox(session, checks, out_dir):
         server.terminate()
         if "labels" in history and not (history["entry"] and history["entry"]["icon"]):
             checks.check(f"the History menu had the entries {history['labels']}, {ICON_PAGE} as {history['entry']}", False)
+        if "closed" in history and not (history["closed"] and all(history["closed"])):
+            checks.check(f"the entry of the closed tab in Recently Closed Tabs showed its icon as {history['closed']}, "
+                         f"the menu last as {history.get('closed_last')}", False)
         if "reopened" in history and not reopened_in_order():
             checks.check(f"the History menu showed its entries in the orders {history['reopened']}", False)
         if "bookmarks" in history and not (history["bookmark"] and history["bookmark"]["icon"]):

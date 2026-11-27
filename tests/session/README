@@ -170,7 +170,9 @@ and V-Shell has closed the dialog it opens meanwhile:
                   underscores with its whole title and with an icon, and the Bookmarks Toolbar submenu lists the page,
                   bookmarked with Ctrl+D, with its icon the first time it opens. Each time the History menu opens,
                   Firefox lists its entries anew, and the menu never shows them in another order meanwhile, which the
-                  test checks after every frame GNOME Shell paints.
+                  test checks after every frame GNOME Shell paints. The entry of a closed tab of the page in the submenu
+                  Recently Closed Tabs keeps its icon in every frame while the submenu opens again, although Firefox
+                  lists the entries anew then and exports them first without their icons.
   global-menu-reenable
                   Disabling the extension makes global-menu-registrar give up its name and removes Signal's menu from
                   the top bar, and enabling it again brings the menu back, as Electron registers its windows again with

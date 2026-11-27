@@ -541,7 +541,7 @@ class SessionTest {
      *
      * @param {boolean} start - true to start, false to end
      * @returns {Array|null} at the end, the items of the open menu after each paint which changed them, see
-     *     describeItems(), or null while no menu was open
+     *     describeLayout(), or null while no menu was open
      */
     recordGlobalMenu(start) {
         if (this._menuRecording) {
@@ -556,7 +556,7 @@ class SessionTest {
         const recording = {states: [], last: null, id: 0};
         recording.id = global.stage.connect('after-paint', () => {
             const open = [...globalMenuButtons() ?? [], globalMenuOverflow()].find(button => button?.menu.isOpen);
-            const items = open ? describeItems(open.menu) : null;
+            const items = open ? describeLayout(open.menu) : null;
             const key = JSON.stringify(items);
             if (key !== recording.last) {
                 recording.last = key;

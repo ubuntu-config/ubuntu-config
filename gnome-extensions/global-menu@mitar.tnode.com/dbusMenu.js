@@ -79,8 +79,8 @@ export class DbusMenuModel extends Signals.EventEmitter {
         this._cancellable = new Gio.Cancellable();
         this._root = {id: 0, props: {}, children: []};
         this._titlesKey = '';
-        // The IDs of the submenus asked to fill themselves, which are asked only once, as an application can leave a
-        // submenu empty and announce a new layout each time it is asked.
+        // The IDs of the submenus asked to fill themselves, which are asked only once each time their menu opens, see
+        // _forgetAsked(), as an application can leave a submenu empty and announce a new layout each time it is asked.
         this._asked = new Set();
         // The paths of the open menus and submenus, see _pathEntry(), by their JSON. Their submenus can open next, so
         // they are filled whenever the layout is read.
@@ -199,6 +199,12 @@ export class DbusMenuModel extends Signals.EventEmitter {
         return filled;
     }
 
+    // Lets the empty submenus of a node, which opens, be asked to fill themselves once more, see _fillEmptySubmenus().
+    _forgetAsked(node) {
+        for (const child of node.children)
+            this._asked.delete(child.id);
+    }
+
     /**
      * Returns the node at a path in a layout, without asking the application to fill the submenus on the way, which
      * _findByPath() does.
@@ -242,18 +248,7 @@ export class DbusMenuModel extends Signals.EventEmitter {
             if (this._propertiesTimeoutId)
                 GLib.source_remove(this._propertiesTimeoutId);
             this._propertiesTimeoutId = 0;
-            const now = GLib.get_monotonic_time();
-            if (this._layoutTimeoutId)
-                GLib.source_remove(this._layoutTimeoutId);
-            else
-                this._layoutChangedAt = now;
-            const left = LAYOUT_MAX_DELAY_MS - (now - this._layoutChangedAt) / 1000;
-            const delay = Math.max(0, Math.min(LAYOUT_QUIET_MS, left));
-            this._layoutTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
-                this._layoutTimeoutId = 0;
-                this._fetch();
-                return GLib.SOURCE_REMOVE;
-            });
+            this._queueFetch();
         } else if (signal === 'ItemsPropertiesUpdated') {
             const [updated, removed] = parameters.recursiveUnpack();
             this._applyProperties(this._root, updated, removed);
@@ -266,6 +261,23 @@ export class DbusMenuModel extends Signals.EventEmitter {
             if (index >= 0)
                 this.emit('activation-requested', index);
         }
+    }
+
+    // Reads the whole layout once LAYOUT_QUIET_MS passed without another call, and at most LAYOUT_MAX_DELAY_MS after
+    // the first call.
+    _queueFetch() {
+        const now = GLib.get_monotonic_time();
+        if (this._layoutTimeoutId)
+            GLib.source_remove(this._layoutTimeoutId);
+        else
+            this._layoutChangedAt = now;
+        const left = LAYOUT_MAX_DELAY_MS - (now - this._layoutChangedAt) / 1000;
+        const delay = Math.max(0, Math.min(LAYOUT_QUIET_MS, left));
+        this._layoutTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._layoutTimeoutId = 0;
+            this._fetch();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _applyProperties(root, updated, removed) {
@@ -349,7 +361,9 @@ export class DbusMenuModel extends Signals.EventEmitter {
             this._notify(node.id, 'opened');
             if (needUpdate)
                 node.children = (await this._getLayout(node.id)).children;
-            // The submenus of the menu can open next.
+            // The submenus of the menu can open next, also one which was empty when it was asked before, as the
+            // Recently Closed Tabs of Firefox before a tab is closed.
+            this._forgetAsked(node);
             if (await this._fillEmptySubmenus(node))
                 needUpdate = true;
         } catch (error) {
@@ -470,6 +484,11 @@ export class DbusMenuModel extends Signals.EventEmitter {
     // menu, so that it can update the submenu, as Firefox does with the History and Bookmarks submenus. The layout is
     // read again then, which also fills the empty submenus of an opened submenu, so that they can open too. The
     // submenu is looked up by its path, as _activate() looks up an item.
+    //
+    // The layout is read once the application announced no change for LAYOUT_QUIET_MS, as for LayoutUpdated, and not
+    // right away. Firefox lists the entries of Recently Closed Tabs and of the Bookmarks folders anew when they open,
+    // and exports them first without their icons, which it adds a few milliseconds later, while it announces the
+    // changes after its layout already has them, so a read right away showed the entries without icons for a moment.
     async _submenuOpenStateChanged(path, open) {
         if (open)
             this._openPaths.set(JSON.stringify(path), path);
@@ -485,7 +504,8 @@ export class DbusMenuModel extends Signals.EventEmitter {
             }
             await this._call('AboutToShow', new GLib.Variant('(i)', [node.id]), '(b)');
             await this._notify(node.id, 'opened');
-            await this._fetch();
+            this._forgetAsked(node);
+            this._queueFetch();
         } catch (error) {
             if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 console.debug(`global-menu: updating a submenu of ${this._busName} failed: ${error.message}`);
