@@ -237,12 +237,9 @@ export class MenuBar extends Signals.EventEmitter {
             this);
         // The grab of a selected title leaves the keyboard focus with the focused window, as the grabs of the menus do.
         global.display.set_grab_keeps_keyboard_focus(this._box, true);
-        const leftBox = Main.panel._leftBox;
-        const activities = Main.panel.statusArea.activities?.container;
-        if (activities?.get_parent() === leftBox)
-            leftBox.insert_child_above(this._box, activities);
-        else
-            leftBox.insert_child_at_index(this._box, 0);
+        Main.panel._leftBox.insert_child_at_index(this._box, 0);
+        this._place();
+        Main.panel._leftBox.connectObject('child-added', () => this._place(), this);
 
         this._appButton = new MenuButton('', 'global-menu-app-name', menu => {
             if (this._app)
@@ -275,6 +272,7 @@ export class MenuBar extends Signals.EventEmitter {
         if (this._mnemonicsResetId)
             GLib.source_remove(this._mnemonicsResetId);
         this._mnemonicsResetId = 0;
+        Main.panel._leftBox.disconnectObject(this);
         global.display.disconnectObject(this);
         this._tracker.disconnectObject(this);
         this._sources.disconnectObject(this);
@@ -284,6 +282,15 @@ export class MenuBar extends Signals.EventEmitter {
         this._appButton.destroy();
         this._overflowButton.destroy();
         this._box.destroy();
+    }
+
+    // Keeps the menu bar right after the Activities button, which shows the workspaces. GNOME Shell adds the Activities
+    // button to the end of the left box again whenever the session mode changes, as when the screen is unlocked, while
+    // the menu bar stays in the top bar.
+    _place() {
+        const activities = Main.panel.statusArea.activities?.container;
+        if (activities?.get_parent() === this._box.get_parent() && activities.get_next_sibling() !== this._box)
+            this._box.get_parent().set_child_above_sibling(this._box, activities);
     }
 
     /**

@@ -186,10 +186,11 @@ and V-Shell has closed the dialog it opens meanwhile:
                   top bar before the menus, or an indicator of 300 pixels added to the status area, more of them move
                   into the overflow button, and back once it is gone.
   global-menu-lock
-                  Locking the screen hides the global menu and unlocking shows it again, while the GTK window keeps its
-                  menu bar hidden throughout. Disabling the extension shows the window's menu bar again, gives the top
-                  bar GNOME Shell's layout, where the left box ends at the middle of the work area, and
-                  global-menu-registrar gives up its name.
+                  Locking the screen hides the global menu and unlocking shows it again, right after the Activities
+                  button, which GNOME Shell adds to the end of the left box of the top bar again at the unlock, while
+                  the GTK window keeps its menu bar hidden throughout. Disabling the extension shows the window's menu
+                  bar again, gives the top bar GNOME Shell's layout, where the left box ends at the middle of the work
+                  area, and global-menu-registrar gives up its name.
   global-menu-quit-chromium, global-menu-quit-firefox
                   With 7 windows of the browser, each on its own workspace and with its own page, Quit 7 Windows in the
                   menu of the application's name quits the browser, and its next start restores every window to its

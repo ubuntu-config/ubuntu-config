@@ -2327,7 +2327,9 @@ def registrar_owner(session):
 @test
 def global_menu_lock(session, checks, out_dir):
     """Locking the screen hides the global menu, and GTK windows keep their menu bars hidden meanwhile, since the
-    extension stays enabled on the lock screen, so that the windows do not change their layouts twice. Disabling the
+    extension stays enabled on the lock screen, so that the windows do not change their layouts twice. After unlocking,
+    the global menu is right after the Activities button again, which GNOME Shell adds to the end of the left box of the
+    top bar again at each change of the session mode. Disabling the
     extension gives the menu bars back to GTK windows, the top bar GNOME Shell's layout, where the left box ends at the
     middle of the work area, and global-menu-registrar gives up its name."""
     install_global_menu(session)
@@ -2348,6 +2350,9 @@ def global_menu_lock(session, checks, out_dir):
     state = wait_menu(session, lambda s: s["shown"] and s["titles"][1:] == ["File", "Edit", "View"])
     checks.check("the global menu returns after unlocking", state["shown"] and state["titles"][1:] == ["File", "Edit", "View"],
                  str(state))
+    left = session.call("topBar")["left"]["items"]
+    checks.check("after unlocking, the global menu is right after the Activities button",
+                 left[:2] == ["activities", "globalMenu"], str(left))
     checks.check("the window kept its menu bar hidden through the lock",
                  bool(hidden_events()) and all(hidden_events()), str(hidden_events()))
 
