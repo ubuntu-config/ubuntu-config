@@ -69,42 +69,6 @@ default:
       - runner_system_failure
       - scheduler_failure
 
-# Crashes on purpose in the ways the jobs run their programs, and shows whether the kernel wrote a core file for each,
-# with the pattern, the limits and the kernel's messages, in the log and in the cores/ artifact.
-check_cores:
-  stage: build
-  image: registry.gitlab.com/tozd/docker/base:ubuntu-resolute
-  before_script:
-    - !reference [.cores, before_script]
-    - !reference [.apt, before_script]
-  script:
-    - cat /proc/sys/kernel/core_pattern
-    - cat /proc/sys/fs/suid_dumpable
-    - grep -i core /proc/self/limits
-    - ls -ld cores "$CI_PROJECT_DIR"
-    - stat -f -c '%T' cores || true
-    - useradd --create-home builder
-    # As root, in the job's shell.
-    - sh -c 'kill -SEGV $$' || true
-    - ls -la cores
-    # As builder through su, as the build jobs run dpkg-buildpackage.
-    - su builder -c 'grep -i core /proc/self/limits; sh -c "kill -SEGV \$\$"' || true
-    - ls -la cores
-    # The same once systemd is installed, which adds Debian's limits.d/10-coredump-debian.conf.
-    - apt-get update -q
-    - apt-get install -y -q --no-install-recommends systemd python3 > /dev/null
-    - ls /etc/security/limits.d/
-    - su builder -c 'grep -i core /proc/self/limits; sh -c "kill -SEGV \$\$"' || true
-    # A child of Python, as meson's tests start the programs they test.
-    - su builder -c 'python3 -c "import subprocess; print(subprocess.run([\"sh\", \"-c\", \"kill -SEGV \$\$\"]).returncode)"' || true
-    - cat /proc/sys/kernel/core_pattern
-    - ls -la cores
-    - dmesg 2>&1 | grep -i -E "core|dump" | tail -20 || true
-  artifacts:
-    when: always
-    paths:
-      - cores/
-
 # The source is fetched and patched by rebuild-patched-packages.sh, as for a local build, and built as an unprivileged
 # user, as sbuild does, since some test suites check what root is allowed regardless, like reading a file without
 # permission.
