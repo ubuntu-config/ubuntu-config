@@ -131,12 +131,16 @@ quit-at-session-end.patch
 
     Firefox 122 added a handler which quits Firefox cleanly on SIGTERM (Mozilla bug 1837907). Firefox tries to install
     it before XPCOM creates the app shell, which the handler requires, so the handler is never installed and SIGTERM
-    kills Firefox at once (Mozilla bug 2086801). The first patch installs the handler once the app shell exists.
-    Firefox then also quits cleanly when something else stops it: systemd at the end of a session which did not tell
-    Firefox through the portal, or in which xdg-desktop-portal-gtk stopped waiting after 8 seconds, and systemctl or
-    kill. The last patch quits Firefox with nsIAppStartup::Quit(eForceQuit), as Firefox does when an X11 session
-    manager ends the session through XSMP. The first patch is proposed as D340638 on phabricator.services.mozilla.com,
-    for Mozilla bug 2086801. The last patch is in Firefox 163, merged for Mozilla bug 2090663 from D340640.
+    kills Firefox at once (Mozilla bug 2086801). The first patch installs the handler once the app shell exists,
+    and makes the handler quit with nsIAppStartup::Quit(eForceQuit) while the event loop runs, as the last patch
+    does when the session ends. The handler of Firefox 122 only ended the event loop, and Firefox then quit after
+    the loop and ran the chrome JavaScript of closing its windows outside of any task, which a debug assertion
+    forbids for the IndexedDB transactions it opens. Firefox then also quits cleanly when something else stops it:
+    systemd at the end of a session which did not tell Firefox through the portal, or in which
+    xdg-desktop-portal-gtk stopped waiting after 8 seconds, and systemctl or kill. The last patch quits Firefox with
+    nsIAppStartup::Quit(eForceQuit), as Firefox does when an X11 session manager ends the session through XSMP. The
+    first patch is proposed as D340638 on phabricator.services.mozilla.com, for Mozilla bug 2086801. The last patch is
+    in Firefox 163, merged for Mozilla bug 2090663 from D340640.
 
     With the first patch, SIGTERM from systemd, which reaches all processes of Firefox at once, ends the content
     processes while Firefox quits cleanly and closes its windows, and Firefox handles each of them as a crashed tab.

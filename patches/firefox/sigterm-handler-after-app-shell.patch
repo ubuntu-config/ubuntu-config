@@ -9,10 +9,17 @@ Description: Install the SIGTERM handler once the app shell exists, so that SIGT
  The handler is now installed in XREMain::XRE_mainRun(), once XPCOM created the app shell, and still not in background
  task mode. Diagnostic builds assert in nsAppShell::InstallTermSignalHandler() that the app shell exists, and the
  handler ignores SIGTERM with a warning after the app shell is destroyed in shutdown.
+ .
+ The handler quits through nsIAppStartup::Quit() in the main loop's callback which reads its token, as the session end
+ handling does, so the windows close while the event loop runs a task. Ending only the event loop left the quit to
+ nsAppStartup::Run() after the loop, outside of any task: closing the windows there ran chrome JavaScript which opened
+ an IndexedDB transaction and failed the debug assertion data.mRecursionDepth > mBaseRecursionDepth in
+ CycleCollectedJSContext::AddPendingIDBTransaction(), in a try run of the WebDriver tests whose harness stops Firefox
+ with SIGTERM. Once Firefox has confirmed its shutdown, the handler still only ends the event loop, as before.
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2086801
 Author: Mitar
 Forwarded: https://phabricator.services.mozilla.com/D340638
-Last-Update: 2026-11-23
+Last-Update: 2026-11-27
 ---
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
 --- a/toolkit/xre/nsAppRunner.cpp
@@ -43,7 +50,41 @@ diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
 diff --git a/widget/gtk/nsAppShell.cpp b/widget/gtk/nsAppShell.cpp
 --- a/widget/gtk/nsAppShell.cpp
 +++ b/widget/gtk/nsAppShell.cpp
-@@ -436,12 +436,19 @@ void nsAppShell::TermSignalHandler(int signo) {
+@@ -10,7 +10,9 @@
+ #include <sys/types.h>
+ #include <unistd.h>
+ 
++#include "mozilla/AppShutdown.h"
+ #include "mozilla/BackgroundHangMonitor.h"
++#include "mozilla/Components.h"
+ #include "mozilla/GRefPtr.h"
+ #include "mozilla/GUniquePtr.h"
+ #include "mozilla/Hal.h"
+@@ -23,6 +25,7 @@
+ #include "nsAppShell.h"
+ #include "nsBaseAppShell.h"
+ #include "nsCRT.h"
++#include "nsIAppStartup.h"
+ #include "nsIObserverService.h"
+ #include "nsIPowerManagerService.h"
+ #include "nsWindow.h"
+@@ -166,7 +169,14 @@ gboolean nsAppShell::EventProcessorCallb
+       self->NativeEventCallback();
+       break;
+     case QUIT_TOKEN:
+-      self->Exit();
++      if (nsCOMPtr<nsIAppStartup> appStartup =
++              components::AppStartup::Service();
++          appStartup &&
++          !AppShutdown::IsInOrBeyond(ShutdownPhase::AppShutdownConfirmed)) {
++        appStartup->Quit(nsIAppStartup::eForceQuit, 0);
++      } else {
++        self->Exit();
++      }
+       break;
+     default:
+       NS_ASSERTION(false, "wrong token");
+@@ -436,12 +446,19 @@ void nsAppShell::TermSignalHandler(int s
      NS_WARNING("Wrong signal!");
      return;
    }
