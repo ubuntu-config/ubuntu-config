@@ -1,0 +1,60 @@
+Description: Dispatch the seat state queued for a test device before the device helpers return.
+ The input thread queues the touch mode resulting from adding or removing a device with an idle source of
+ G_PRIORITY_HIGH before it queues the device event, which the backend's event source of G_PRIORITY_DEFAULT dispatches.
+ GLib releases its lock while it checks a source, so the idle source can be attached after the sources of higher
+ priority were checked in an iteration whose check of the backend's event source then finds the event. Clutter
+ processes a DEVICE_REMOVED event at once, so meta_backend_test_remove_test_device() returned at the "device-removed"
+ signal with the previous touch mode, and the test monitor-orientation-tests failed with
+ "'clutter_seat_get_touch_mode (seat)' should be FALSE" in a CI build of this repository (job 18411200840) and in
+ mutter's own CI (job 7387372). Clutter queues a DEVICE_ADDED event on the stage for a later iteration, so adding a
+ device is not affected.
+ .
+ The helpers which add and remove a test device now also dispatch the sources ready after the device signal, which
+ include the idle source, as it is attached before the device event is queued.
+ .
+ With the test's main loop instrumented to sleep 1 ms in the check of a source between the two priorities, the test
+ failed in 98 of 100 runs without the change and in 0 of 100 with it. Without the instrumentation, the test passed
+ 500 of 500 runs with the change. It changes only the tests.
+Author: Mitar
+Forwarded: no
+Last-Update: 2026-11-27
+--- a/src/tests/meta-backend-test.c
++++ b/src/tests/meta-backend-test.c
+@@ -86,6 +86,19 @@ set_true_cb (gboolean *value)
+   *value = TRUE;
+ }
+ 
++static void
++dispatch_queued_seat_state (void)
++{
++  /* The input thread queues the seat state resulting from adding or removing
++   * a device, like touch mode, with an idle source of higher priority before
++   * the device event, but GLib can still dispatch the device event first when
++   * the idle source was attached while GLib was checking the sources of an
++   * iteration. The idle source is already attached when the device signal is
++   * emitted, so it is dispatched here.
++   */
++  while (g_main_context_iteration (NULL, FALSE));
++}
++
+ ClutterVirtualInputDevice *
+ meta_backend_test_add_test_device (MetaBackendTest        *backend_test,
+                                    ClutterInputDeviceType  device_type,
+@@ -105,6 +118,8 @@ meta_backend_test_add_test_device (MetaB
+   while (!was_updated)
+     g_main_context_iteration (NULL, TRUE);
+ 
++  dispatch_queued_seat_state ();
++
+   g_signal_handlers_disconnect_by_func (seat, set_true_cb, &was_updated);
+ 
+   return virtual_device;
+@@ -127,6 +142,8 @@ meta_backend_test_remove_test_device (Me
+   while (!was_updated)
+     g_main_context_iteration (NULL, TRUE);
+ 
++  dispatch_queued_seat_state ();
++
+   g_signal_handlers_disconnect_by_func (seat, set_true_cb, &was_updated);
+ }
+ 

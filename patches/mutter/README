@@ -153,6 +153,21 @@ wayland-keyboard-test-sync-point.patch
     seconds and failed the build. It changes only the test. Drop the patch once Ubuntu ships mutter
     51, which has it.
 
+test-device-touch-mode.patch
+    Fixes a race in the build's test monitor-orientation-tests, which failed with
+    "'clutter_seat_get_touch_mode (seat)' should be FALSE" right after the test removed its virtual
+    touchscreen. Mutter's input thread queues the resulting touch mode before the device event, but
+    the main thread can still handle the event first, since GLib releases its lock while it checks
+    a source, and the test's helper returned at the "device-removed" signal. With this patch the
+    helpers which add and remove a test device also dispatch the sources ready after the signal,
+    which include the queued touch mode. It changes only the tests: mutter's monitor manager follows
+    touch mode through its notify signal, so the session sees the change one iteration later.
+
+    The failure is rare: it failed one CI build of this repository (job 18411200840) and one test
+    job of mutter's own CI (job 7387372). With the test's main loop instrumented to widen the race,
+    the test failed in 98 of 100 runs without the patch and in 0 of 100 with it. Not proposed
+    upstream yet.
+
 hidden-window-updates.patch
     Mutter freezes the updates of a Wayland window until the window is shown for the first time,
     and until then the window's actor stays 0x0, without the client's content. A window restored to
