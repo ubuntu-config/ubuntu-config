@@ -2203,7 +2203,10 @@ def global_menu_firefox(session, checks, out_dir):
     of the top bar with widget.gtk.global-menu.icon-color-scheme of firefox/policies.json, so its pixels are light. The History menu keeps the order of its entries
     while it opens again, although Firefox lists them anew then, see DbusMenuModel._queuePropertiesChanged(), and the
     entry of a closed tab in its submenu Recently Closed Tabs keeps its icon while the submenu opens again, although
-    Firefox exports the entry first without its icon then, see DbusMenuModel._submenuOpenStateChanged()."""
+    Firefox exports the entry first without its icon then, see DbusMenuModel._submenuOpenStateChanged(). In a new
+    window, a click opens the History menu with no item selected, although Firefox enables Recently Closed Tabs only as
+    the menu opens, and GNOME Shell gives the keyboard focus to an item which becomes sensitive, see
+    MenuBar._refill()."""
     pages = pathlib.Path.home() / "pages"
     pages.mkdir(parents=True, exist_ok=True)
     write_png(pages / "icon.png")
@@ -2308,6 +2311,20 @@ def global_menu_firefox(session, checks, out_dir):
         history["bookmarks"] = state["layout"]
         close_menus(session)
 
+    def open_history_in_new_window(window):
+        session.call("clickGlobalMenu", "History")
+        state = wait_menu(session, lambda s: s["open"] == "History", 5)
+        focused = set()
+        end = time.monotonic() + 2
+        while time.monotonic() < end:
+            focused.add(menu_state(session)["focus"])
+            time.sleep(0.05)
+        history["new_window"] = {"open": state["open"], "focus": sorted(map(str, focused))}
+        close_menus(session)
+
+    def nothing_selected_in_new_window():
+        return history.get("new_window") == {"open": "History", "focus": ["None"]}
+
     try:
         return electron_or_browser(session, checks, "Firefox", "firefox about:blank", "Firefox", None, "f",
                                    [(visit, f"loads the page {ICON_PAGE}", lambda window: find(session.windows(), titled(ICON_PAGE))),
@@ -2323,7 +2340,9 @@ def global_menu_firefox(session, checks, out_dir):
                                      lambda window: bool(history.get("closed")) and all(history["closed"])),
                                     (open_bookmark, f"the Bookmarks Toolbar menu lists the bookmark of {ICON_PAGE} with its icon "
                                      "the first time it opens", lambda window: bool(history.get("bookmark") and history["bookmark"]["icon"])),
-                                    (["File", "New Window"], "opens a second window", more_windows(session))])
+                                    (["File", "New Window"], "opens a second window", more_windows(session)),
+                                    (open_history_in_new_window, "in the new window, a click opens the History menu with "
+                                     "no item selected", lambda window: nothing_selected_in_new_window())])
     finally:
         server.terminate()
         if "labels" in history and not (history["entry"] and history["entry"]["icon"]):
@@ -2331,6 +2350,8 @@ def global_menu_firefox(session, checks, out_dir):
         if "closed" in history and not (history["closed"] and all(history["closed"])):
             checks.check(f"the entry of the closed tab in Recently Closed Tabs showed its icon as {history['closed']}, "
                          f"the menu last as {history.get('closed_last')}", False)
+        if "new_window" in history and not nothing_selected_in_new_window():
+            checks.check(f"in the new window, the History menu was {history['new_window']}", False)
         if "default_icon" in history and not light_default_icon():
             checks.check(f"the default page icon of {EARLIER_PAGE} had the mean luminance {history['default_icon']}", False)
         if "reopened" in history and not reopened_in_order():

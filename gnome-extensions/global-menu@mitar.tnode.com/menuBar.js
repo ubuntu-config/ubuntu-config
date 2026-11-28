@@ -904,7 +904,7 @@ export class MenuBar extends Signals.EventEmitter {
 
     // Shows the changed items of an open menu. The items which the menu still has stay, see syncMenu(), with their open
     // submenus and the keyboard focus. When the item with the keyboard focus is gone, the item at its position receives
-    // the focus.
+    // the focus. A menu which the pointer opened, which has the focus itself, keeps it.
     _refill(index) {
         // An application which sets its menu again, as Electron does, can report a menu without its items for a
         // moment, which leaves the open menu as it is.
@@ -918,6 +918,11 @@ export class MenuBar extends Signals.EventEmitter {
         if (position >= 0 && !menu.box.contains(global.stage.get_key_focus())) {
             const items = menu._getMenuItems();
             items[Math.min(position, items.length - 1)]?.grab_key_focus();
+        } else if (!this._keyboardUsed && focus === menu.actor && global.stage.get_key_focus() !== focus) {
+            // GNOME Shell gives the keyboard focus to an item which becomes sensitive while the menu itself has the
+            // focus, see PopupMenuBase._connectItemSignals(), which selected an item which the application enabled as
+            // its menu opened, like Recently Closed Tabs in Firefox's History menu, in a menu which the pointer opened.
+            focus.grab_key_focus();
         }
     }
 }
