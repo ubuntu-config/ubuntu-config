@@ -369,7 +369,7 @@ Last-Update: 2026-11-28
 +static void UpdateIcon(DbusmenuMenuitem* aItem, dom::Element& aElement) {
 +  DBusMenuItemIcon* icon = Props::Icon(aItem);
 +  if (!icon) {
-+    auto newIcon = MakeUnique<DBusMenuItemIcon>(aItem);
++    auto newIcon = std::make_unique<DBusMenuItemIcon>(aItem);
 +    icon = newIcon.get();
 +    Props::SetIcon(aItem, std::move(newIcon));
 +  }
