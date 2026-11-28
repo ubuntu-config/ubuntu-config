@@ -1186,6 +1186,31 @@ def menu_titles(session, sender, path):
     return [properties.get("label") for _child_id, properties, _children in children]
 
 
+def menu_item_icon(session, label):
+    """Returns the icon-data of the item with the given label in the menu which the global menu shows, read from the
+    application over com.canonical.dbusmenu, or None. A dbusmenu label marks its mnemonic with an underscore and doubles
+    the other underscores, so labels are compared without underscores."""
+    menu = session.eval(f"""(() => {{
+        const model = Main.extensionManager.lookup('{GLOBAL_MENU}')?.stateObj?._menuBar?._model;
+        return model?._busName ? [model._busName, model._path] : null;
+    }})()""")
+    if not menu:
+        return None
+    try:
+        reply = session.bus.call_sync(menu[0], menu[1], "com.canonical.dbusmenu", "GetLayout",
+                                      GLib.Variant("(iias)", (0, -1, ["label", "icon-data"])),
+                                      GLib.VariantType("(u(ia{sv}av))"), Gio.DBusCallFlags.NONE, 5000, None)
+    except GLib.Error:
+        return None
+
+    def find(node):
+        _id, properties, children = node
+        if properties.get("label", "").replace("_", "") == label.replace("_", "") and properties.get("icon-data"):
+            return bytes(properties["icon-data"])
+        return next(filter(None, map(find, children)), None)
+    return find(reply.unpack()[1])
+
+
 def processes_of(name):
     """Returns the IDs of the processes of the user whose executable has the given file name."""
     pids = set()
@@ -2105,6 +2130,61 @@ def write_png(path, size=16, color=(200, 30, 30)):
                      chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
+def read_png(data):
+    """Returns the pixels of a PNG as RGBA tuples, for a PNG without interlacing with 8 bits per channel, RGB or RGBA,
+    as GdkPixbuf writes it. Raises ValueError for another PNG."""
+    width, height, depth, color_type, _, _, interlace = struct.unpack(">IIBBBBB", data[16:29])
+    if data[:8] != b"\x89PNG\r\n\x1a\n" or depth != 8 or color_type not in (2, 6) or interlace:
+        raise ValueError(f"unsupported PNG: depth {depth}, color type {color_type}, interlace {interlace}")
+    idat = b""
+    position = 8
+    while position < len(data):
+        length, kind = struct.unpack(">I4s", data[position:position + 8])
+        if kind == b"IDAT":
+            idat += data[position + 8:position + 8 + length]
+        position += 12 + length
+    raw = zlib.decompress(idat)
+    channels = 4 if color_type == 6 else 3
+    stride = width * channels
+    pixels = []
+    previous = bytearray(stride)
+    for y in range(height):
+        start = y * (stride + 1)
+        kind = raw[start]
+        row = bytearray(raw[start + 1:start + 1 + stride])
+        for i in range(stride):
+            left = row[i - channels] if i >= channels else 0
+            up = previous[i]
+            up_left = previous[i - channels] if i >= channels else 0
+            if kind == 1:
+                predictor = left
+            elif kind == 2:
+                predictor = up
+            elif kind == 3:
+                predictor = (left + up) // 2
+            elif kind == 4:
+                estimate = left + up - up_left
+                distances = (abs(estimate - left), abs(estimate - up), abs(estimate - up_left))
+                predictor = left if distances[0] <= min(distances[1:]) else up if distances[1] <= distances[2] else up_left
+            else:
+                predictor = 0
+            row[i] = (row[i] + predictor) & 0xff
+        for x in range(width):
+            pixel = tuple(row[x * channels:(x + 1) * channels])
+            pixels.append(pixel if channels == 4 else pixel + (255,))
+        previous = row
+    return pixels
+
+
+def ink_lightness(png):
+    """Returns the mean luminance, from 0 for black to 1 for white, of the pixels of a PNG which are at least half
+    opaque, or None without such pixels or without a PNG."""
+    if not png:
+        return None
+    ink = [(0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 for r, g, b, a in read_png(png) if a >= 128]
+    return sum(ink) / len(ink) if ink else None
+
+
 # The page whose History entry global_menu_firefox checks, also its title, which has underscores, and the page it
 # visits before.
 ICON_PAGE = "page_with_icon"
@@ -2118,7 +2198,9 @@ def global_menu_firefox(session, checks, out_dir):
     patches/firefox/global-menu-mnemonics.patch, so Alt+F opens File, and the underscores of a label as they are, so the
     History entry of a page whose title has underscores shows them. With global-menu-icons.patch, the entry also has an
     icon, and so has the bookmark of the page the first time its folder opens, although Firefox adds the icon of a menu
-    item only when it first shows the item, after it exported the item. The History menu keeps the order of its entries
+    item only when it first shows the item, after it exported the item. The page visited before has no favicon, so its
+    entry has Firefox's default page icon, which Firefox draws in the text color of its menus, and for the dark menus
+    of the top bar with widget.gtk.global-menu.icon-color-scheme of firefox/policies.json, so its pixels are light. The History menu keeps the order of its entries
     while it opens again, although Firefox lists them anew then, see DbusMenuModel._queuePropertiesChanged(), and the
     entry of a closed tab in its submenu Recently Closed Tabs keeps its icon while the submenu opens again, although
     Firefox exports the entry first without its icon then, see DbusMenuModel._submenuOpenStateChanged()."""
@@ -2126,8 +2208,8 @@ def global_menu_firefox(session, checks, out_dir):
     pages.mkdir(parents=True, exist_ok=True)
     write_png(pages / "icon.png")
     for name in (EARLIER_PAGE, ICON_PAGE):
-        (pages / f"{name}.html").write_text(
-            f'<!DOCTYPE html><title>{name}</title><link rel="icon" href="icon.png"><p>{name}</p>\n')
+        icon = '<link rel="icon" href="icon.png">' if name == ICON_PAGE else ""
+        (pages / f"{name}.html").write_text(f'<!DOCTYPE html><title>{name}</title>{icon}<p>{name}</p>\n')
     server = serve(pages)
     history = {}
 
@@ -2150,6 +2232,16 @@ def global_menu_firefox(session, checks, out_dir):
             if history["entry"] and history["entry"]["icon"]:
                 return
             time.sleep(1)
+
+    def read_default_icon(window):
+        session.call("clickGlobalMenu", "History")
+        wait_menu(session, lambda s: s["open"] == "History" and any(
+            item["label"] == EARLIER_PAGE and item["icon"] for item in s["layout"] or []), 10)
+        history["default_icon"] = ink_lightness(wait_for(lambda: menu_item_icon(session, EARLIER_PAGE), 5))
+        close_menus(session)
+
+    def light_default_icon():
+        return (history.get("default_icon") or 0) > 0.5
 
     def entries(items):
         return [label for label in map(item_label, items or []) if label in (ICON_PAGE, EARLIER_PAGE)]
@@ -2221,6 +2313,9 @@ def global_menu_firefox(session, checks, out_dir):
                                    [(visit, f"loads the page {ICON_PAGE}", lambda window: find(session.windows(), titled(ICON_PAGE))),
                                     (open_history, f"the History menu lists {ICON_PAGE} with its underscores and its icon",
                                      lambda window: bool(history.get("entry") and history["entry"]["icon"])),
+                                    (read_default_icon, f"the History menu lists {EARLIER_PAGE}, which has no favicon, "
+                                     "with Firefox's default page icon in light colors for the dark menus of the top bar",
+                                     lambda window: light_default_icon()),
                                     (reopen_history, f"opened again, the History menu always lists {ICON_PAGE} before "
                                      f"{EARLIER_PAGE}, which was visited earlier", lambda window: reopened_in_order()),
                                     (reopen_closed_tabs, f"opened again, Recently Closed Tabs always shows the icon of the "
@@ -2236,6 +2331,8 @@ def global_menu_firefox(session, checks, out_dir):
         if "closed" in history and not (history["closed"] and all(history["closed"])):
             checks.check(f"the entry of the closed tab in Recently Closed Tabs showed its icon as {history['closed']}, "
                          f"the menu last as {history.get('closed_last')}", False)
+        if "default_icon" in history and not light_default_icon():
+            checks.check(f"the default page icon of {EARLIER_PAGE} had the mean luminance {history['default_icon']}", False)
         if "reopened" in history and not reopened_in_order():
             checks.check(f"the History menu showed its entries in the orders {history['reopened']}", False)
         if "bookmarks" in history and not (history["bookmark"] and history["bookmark"]["icon"]):

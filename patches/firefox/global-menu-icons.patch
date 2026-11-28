@@ -5,18 +5,28 @@ Description: Export the icons of menu items with the menus which Firefox exports
  does (nsMenuItemIconX), and sets it as the item's icon-data once it is loaded, as a PNG of 32x32 pixels, twice the
  size at which menus show icons, so that they stay sharp on screens with a scale of up to 2. A vector icon is drawn
  with the context paint of the item's style, as on macOS. A menu item adds its icon, an <img> child, only when it is
- first shown, after the item was exported, so the item's icon is looked at again when that child is added or
- removed or its src or srcset changes; the changed items are collected and updated together, as a menu adds the
- icons of all its items when it is shown. An item loads its icon again only when the icon's URL changes.
+ first shown, after the item was exported. NativeMenu::GetIconOwner() recognizes such an image, and the model is
+ dirtied when one is added or removed or its src or srcset changes, so that the icons of the items are looked at
+ again when the model is recomputed. NativeMenu::GetIcon() flushes style, which must not happen while the DOM is
+ being changed, so the menu bar's model is recomputed from a runnable, which handles all the changes of a task at
+ once, like the icons which a menu adds to all its items when it is shown, while the models of native context menus
+ are recomputed right away as before. An item loads its icon again only when the icon's URL changes.
+ .
+ The desktop shows the icons as they are drawn, and its menus can have another color scheme than Firefox's, like
+ dark menus in the top bar and light windows. The new preference widget.gtk.global-menu.icon-color-scheme sets the
+ color scheme of the desktop's menus: 0 dark, 1 light, and 2, the default, the color scheme and text color of
+ Firefox's own menus. With dark or light, a vector icon is drawn in that color scheme, so that an SVG favicon with a
+ variant for the dark color scheme draws the matching one, and its context paint has the text color of Firefox's
+ menus in that color scheme (MenuText) where it has the text color of the menu item, so that the icon of a page
+ without a favicon matches the labels. SVGImageContext::MaybeStoreContextPaint() accepts the color scheme and the
+ value of currentcolor for that. Icons are loaded again when the preference changes.
 Author: Mitar
 Bug: https://bugzilla.mozilla.org/show_bug.cgi?id=2098059
 Forwarded: https://phabricator.services.mozilla.com/D346464
-Last-Update: 2026-11-26
-diff --git a/widget/gtk/NativeMenuGtk.cpp b/widget/gtk/NativeMenuGtk.cpp
-index c4be924841b7..b4d723232e06 100644
+Last-Update: 2026-11-28
 --- a/widget/gtk/NativeMenuGtk.cpp
 +++ b/widget/gtk/NativeMenuGtk.cpp
-@@ -9,23 +9,31 @@
+@@ -9,20 +9,29 @@
  
  #include "AsyncDBus.h"
  #include "DBusMenu.h"
@@ -26,6 +36,8 @@ index c4be924841b7..b4d723232e06 100644
 +#include "gfxPlatform.h"
  #include "mozilla/BasicEvents.h"
  #include "mozilla/EventDispatcher.h"
++#include "mozilla/LookAndFeel.h"
++#include "mozilla/Preferences.h"
 +#include "mozilla/SVGImageContext.h"
  #include "mozilla/StaticPrefs_widget.h"
 +#include "mozilla/WeakPtr.h"
@@ -44,142 +56,155 @@ index c4be924841b7..b4d723232e06 100644
  #include "nsLayoutUtils.h"
  #include "nsPresContext.h"
  #include "nsStubMutationObserver.h"
-+#include "nsTHashSet.h"
- #include "nsThreadUtils.h"
- #include "nsUnicharUtils.h"
- #include "nsWindow.h"
-@@ -48,6 +56,21 @@ static bool NodeIsRelevant(const nsINode& aNode) {
-                                   nsGkAtoms::menubar);
- }
+@@ -187,6 +196,7 @@ class MenuModel : public nsStubMutationO
+     }
+     RecomputeModel();
+     mDirty = false;
++    mRemovedChildren.Clear();
+   }
  
-+// Returns the menu item whose icon aNode is, see NativeMenu::GetIcon(), or
-+// null. A menu item adds its icon only when it is first shown, which is after
-+// the item itself was added.
-+static dom::Element* IconOwner(const nsINode& aNode) {
-+  if (!aNode.IsHTMLElement(nsGkAtoms::img)) {
-+    return nullptr;
-+  }
-+  dom::Element* parent = aNode.GetParentElement();
-+  if (!parent || !parent->IsXULElement(nsGkAtoms::menuitem) ||
-+      parent->GetFirstElementChild() != &aNode) {
-+    return nullptr;
-+  }
-+  return parent;
-+}
-+
- // If this is a radio / checkbox menuitem, get the current value.
- static Maybe<bool> GetChecked(const dom::Element& aMenuItem) {
-   static dom::Element::AttrValuesArray strings[] = {nsGkAtoms::checkbox,
-@@ -200,6 +223,29 @@ class MenuModel : public nsStubMutationObserver {
+   bool IsShowing() { return mShowing; }
+@@ -200,16 +210,43 @@ class MenuModel : public nsStubMutationO
    virtual void RecomputeModel() = 0;
    virtual ~MenuModel() { mElement->RemoveMutationObserver(this); }
  
-+  // Called with the menu items whose icons changed, see IconOwner().
-+  virtual void IconsChanged(
-+      const nsTHashSet<RefPtr<dom::Element>>& aMenuItems) {}
-+
-+  // Calls IconsChanged() with aMenuItem once the change of the DOM is
-+  // complete, as an image which is being removed is still a child of its menu
-+  // item. The call runs from a runnable of its own, so that the icons which a
-+  // menu adds to all its items when it is shown are handled together.
-+  void ScheduleIconChanged(dom::Element& aMenuItem) {
-+    mIconsChanged.Insert(&aMenuItem);
-+    if (mIconsChangedPending) {
-+      return;
-+    }
-+    mIconsChangedPending = true;
-+    NS_DispatchToCurrentThread(NS_NewRunnableFunction(
-+        "MenuModel::IconsChanged", [self = RefPtr{this}] {
-+          self->mIconsChangedPending = false;
-+          const nsTHashSet<RefPtr<dom::Element>> menuItems =
-+              std::move(self->mIconsChanged);
-+          self->IconsChanged(menuItems);
-+        }));
-+  }
-+
++  // Marks the model to be recomputed, which a showing model is right away, or
++  // from a runnable with mRecomputeFromRunnable.
    void DirtyModel() {
      mDirty = true;
-     if (mShowing) {
-@@ -210,6 +256,9 @@ class MenuModel : public nsStubMutationObserver {
+-    if (mShowing) {
++    if (!mShowing) {
++      return;
++    }
++    if (!mRecomputeFromRunnable) {
+       RecomputeModelIfNeeded();
++      return;
+     }
++    // All the changes of a task, like the icons which a menu adds to its items
++    // when it is shown, are handled by one recomputation.
++    if (mRecomputePending) {
++      return;
++    }
++    mRecomputePending = true;
++    NS_DispatchToCurrentThread(
++        NS_NewRunnableFunction("MenuModel::DirtyModel", [self = RefPtr{this}] {
++          self->mRecomputePending = false;
++          if (self->mShowing) {
++            self->RecomputeModelIfNeeded();
++          }
++        }));
+   }
+ 
    RefPtr<dom::Element> mElement;
    bool mDirty = true;
    bool mShowing = false;
-+  // The menu items whose icons changed since the last call of IconsChanged().
-+  nsTHashSet<RefPtr<dom::Element>> mIconsChanged;
-+  bool mIconsChangedPending = false;
++  // Whether DirtyModel() recomputes a showing model from a runnable, for a
++  // model whose recomputation reads styles, which must not happen while the
++  // DOM is being changed.
++  bool mRecomputeFromRunnable = false;
++  bool mRecomputePending = false;
++  // The children removed since the model was recomputed last, kept alive until
++  // it is recomputed, so that no item outlives the element it was created for.
++  nsTArray<RefPtr<nsIContent>> mRemovedChildren;
  };
  
  class MenuModelGMenu final : public MenuModel {
-@@ -248,18 +297,30 @@ void MenuModel::ContentWillBeRemoved(nsIContent* aChild,
-     nsContentUtils::AddScriptRunner(NS_NewRunnableFunction(
-         "MenuModel::ContentWillBeRemoved",
-         [self = RefPtr{this}, child = RefPtr{aChild}] { self->DirtyModel(); }));
-+  } else if (dom::Element* owner = IconOwner(*aChild)) {
-+    ScheduleIconChanged(*owner);
+@@ -235,26 +272,38 @@ class MenuModelGMenu final : public Menu
+ 
+ NS_IMPL_ISUPPORTS(MenuModel, nsIMutationObserver)
+ 
++// Whether aNode is an element of the menus or the icon of one, which a menu
++// item adds only when it is first shown.
++static bool NodeChangesModel(const nsINode& aNode) {
++  return NodeIsRelevant(aNode) || NativeMenu::GetIconOwner(aNode);
++}
++
+ void MenuModel::ContentWillBeRemoved(nsIContent* aChild,
+                                      const ContentRemoveInfo&) {
+-  if (NodeIsRelevant(*aChild)) {
+-    // Keep the child alive until the model is recomputed, so that no item
+-    // outlives the element it was created for.
+-    nsContentUtils::AddScriptRunner(NS_NewRunnableFunction(
+-        "MenuModel::ContentWillBeRemoved",
+-        [self = RefPtr{this}, child = RefPtr{aChild}] { self->DirtyModel(); }));
++  if (NodeChangesModel(*aChild)) {
++    mRemovedChildren.AppendElement(aChild);
++    // The child is still in the DOM, so the model is dirtied once it is
++    // removed.
++    nsContentUtils::AddScriptRunner(
++        NS_NewRunnableFunction("MenuModel::ContentWillBeRemoved",
++                               [self = RefPtr{this}] { self->DirtyModel(); }));
    }
  }
  
  void MenuModel::ContentInserted(nsIContent* aChild, const ContentInsertInfo&) {
-   if (NodeIsRelevant(*aChild)) {
+-  if (NodeIsRelevant(*aChild)) {
++  if (NodeChangesModel(*aChild)) {
      DirtyModel();
-+  } else if (dom::Element* owner = IconOwner(*aChild)) {
-+    ScheduleIconChanged(*owner);
    }
  }
  
- void MenuModel::ContentAppended(nsIContent* aChild, const ContentAppendInfo&) {
-   if (NodeIsRelevant(*aChild)) {
-     DirtyModel();
-+    return;
-+  }
-+  // aChild is the first of the appended children.
-+  for (nsIContent* child = aChild; child; child = child->GetNextSibling()) {
-+    if (dom::Element* owner = IconOwner(*child)) {
-+      ScheduleIconChanged(*owner);
+-void MenuModel::ContentAppended(nsIContent* aChild, const ContentAppendInfo&) {
+-  if (NodeIsRelevant(*aChild)) {
+-    DirtyModel();
++void MenuModel::ContentAppended(nsIContent* aFirstNewContent,
++                                const ContentAppendInfo&) {
++  for (nsIContent* child = aFirstNewContent; child;
++       child = child->GetNextSibling()) {
++    if (NodeChangesModel(*child)) {
++      DirtyModel();
 +      return;
 +    }
    }
  }
  
-@@ -271,6 +332,10 @@ void MenuModel::AttributeChanged(dom::Element* aElement, int32_t,
+@@ -266,6 +315,10 @@ void MenuModel::AttributeChanged(dom::El
         aAttribute == nsGkAtoms::accesskey ||
         aAttribute == nsGkAtoms::disabled || aAttribute == nsGkAtoms::hidden)) {
      DirtyModel();
-+  } else if (aAttribute == nsGkAtoms::src || aAttribute == nsGkAtoms::srcset) {
-+    if (dom::Element* owner = IconOwner(*aElement)) {
-+      ScheduleIconChanged(*owner);
-+    }
++  } else if ((aAttribute == nsGkAtoms::src ||
++              aAttribute == nsGkAtoms::srcset) &&
++             NativeMenu::GetIconOwner(*aElement)) {
++    DirtyModel();
    }
  }
  
-@@ -532,6 +597,8 @@ class MenubarModelDBus final : public MenuModel {
+@@ -481,17 +534,34 @@ void NativeMenuGtk::CloseSubmenu(dom::El
+ 
+ #ifdef MOZ_ENABLE_DBUS
+ 
++static constexpr nsLiteralCString kDBusMenuIconColorSchemePref =
++    "widget.gtk.global-menu.icon-color-scheme"_ns;
++
+ class MenubarModelDBus final : public MenuModel {
+  public:
+   explicit MenubarModelDBus(dom::Element* aElement) : MenuModel(aElement) {
+     mRoot = dont_AddRef(dbusmenu_menuitem_new());
+     dbusmenu_menuitem_set_root(mRoot.get(), true);
+     mShowing = true;
++    // SyncChildren() reads the style of the icons, see NativeMenu::GetIcon().
++    mRecomputeFromRunnable = true;
++    Preferences::RegisterCallback(IconColorSchemeChanged,
++                                  kDBusMenuIconColorSchemePref, this);
+   }
+ 
+   DbusmenuMenuitem* Root() const { return mRoot.get(); }
  
   protected:
++  ~MenubarModelDBus() override {
++    Preferences::UnregisterCallback(IconColorSchemeChanged,
++                                    kDBusMenuIconColorSchemePref, this);
++  }
++
++  // Recomputing the model loads the icons again in the new color scheme.
++  static void IconColorSchemeChanged(const char*, void* aModel) {
++    static_cast<MenubarModelDBus*>(aModel)->DirtyModel();
++  }
++
    void RecomputeModel() override;
-+  void IconsChanged(
-+      const nsTHashSet<RefPtr<dom::Element>>& aMenuItems) override;
  
    // Brings the children of aParent in line with the children of aElement.
-   // The dbusmenu protocol identifies items by id, and a new DbusmenuMenuitem
-@@ -687,6 +754,9 @@ enum class DBusItemKind : uint8_t {
-   Submenu,
- };
- 
-+// Forgets the element whose icon aItem shows, see DBusMenuItemIcon.
-+static void ForgetIconElement(DbusmenuMenuitem* aItem);
-+
- // Helpers to manage DbusmenuMenuitem properties.
- namespace Props {
- #  define PROP(type_, ident_, name_, cast_)                                    \
-@@ -706,6 +776,7 @@ PROP(DBusItemKind, Kind, "moz-menu-item-kind", static_cast);
- 
- static void ForgetElements(DbusmenuMenuitem* aItem) {
-   SetElement(aItem, nullptr);
-+  ForgetIconElement(aItem);
-   for (GList* l = dbusmenu_menuitem_get_children(aItem); l; l = l->next) {
-     ForgetElements(static_cast<DbusmenuMenuitem*>(l->data));
-   }
-@@ -799,6 +870,174 @@ static DbusmenuMenuitem* GetOrCreateChild(
+@@ -760,6 +830,173 @@ static DbusmenuMenuitem* GetOrCreateChil
    return aChildren.InsertElementAt(aPosition, std::move(item))->get();
  }
  
@@ -188,9 +213,24 @@ index c4be924841b7..b4d723232e06 100644
 +// scale larger icons down to the size they show.
 +static constexpr int32_t kDBusMenuIconSize = 32;
 +
++// The color scheme of the desktop's menus, see
++// widget.gtk.global-menu.icon-color-scheme, or Nothing() for the color scheme
++// of Firefox's own menus.
++static Maybe<ColorScheme> DBusMenuIconColorScheme() {
++  switch (StaticPrefs::widget_gtk_global_menu_icon_color_scheme()) {
++    case 0:
++      return Some(ColorScheme::Dark);
++    case 1:
++      return Some(ColorScheme::Light);
++    default:
++      return Nothing();
++  }
++}
++
 +// The icon of a DbusmenuMenuitem, see NativeMenu::GetIcon, which it owns. The
-+// icon is loaded whenever the URL of the item's icon changes, and set as the
-+// icon data of the item once it is loaded.
++// icon is loaded whenever the URL of the item's icon or the color scheme of the
++// desktop's menus changes, and set as the icon data of the item once it is
++// loaded.
 +class DBusMenuItemIcon final : public IconLoader::Listener {
 + public:
 +  explicit DBusMenuItemIcon(DbusmenuMenuitem* aItem) : mItem(aItem) {}
@@ -201,24 +241,18 @@ index c4be924841b7..b4d723232e06 100644
 +    }
 +  }
 +
-+  const dom::Element* LastElement() const { return mLastElement; }
-+
-+  // Makes the next Update() look at the icon also for the element it looked at
-+  // last, as an item which shows no element may show another one at the same
-+  // address later.
-+  void ForgetElement() { mLastElement = nullptr; }
-+
 +  void Update(dom::Element& aElement) {
-+    mLastElement = &aElement;
 +    NativeMenuIcon icon = NativeMenu::GetIcon(aElement);
 +    nsAutoCString spec;
 +    if (icon) {
 +      icon.mURI->GetSpec(spec);
 +    }
-+    if (spec == mSpec) {
++    Maybe<ColorScheme> colorScheme = DBusMenuIconColorScheme();
++    if (spec == mSpec && colorScheme == mColorScheme) {
 +      return;
 +    }
 +    mSpec = spec;
++    mColorScheme = colorScheme;
 +    if (mLoader) {
 +      mLoader->Destroy();
 +      mLoader = nullptr;
@@ -261,7 +295,10 @@ index c4be924841b7..b4d723232e06 100644
 +  // Returns aImage at kDBusMenuIconSize. A vector image is drawn with the
 +  // context paint of the menu item's style, as the menus in the window draw it,
 +  // so that an icon which uses context-fill or context-stroke has the colors of
-+  // the menu item and not its fallback colors.
++  // the menu item and not its fallback colors. With the color scheme of the
++  // desktop's menus, it is drawn in that color scheme, and the text color of
++  // Firefox's menus in that color scheme replaces the text color of the menu
++  // item, so that an icon in the text color matches the desktop's menus.
 +  already_AddRefed<GdkPixbuf> ToPixbuf(imgIContainer* aImage) {
 +    const nsIntSize size(kDBusMenuIconSize, kDBusMenuIconSize);
 +    RefPtr<nsPresContext> presContext = mPresContext.get();
@@ -276,9 +313,15 @@ index c4be924841b7..b4d723232e06 100644
 +      return nullptr;
 +    }
 +    gfxContext context(drawTarget);
++    Maybe<nscolor> currentColor;
++    if (mColorScheme) {
++      currentColor =
++          Some(LookAndFeel::Color(LookAndFeel::ColorID::Menutext, *mColorScheme,
++                                  LookAndFeel::UseStandins::No));
++    }
 +    SVGImageContext svgContext;
 +    SVGImageContext::MaybeStoreContextPaint(svgContext, *presContext, *mStyle,
-+                                            aImage);
++                                            aImage, mColorScheme, currentColor);
 +    if (aImage->Draw(
 +            &context, size, image::ImageRegion::Create(size),
 +            imgIContainer::FRAME_CURRENT, gfx::SamplingFilter::POINT,
@@ -298,70 +341,185 @@ index c4be924841b7..b4d723232e06 100644
 +  // context paint.
 +  RefPtr<const ComputedStyle> mStyle;
 +  WeakPtr<nsPresContext> mPresContext;
-+  // The menu item whose icon was looked at last, only compared and never
-+  // dereferenced, as the menu item may be gone.
-+  const dom::Element* mLastElement = nullptr;
 +  // The URL of the icon loaded last, empty for an item without an icon.
 +  nsCString mSpec;
++  // The color scheme of the desktop's menus when the icon was loaded last.
++  Maybe<ColorScheme> mColorScheme;
 +};
 +
-+// The key of the DBusMenuItemIcon of a DbusmenuMenuitem.
-+static constexpr char kIconKey[] = "moz-menu-item-icon";
++namespace Props {
 +
-+// Looks at the icon of aElement for aItem. Unless aForce is true, an item
-+// which already has the icon of aElement keeps it, as changes of the icon
-+// arrive through MenubarModelDBus::IconsChanged().
-+static void UpdateIcon(DbusmenuMenuitem* aItem, dom::Element& aElement,
-+                       bool aForce) {
-+  auto* icon = static_cast<DBusMenuItemIcon*>(
-+      g_object_get_data(G_OBJECT(aItem), kIconKey));
++// The DBusMenuItemIcon of an item, which the item owns.
++static DBusMenuItemIcon* Icon(DbusmenuMenuitem* aItem) {
++  return static_cast<DBusMenuItemIcon*>(
++      g_object_get_data(G_OBJECT(aItem), "moz-menu-item-icon"));
++}
++
++static void SetIcon(DbusmenuMenuitem* aItem,
++                    UniquePtr<DBusMenuItemIcon> aIcon) {
++  g_object_set_data_full(
++      G_OBJECT(aItem), "moz-menu-item-icon", aIcon.release(),
++      [](gpointer aData) { delete static_cast<DBusMenuItemIcon*>(aData); });
++}
++
++}  // namespace Props
++
++// Gives aItem the icon of aElement, see NativeMenu::GetIcon().
++static void UpdateIcon(DbusmenuMenuitem* aItem, dom::Element& aElement) {
++  DBusMenuItemIcon* icon = Props::Icon(aItem);
 +  if (!icon) {
-+    icon = new DBusMenuItemIcon(aItem);
-+    g_object_set_data_full(G_OBJECT(aItem), kIconKey, icon, [](gpointer aIcon) {
-+      delete static_cast<DBusMenuItemIcon*>(aIcon);
-+    });
-+  } else if (!aForce && icon->LastElement() == &aElement) {
-+    return;
++    auto newIcon = MakeUnique<DBusMenuItemIcon>(aItem);
++    icon = newIcon.get();
++    Props::SetIcon(aItem, std::move(newIcon));
 +  }
 +  icon->Update(aElement);
-+}
-+
-+static void ForgetIconElement(DbusmenuMenuitem* aItem) {
-+  if (auto* icon = static_cast<DBusMenuItemIcon*>(
-+          g_object_get_data(G_OBJECT(aItem), kIconKey))) {
-+    icon->ForgetElement();
-+  }
-+}
-+
-+// Updates the icons of the items below aParent which show one of aMenuItems.
-+static void UpdateIcons(DbusmenuMenuitem* aParent,
-+                        const nsTHashSet<RefPtr<dom::Element>>& aMenuItems) {
-+  for (GList* l = dbusmenu_menuitem_get_children(aParent); l; l = l->next) {
-+    auto* item = static_cast<DbusmenuMenuitem*>(l->data);
-+    dom::Element* element = Props::Element(item);
-+    if (element && aMenuItems.Contains(element)) {
-+      UpdateIcon(item, *element, /* aForce */ true);
-+    }
-+    UpdateIcons(item, aMenuItems);
-+  }
-+}
-+
-+void MenubarModelDBus::IconsChanged(
-+    const nsTHashSet<RefPtr<dom::Element>>& aMenuItems) {
-+  UpdateIcons(mRoot.get(), aMenuItems);
 +}
 +
  // Appends aText to aResult, doubling its underscores, which the dbusmenu
  // protocol uses to mark the mnemonic of a label.
  static void AppendEscapedForDBus(const nsAString& aText, nsAString& aResult) {
-@@ -908,7 +1147,9 @@ void MenubarModelDBus::SyncChildren(DbusmenuMenuitem* aParent,
+@@ -869,7 +1106,9 @@ void MenubarModelDBus::SyncChildren(Dbus
        UpdateAccel(item, element);
        UpdateRadioOrCheck(item, element);
        UpdateEnabled(item, element);
 -      // TODO: icons
 +      // NativeMenu::GetIcon() computes the style of the icon, which needs a
 +      // mutable element.
-+      UpdateIcon(item, const_cast<dom::Element&>(*element), /* aForce */ false);
++      UpdateIcon(item, const_cast<dom::Element&>(*element));
        continue;
      }
      if (child->IsXULElement(nsGkAtoms::menuseparator)) {
+--- a/widget/NativeMenu.h
++++ b/widget/NativeMenu.h
+@@ -8,6 +8,7 @@
+ #include "Units.h"
+ #include "nsISupportsImpl.h"
+ 
++class nsINode;
+ class nsIURI;
+ class nsIFrame;
+ class nsMenuPopupFrame;
+@@ -38,6 +39,10 @@ class NativeMenu {
+   // Given a <menu> or <menuitem> element, get the relevant icon's URI.
+   static NativeMenuIcon GetIcon(dom::Element&);
+ 
++  // Given the image of an icon, get the <menu> or <menuitem> element whose
++  // icon it is (see GetIcon()), or null if it is not the icon of one.
++  static dom::Element* GetIconOwner(const nsINode&);
++
+   // Show this menu anchored to the specified rect and position.
+   // This call assumes that the popupshowing event for the root popup has
+   // already been sent and "approved", i.e. preventDefault() was not called.
+--- a/widget/NativeMenu.cpp
++++ b/widget/NativeMenu.cpp
+@@ -87,4 +87,17 @@ NativeMenuIcon NativeMenu::GetIcon(dom::
+   return {std::move(uri), std::move(style)};
+ }
+ 
++dom::Element* NativeMenu::GetIconOwner(const nsINode& aNode) {
++  if (!aNode.IsHTMLElement(nsGkAtoms::img)) {
++    return nullptr;
++  }
++  dom::Element* parent = aNode.GetParentElement();
++  if (!parent ||
++      !parent->IsAnyOfXULElements(nsGkAtoms::menu, nsGkAtoms::menuitem) ||
++      parent->GetFirstElementChild() != &aNode) {
++    return nullptr;
++  }
++  return parent;
++}
++
+ }  // namespace mozilla::widget
+--- a/layout/svg/SVGImageContext.h
++++ b/layout/svg/SVGImageContext.h
+@@ -56,9 +56,14 @@ class SVGImageContext {
+                                      nsIFrame* aFromFrame,
+                                      imgIContainer* aImgContainer);
+ 
+-  static void MaybeStoreContextPaint(SVGImageContext& aContext,
+-                                     const nsPresContext&, const ComputedStyle&,
+-                                     imgIContainer*);
++  // For an image drawn for another context than the one of the style,
++  // aColorScheme replaces the color scheme of the style, and aCurrentColor
++  // replaces the color of the style as the value of currentcolor in the context
++  // paint.
++  static void MaybeStoreContextPaint(
++      SVGImageContext& aContext, const nsPresContext&, const ComputedStyle&,
++      imgIContainer*, const Maybe<ColorScheme>& aColorScheme = Nothing(),
++      const Maybe<nscolor>& aCurrentColor = Nothing());
+ 
+   static void MaybeStoreContextPaint(SVGImageContext& aContext,
+                                      nsISVGPaintContext* aPaintContext,
+--- a/layout/svg/SVGImageContext.cpp
++++ b/layout/svg/SVGImageContext.cpp
+@@ -27,16 +27,19 @@ void SVGImageContext::MaybeStoreContextP
+ }
+ 
+ /* static */
+-void SVGImageContext::MaybeStoreContextPaint(SVGImageContext& aContext,
+-                                             const nsPresContext& aPresContext,
+-                                             const ComputedStyle& aStyle,
+-                                             imgIContainer* aImgContainer) {
++void SVGImageContext::MaybeStoreContextPaint(
++    SVGImageContext& aContext, const nsPresContext& aPresContext,
++    const ComputedStyle& aStyle, imgIContainer* aImgContainer,
++    const Maybe<ColorScheme>& aColorScheme,
++    const Maybe<nscolor>& aCurrentColor) {
+   if (aImgContainer->GetType() != imgIContainer::TYPE_VECTOR) {
+     // Avoid this overhead for raster images.
+     return;
+   }
+ 
+-  {
++  if (aColorScheme) {
++    aContext.SetColorScheme(aColorScheme);
++  } else {
+     auto scheme = LookAndFeel::ColorSchemeForStyle(
+         *aPresContext.Document(), aStyle.StyleUI()->mColorScheme.bits,
+         ColorSchemeMode::Preferred);
+@@ -57,16 +60,21 @@ void SVGImageContext::MaybeStoreContextP
+     return;
+   }
+ 
++  auto calcColor = [&](const StyleColor& aColor) {
++    return aCurrentColor ? aColor.CalcColor(*aCurrentColor)
++                         : aColor.CalcColor(aStyle);
++  };
++
+   Maybe<nscolor> fill, stroke;
+   Maybe<float> fillOpacity, strokeOpacity;
+ 
+   if ((style->mMozContextProperties.bits & StyleContextPropertyBits::FILL) &&
+       style->mFill.kind.IsColor()) {
+-    fill = Some(style->mFill.kind.AsColor().CalcColor(aStyle));
++    fill = Some(calcColor(style->mFill.kind.AsColor()));
+   }
+   if ((style->mMozContextProperties.bits & StyleContextPropertyBits::STROKE) &&
+       style->mStroke.kind.IsColor()) {
+-    stroke = Some(style->mStroke.kind.AsColor().CalcColor(aStyle));
++    stroke = Some(calcColor(style->mStroke.kind.AsColor()));
+   }
+   if ((style->mMozContextProperties.bits &
+        StyleContextPropertyBits::FILL_OPACITY) &&
+--- a/modules/libpref/init/StaticPrefList.yaml
++++ b/modules/libpref/init/StaticPrefList.yaml
+@@ -21304,6 +21304,19 @@
+   value: false
+   mirror: always
+ 
++# The color scheme of the desktop's menus, in which the global menubar draws
++# the icons whose colors follow the colors of the menu, like the icon of a page
++# without a favicon, or a favicon with a variant for the dark color scheme. The
++# desktop shows the icons as they are drawn, and its menus can have another
++# color scheme than Firefox's, like dark menus in the top bar and light windows.
++#   0: Dark
++#   1: Light
++#   2: The color scheme and the text color of Firefox's own menus
++- name: widget.gtk.global-menu.icon-color-scheme
++  type: int32_t
++  value: 2
++  mirror: always
++
+ # Whether GTK global menubar support is enabled using wayland's experimental
+ # dbus_annotation protocol:
+ # https://gitlab.freedesktop.org/wayland/wayland-protocols/-/merge_requests/52

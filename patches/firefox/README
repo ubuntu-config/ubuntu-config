@@ -200,7 +200,12 @@ global-menu-icons.patch
     the colors of its menu item (SVG context paint), as in the menus in the window. A menu item adds its icon only when
     it is first shown, after it was exported, so the patch looks at an item's icon again when its image element is added
     or changes, as Firefox's macOS menu bar does (nsMenuItemX). Submenus, such as bookmark folders, have no icon in the
-    top bar.
+    top bar. The top bar shows the icons as Firefox draws them, and its menus are dark while windows are light (see
+    configure-gnome-desktop.sh), so the icon of a page without a favicon, in the text color of Firefox's light menus, was
+    dark on dark. The patch adds the preference widget.gtk.global-menu.icon-color-scheme, the color scheme of the
+    desktop's menus, which firefox/policies.json sets to dark: Firefox then draws a vector icon in the dark color scheme,
+    and in the text color of its own dark menus where the icon has the text color of its menu item. An SVG favicon with
+    a variant for the dark color scheme shows that variant. Container icons keep their colors.
 
     The first four patches are from Firefox 162. Firefox 161 removes and creates again all exported items whenever an
     item is added or removed, or its label, disabled or hidden state changes, and the four patches update the items in
@@ -210,10 +215,11 @@ global-menu-icons.patch
     icon changes, not at every change of the menus.
 
     The session test global-menu-firefox checks the last two: Alt+F opens File, the History menu lists a page whose
-    title has underscores with its whole title and its icon, and a page bookmarked with Ctrl+D has its icon the first
-    time its folder opens. global-menu-mnemonics.patch is in Firefox 163, merged for Mozilla bug 2098058 from D346463
-    on phabricator.services.mozilla.com, and global-menu-icons.patch is proposed as D346464 for bug 2098059. Drop the
-    first four once the PPA's Firefox is 162 or newer, and global-menu-mnemonics.patch once it is 163 or newer.
+    title has underscores with its whole title and its icon, a page without a favicon with the default page icon in
+    light colors, and a page bookmarked with Ctrl+D has its icon the first time its folder opens.
+    global-menu-mnemonics.patch is in Firefox 163, merged for Mozilla bug 2098058 from D346463 on
+    phabricator.services.mozilla.com, and global-menu-icons.patch is proposed as D346464 for bug 2098059. Drop the first
+    four once the PPA's Firefox is 162 or newer, and global-menu-mnemonics.patch once it is 163 or newer.
 
 wasm-sandboxed-libraries.patch (debian-series)
     Builds graphite, ogg, hunspell, expat, woff2 and soundtouch as wasm sandboxed libraries, as Mozilla's own

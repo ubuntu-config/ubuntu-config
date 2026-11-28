@@ -255,7 +255,8 @@ Requirements:
 - Firefox exporting its menu, which it does only with two preferences, set as defaults by an enterprise policy
   (`firefox/policies.json`, installed by `configure-gnome-desktop.sh`), and with the `libdbusmenu-gtk3-4` package, and
   exporting the underlined letters of its menus and the icons of its menu items, such as the icons of the pages in
-  its History menu (`patches/firefox/`).
+  its History menu, drawn for the dark menus of the top bar, which a third preference of the policy sets
+  (`patches/firefox/`).
 - Visual Studio Code with its native title bar, without which it draws its menus itself and exports none
   (`window.titleBarStyle` set to `native` by `configure-gnome-desktop.sh`, and left out of Settings Sync).
 
