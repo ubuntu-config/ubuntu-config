@@ -230,11 +230,11 @@ fit are submenus of a » button after the last menu which fits. A long item, suc
 Firefox's History and Bookmarks menus, ends with an ellipsis where Firefox ends its own menu items, so that its menu
 fits on the monitor.
 
-GTK 3 and GTK 4 applications, Qt applications, Chromium, Firefox, LibreOffice and Electron applications such as Signal,
-Slack, Claude Desktop and Visual Studio Code show their menus there. GTK applications show their menu bars in their
-windows again as soon as the extension is disabled. Electron applications keep theirs hidden ([Electron issue
-56066](https://github.com/electron/electron/issues/56066)), so they have no menu until they start again, or until the
-extension is enabled again, which brings their menus back to the top bar. A check box in a menu of an Electron
+GTK 3 and GTK 4 applications, Qt applications, Chromium, Firefox, Thunderbird, LibreOffice and Electron applications
+such as Signal, Slack, Claude Desktop and Visual Studio Code show their menus there. GTK applications show their menu
+bars in their windows again as soon as the extension is disabled. Electron applications keep theirs hidden ([Electron
+issue 56066](https://github.com/electron/electron/issues/56066)), so they have no menu until they start again, or until
+the extension is enabled again, which brings their menus back to the top bar. A check box in a menu of an Electron
 application keeps showing its old state in the top bar after it changes, until the menu one level above it changes or
 the application sets its whole menu again ([Electron issue 56070](https://github.com/electron/electron/issues/56070)).
 Visual Studio Code sets its whole menu again whenever one of its menus opens, so its check boxes show their state.
@@ -257,6 +257,9 @@ Requirements:
   exporting the underlined letters of its menus and the icons of its menu items, such as the icons of the pages in
   its History menu, drawn for the dark menus of the top bar, which a third preference of the policy sets
   (`patches/firefox/`).
+- Thunderbird exporting its menu, which it does only with the same two preferences as Firefox, set as defaults by an
+  enterprise policy (`thunderbird/policies.json`, installed by `configure-gnome-desktop.sh`). Its menus have no
+  underlined letters and no icons, because the patches for them are only in Firefox.
 - Visual Studio Code with its native title bar, without which it draws its menus itself and exports none
   (`window.titleBarStyle` set to `native` by `configure-gnome-desktop.sh`, and left out of Settings Sync).
 

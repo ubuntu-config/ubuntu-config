@@ -35,8 +35,8 @@
 # configuration, the drop-ins for GDM's unit, for the unit of each user's service manager and for application scopes,
 # the user service which stops application scopes and its script, the script which starts applications at login once
 # there is a tray, Chromium's flags and policy, its Ctrl+Q extension with the native messaging host and script it uses,
-# Firefox's policies, the patched Firefox add-on, and the option added to /etc/crypttab, so those parts call sudo
-# themselves and will ask for a password.
+# Firefox's and Thunderbird's policies, the patched Firefox add-on, and the option added to /etc/crypttab, so those
+# parts call sudo themselves and will ask for a password.
 
 set -euo pipefail
 
@@ -434,10 +434,11 @@ install_chromium_policy() {
   return 0
 }
 
-# Installs firefox/policies.json from this repository as the root-owned /etc/firefox/policies/policies.json through
-# sudo, where Firefox reads its enterprise policies, replacing any other file there.
-install_firefox_policies() {
-  local src=$REPO_DIR/firefox/policies.json dst=/etc/firefox/policies/policies.json
+# Installs APP/policies.json from this repository, for APP firefox or thunderbird, as the root-owned
+# /etc/APP/policies/policies.json through sudo, where the application reads its enterprise policies, replacing any other
+# file there.
+install_mozilla_policies() {
+  local src=$REPO_DIR/$1/policies.json dst=/etc/$1/policies/policies.json
   cmp -s "$src" "$dst" && return 0
   echo "  install $dst"
   CHANGED=$((CHANGED+1))
@@ -974,7 +975,12 @@ set_vscode_setting window.titleBarStyle '"native"'
 # of its last session at start, opens links from other applications in a new window, and exports its menu to the
 # global menu.
 if [ -x /usr/lib/firefox/firefox ]; then
-  install_firefox_policies
+  install_mozilla_policies firefox
+fi
+# Thunderbird's policies set as defaults that it exports its menu to the global menu. Mozilla's packages of Thunderbird
+# ESR and of Thunderbird both read /etc/thunderbird.
+if [ -x /usr/lib/thunderbird-esr/thunderbird ] || [ -x /usr/lib/thunderbird/thunderbird ]; then
+  install_mozilla_policies thunderbird
 fi
 # Chromium returns its windows to their places only with this feature, see the file. Chromium is optional, so this is
 # done only when it is installed.
