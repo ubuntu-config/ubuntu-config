@@ -26,7 +26,7 @@ Forwarded: https://phabricator.services.mozilla.com/D346464
 Last-Update: 2026-11-28
 --- a/widget/gtk/NativeMenuGtk.cpp
 +++ b/widget/gtk/NativeMenuGtk.cpp
-@@ -9,20 +9,29 @@
+@@ -9,20 +9,30 @@
  
  #include "AsyncDBus.h"
  #include "DBusMenu.h"
@@ -40,6 +40,7 @@ Last-Update: 2026-11-28
 +#include "mozilla/Preferences.h"
 +#include "mozilla/SVGImageContext.h"
  #include "mozilla/StaticPrefs_widget.h"
++#include "mozilla/UniquePtr.h"
 +#include "mozilla/WeakPtr.h"
  #include "mozilla/WidgetUtilsGtk.h"
  #include "mozilla/dom/Document.h"
@@ -56,7 +57,7 @@ Last-Update: 2026-11-28
  #include "nsLayoutUtils.h"
  #include "nsPresContext.h"
  #include "nsStubMutationObserver.h"
-@@ -187,6 +196,7 @@ class MenuModel : public nsStubMutationO
+@@ -187,6 +197,7 @@ class MenuModel : public nsStubMutationO
      }
      RecomputeModel();
      mDirty = false;
@@ -64,7 +65,7 @@ Last-Update: 2026-11-28
    }
  
    bool IsShowing() { return mShowing; }
-@@ -200,16 +210,43 @@ class MenuModel : public nsStubMutationO
+@@ -200,16 +211,43 @@ class MenuModel : public nsStubMutationO
    virtual void RecomputeModel() = 0;
    virtual ~MenuModel() { mElement->RemoveMutationObserver(this); }
  
@@ -109,7 +110,7 @@ Last-Update: 2026-11-28
  };
  
  class MenuModelGMenu final : public MenuModel {
-@@ -235,26 +272,38 @@ class MenuModelGMenu final : public Menu
+@@ -235,26 +273,38 @@ class MenuModelGMenu final : public Menu
  
  NS_IMPL_ISUPPORTS(MenuModel, nsIMutationObserver)
  
@@ -158,7 +159,7 @@ Last-Update: 2026-11-28
    }
  }
  
-@@ -266,6 +315,10 @@ void MenuModel::AttributeChanged(dom::El
+@@ -266,6 +316,10 @@ void MenuModel::AttributeChanged(dom::El
         aAttribute == nsGkAtoms::accesskey ||
         aAttribute == nsGkAtoms::disabled || aAttribute == nsGkAtoms::hidden)) {
      DirtyModel();
@@ -169,7 +170,7 @@ Last-Update: 2026-11-28
    }
  }
  
-@@ -481,17 +534,34 @@ void NativeMenuGtk::CloseSubmenu(dom::El
+@@ -481,17 +535,34 @@ void NativeMenuGtk::CloseSubmenu(dom::El
  
  #ifdef MOZ_ENABLE_DBUS
  
@@ -204,7 +205,7 @@ Last-Update: 2026-11-28
    void RecomputeModel() override;
  
    // Brings the children of aParent in line with the children of aElement.
-@@ -760,6 +830,173 @@ static DbusmenuMenuitem* GetOrCreateChil
+@@ -760,6 +831,173 @@ static DbusmenuMenuitem* GetOrCreateChil
    return aChildren.InsertElementAt(aPosition, std::move(item))->get();
  }
  
@@ -378,7 +379,7 @@ Last-Update: 2026-11-28
  // Appends aText to aResult, doubling its underscores, which the dbusmenu
  // protocol uses to mark the mnemonic of a label.
  static void AppendEscapedForDBus(const nsAString& aText, nsAString& aResult) {
-@@ -869,7 +1106,9 @@ void MenubarModelDBus::SyncChildren(Dbus
+@@ -869,7 +1107,9 @@ void MenubarModelDBus::SyncChildren(Dbus
        UpdateAccel(item, element);
        UpdateRadioOrCheck(item, element);
        UpdateEnabled(item, element);
